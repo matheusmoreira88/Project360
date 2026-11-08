@@ -699,6 +699,20 @@ void test_vfetch_instruction_and_attribute_range() {
         check(vector_loaded && vector &&
                   vector.components == std::vector<float>{1.0F, -2.0F, 0.5F, -1.0F},
               "VFETCH extracts all four components from a 128-bit float attribute");
+
+        auto swizzle_instruction = decoded.instruction;
+        swizzle_instruction.destination_swizzle = static_cast<std::uint16_t>(
+            0U | (5U << 3U) | (7U << 6U) | (4U << 9U));
+        const auto swizzled = apply_vertex_fetch_destination_swizzle(
+            swizzle_instruction, {10.0F, 20.0F, 30.0F, 40.0F},
+            {1.0F, 2.0F, 3.0F, 4.0F});
+        check(swizzled && swizzled.components == std::array<float, 4>{10.0F, 1.0F, 3.0F, 0.0F},
+              "VFETCH destination swizzle selects lanes, constants and preserved values");
+        swizzle_instruction.destination_swizzle = static_cast<std::uint16_t>(6U << 3U);
+        check(!apply_vertex_fetch_destination_swizzle(
+                  swizzle_instruction, {0.0F, 0.0F, 0.0F, 0.0F},
+                  {0.0F, 0.0F, 0.0F, 0.0F}),
+              "VFETCH rejects the reserved destination swizzle selector");
     }
 }
 

@@ -314,4 +314,35 @@ VertexFetchValuesResult read_vertex_fetch_attribute_values(
     return result;
 }
 
+VertexFetchSwizzleResult apply_vertex_fetch_destination_swizzle(
+    const VertexFetchInstruction& instruction, const std::array<float, 4>& source,
+    const std::array<float, 4>& previous_destination) {
+    VertexFetchSwizzleResult result{};
+    for (std::size_t destination_lane = 0U; destination_lane < result.components.size();
+         ++destination_lane) {
+        const auto selector = static_cast<std::uint8_t>(
+            (instruction.destination_swizzle >> (destination_lane * 3U)) & 0x7U);
+        switch (selector) {
+        case 0U:
+        case 1U:
+        case 2U:
+        case 3U:
+            result.components[destination_lane] = source[selector];
+            break;
+        case 4U:
+            result.components[destination_lane] = 0.0F;
+            break;
+        case 5U:
+            result.components[destination_lane] = 1.0F;
+            break;
+        case 7U:
+            result.components[destination_lane] = previous_destination[destination_lane];
+            break;
+        default:
+            return {{}, "VFETCH destination swizzle contains reserved selector 6"};
+        }
+    }
+    return result;
+}
+
 } // namespace project360::gpu::xenos

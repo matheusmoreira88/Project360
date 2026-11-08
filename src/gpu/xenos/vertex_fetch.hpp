@@ -46,6 +46,13 @@ struct VertexFetchValuesResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct VertexFetchSwizzleResult {
+    std::array<float, 4> components{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct VertexFetchInstruction {
     std::uint8_t fetch_constant_index{};
     std::uint8_t format{};
@@ -103,5 +110,12 @@ struct VertexFetchInstructionDecodeResult {
 [[nodiscard]] VertexFetchValuesResult read_vertex_fetch_attribute_values(
     const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
     const memory::GuestMemory& memory, std::uint32_t vertex_index);
+
+// Applies the instruction's four destination selectors to an already
+// materialized source vector. Callers supply format defaults for missing
+// source components; selector 7 preserves the corresponding prior register lane.
+[[nodiscard]] VertexFetchSwizzleResult apply_vertex_fetch_destination_swizzle(
+    const VertexFetchInstruction& instruction, const std::array<float, 4>& source,
+    const std::array<float, 4>& previous_destination);
 
 } // namespace project360::gpu::xenos
