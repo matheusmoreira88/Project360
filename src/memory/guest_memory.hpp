@@ -49,6 +49,9 @@ public:
                                                 bool& stored) noexcept;
     [[nodiscard]] bool read_u64_be(std::uint64_t address, std::uint64_t& value) const noexcept;
     [[nodiscard]] bool write_u64_be(std::uint64_t address, std::uint64_t value) noexcept;
+    // Reads raw physical backing bytes without applying CPU virtual mappings.
+    [[nodiscard]] bool read_physical(std::uint64_t address,
+                                     std::span<std::byte> destination) const noexcept;
     [[nodiscard]] bool fetch_u32_be(std::uint64_t address, std::uint32_t& value) const noexcept;
     [[nodiscard]] bool load(std::uint64_t address, std::span<const std::byte> data) noexcept;
     [[nodiscard]] bool write_bytes(std::uint64_t address,

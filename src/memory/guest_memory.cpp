@@ -301,6 +301,16 @@ bool GuestMemory::write_u64_be(std::uint64_t address, std::uint64_t value) noexc
     return true;
 }
 
+bool GuestMemory::read_physical(std::uint64_t address,
+                                std::span<std::byte> destination) const noexcept {
+    if (destination.empty()) return true;
+    const std::shared_lock lock(access_mutex_);
+    if (!contains(address, destination.size())) return false;
+    const auto start = static_cast<std::size_t>(address);
+    std::copy_n(bytes_.data() + start, destination.size(), destination.data());
+    return true;
+}
+
 bool GuestMemory::fetch_u32_be(std::uint64_t address, std::uint32_t& value) const noexcept {
     const std::shared_lock lock(access_mutex_);
     std::uint64_t physical = 0;

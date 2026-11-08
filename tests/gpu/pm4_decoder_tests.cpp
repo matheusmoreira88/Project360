@@ -1,8 +1,10 @@
 #include "gpu/xenos/pm4_decoder.hpp"
 #include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/pm4_registers.hpp"
+#include "memory/guest_memory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <vector>
@@ -288,7 +290,8 @@ void test_draw_packet_metadata_decoding() {
         const auto applied = apply_draw_command_state(draws.commands, registers);
         check(static_cast<bool>(applied) && registers[0x21fcU] == automatic.initiator &&
                   registers[0x21faU] == 0x00123456U && registers[0x21fbU] == 3U,
-              "draw state updates initiator and DMA registers while preserving DMA state for auto-index");
+              "draw state updates initiator and DMA registers while preserving DMA state "
+              "for auto-index");
 
         std::vector<std::uint32_t> too_small(0x21fcU, 0xccccccccU);
         const auto rejected = apply_draw_command_state(draws.commands, too_small);
@@ -321,6 +324,74 @@ void test_draw_packet_metadata_decoding() {
           "immediate-index draw reports unsupported semantics explicitly");
 }
 
+void test_dma_index_fetch() {
+    using namespace project360::gpu::xenos;
+    project360::memory::GuestMemory memory(0x4000U);
+    const std::array<std::byte, 4> index16_bytes{
+        std::byte{0x12}, std::byte{0x34}, std::byte{0xab}, std::byte{0xcd}};
+    check(memory.load(8U, index16_bytes), "16-bit DMA fixture loads into physical memory");
+    check(memory.map_page(0x1000U, 0U, project360::memory::GuestPageAccess::read),
+          "CPU virtual mapping can coexist with GPU physical reads");
+
+    DrawCommand draw16{};
+    draw16.source = DrawSource::dma;
+    draw16.index_count = 2U;
+    draw16.dma_base = 8U;
+    draw16.dma_size = (1U << 30U) | 2U; // 8-in-16, two index elements.
+    const auto swapped16 = fetch_draw_indices(draw16, memory);
+    check(static_cast<bool>(swapped16) && swapped16.indices.size() == 2U &&
+              swapped16.indices[0] == 0x1234U && swapped16.indices[1] == 0xabcdU,
+          "16-bit DMA fetch applies the supported 8-in-16 byte swap");
+
+    draw16.dma_size = 2U; // No swap.
+    const auto native16 = fetch_draw_indices(draw16, memory);
+    check(static_cast<bool>(native16) && native16.indices[0] == 0x3412U &&
+              native16.indices[1] == 0xcdabU,
+          "16-bit DMA fetch preserves bytes in no-swap mode");
+
+    const std::array<std::byte, 4> index32_bytes{
+        std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44}};
+    check(memory.load(16U, index32_bytes), "32-bit DMA fixture loads into physical memory");
+    constexpr std::array<std::uint32_t, 4> expected_by_mode{
+        0x44332211U, 0x33441122U, 0x11223344U, 0x22114433U};
+    DrawCommand draw32{};
+    draw32.source = DrawSource::dma;
+    draw32.index_32_bit = true;
+    draw32.index_count = 1U;
+    draw32.dma_base = 16U;
+    for (std::uint32_t mode = 0U; mode < 4U; ++mode) {
+        draw32.dma_size = (mode << 30U) | 1U;
+        const auto fetched = fetch_draw_indices(draw32, memory);
+        check(static_cast<bool>(fetched) && fetched.indices.size() == 1U &&
+                  fetched.indices[0] == expected_by_mode[mode],
+              "32-bit DMA fetch matches each documented byte-swap mode");
+    }
+
+    draw16.dma_size = (3U << 30U) | 2U;
+    const auto ambiguous16 = fetch_draw_indices(draw16, memory);
+    check(!ambiguous16 && ambiguous16.indices.empty(),
+          "ambiguous 32-bit swap mode on 16-bit indexes is rejected explicitly");
+
+    draw16.dma_size = 1U;
+    const auto short_dma = fetch_draw_indices(draw16, memory);
+    check(!short_dma && short_dma.indices.empty(),
+          "DMA index count cannot exceed its declared element capacity");
+
+    draw32.dma_base = 0x4000U;
+    draw32.dma_size = 1U;
+    const auto out_of_bounds = fetch_draw_indices(draw32, memory);
+    check(!out_of_bounds && out_of_bounds.indices.empty(),
+          "DMA index access outside physical guest memory fails without partial output");
+
+    DrawCommand automatic{};
+    automatic.source = DrawSource::auto_index;
+    automatic.index_count = 4U;
+    const auto generated = fetch_draw_indices(automatic, memory);
+    check(static_cast<bool>(generated) && generated.indices.size() == 4U &&
+              generated.indices[0] == 0U && generated.indices[3] == 3U,
+          "auto-index source generates the guest sequential index range");
+}
+
 void test_wait_for_idle_is_synchronous_barrier() {
     using namespace project360::gpu::xenos;
     std::vector<std::uint8_t> stream;
@@ -351,6 +422,7 @@ int main() {
     test_type3_constant_uploads();
     test_unimplemented_commands_fail_explicitly();
     test_draw_packet_metadata_decoding();
+    test_dma_index_fetch();
     test_wait_for_idle_is_synchronous_barrier();
     if (failures != 0) {
         std::cerr << failures << " GPU packet test(s) failed\n";

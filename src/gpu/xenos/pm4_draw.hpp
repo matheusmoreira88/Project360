@@ -8,6 +8,10 @@
 #include <string>
 #include <vector>
 
+namespace project360::memory {
+class GuestMemory;
+}
+
 namespace project360::gpu::xenos {
 
 enum class DrawSource : std::uint8_t { dma, immediate, auto_index };
@@ -42,6 +46,13 @@ struct DrawDecodeResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct IndexFetchResult {
+    std::vector<std::uint32_t> indices;
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 // Decodes DRAW_INDX and DRAW_INDX_2 packets into metadata only. No graphics
 // state is changed and no draw is submitted. Predicated and immediate-index
 // packets remain unsupported until their state/data semantics are implemented.
@@ -52,5 +63,10 @@ struct DrawDecodeResult {
 // to a flat Xenos register span. It does not read guest index memory or render.
 [[nodiscard]] DrawStateApplyResult apply_draw_command_state(
     std::span<const DrawCommand> commands, std::span<std::uint32_t> registers);
+
+// Fetches DMA indices or generates auto-indices from guest memory. It applies
+// the supported Xenos byte-swap modes and rejects unavailable or ambiguous data.
+[[nodiscard]] IndexFetchResult fetch_draw_indices(const DrawCommand& command,
+                                                  const memory::GuestMemory& memory);
 
 } // namespace project360::gpu::xenos
