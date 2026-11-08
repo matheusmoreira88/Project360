@@ -318,7 +318,7 @@ execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
     if (instruction.vector_clamp || instruction.scalar_clamp) {
         return {{}, 0.0F, "Clamped Xenos ALU results are not implemented"};
     }
-    if (!is_supported_vector_opcode(instruction.vector_opcode) || instruction.scalar_opcode > 3U) {
+    if (!is_supported_vector_opcode(instruction.vector_opcode) || instruction.scalar_opcode > 10U) {
         return {{}, 0.0F, "Unsupported Xenos vector/scalar ALU opcode pair"};
     }
 
@@ -363,6 +363,26 @@ execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
         break;
     case 3U: // MULS_PREV: a * ps
         scalar_result = multiply_xenos_legacy(scalar_source.value[3], initial_previous_scalar);
+        break;
+    case 5U: // MAXS: a >= b ? a : b
+        scalar_result = select_xenos_operand(scalar_source.value[3], scalar_source.value[0],
+                                             scalar_source.value[3] >= scalar_source.value[0]);
+        break;
+    case 6U: // MINS: a < b ? a : b
+        scalar_result = select_xenos_operand(scalar_source.value[3], scalar_source.value[0],
+                                             scalar_source.value[3] < scalar_source.value[0]);
+        break;
+    case 7U: // SEQS: a == 0 ? 1 : 0
+        scalar_result = scalar_source.value[3] == 0.0F ? 1.0F : 0.0F;
+        break;
+    case 8U: // SGTS: a > 0 ? 1 : 0
+        scalar_result = scalar_source.value[3] > 0.0F ? 1.0F : 0.0F;
+        break;
+    case 9U: // SGES: a >= 0 ? 1 : 0
+        scalar_result = scalar_source.value[3] >= 0.0F ? 1.0F : 0.0F;
+        break;
+    case 10U: // SNES: a != 0 ? 1 : 0
+        scalar_result = scalar_source.value[3] != 0.0F ? 1.0F : 0.0F;
         break;
     default:
         return {{}, 0.0F, "Unsupported Xenos scalar ALU opcode"};

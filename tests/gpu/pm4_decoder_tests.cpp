@@ -431,6 +431,59 @@ void test_shader_alu_add_mul_pair_execution() {
               multiply_previous.registers[5] == std::array<float, 4>{16.0F, 16.0F, 16.0F, 16.0F},
           "Xenos ADDS_PREV and MULS_PREV consume src3.w and the incoming ps value");
 
+    const auto maximum_scalar =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 5U, 4U, 5U, 0U, 0x0fU), registers);
+    const auto minimum_scalar =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 6U, 4U, 5U, 0U, 0x0fU), registers);
+    const auto equal_scalar =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 7U, 4U, 5U, 0U, 0x0fU), registers);
+    const auto greater_scalar =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 8U, 4U, 5U, 0U, 0x0fU), registers);
+    const auto greater_equal_scalar =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 9U, 4U, 5U, 0U, 0x0fU), registers);
+    const auto not_equal_scalar =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 10U, 4U, 5U, 0U, 0x0fU), registers);
+    check(maximum_scalar && maximum_scalar.previous_scalar == 8.0F && minimum_scalar &&
+              maximum_scalar.registers[5] == std::array<float, 4>{8.0F, 8.0F, 8.0F, 8.0F} &&
+              minimum_scalar.previous_scalar == 5.0F &&
+              minimum_scalar.registers[5] == std::array<float, 4>{5.0F, 5.0F, 5.0F, 5.0F} &&
+              equal_scalar && equal_scalar.previous_scalar == 0.0F &&
+              equal_scalar.registers[5] == std::array<float, 4>{0.0F, 0.0F, 0.0F, 0.0F} &&
+              greater_scalar && greater_scalar.previous_scalar == 1.0F && greater_equal_scalar &&
+              greater_equal_scalar.previous_scalar == 1.0F && not_equal_scalar &&
+              not_equal_scalar.previous_scalar == 1.0F,
+          "Xenos MAXS/MINS and scalar comparisons use src3.w/src3.x as documented");
+
+    auto signed_zero_registers = registers;
+    signed_zero_registers[3][3] = -0.0F;
+    signed_zero_registers[3][0] = 0.0F;
+    const auto signed_zero_maximum = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 5U, 4U, 5U, 0U, 0x0fU), signed_zero_registers);
+    const auto signed_zero_minimum = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 6U, 4U, 5U, 0U, 0x0fU), signed_zero_registers);
+    const auto signed_zero_equal = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 7U, 4U, 5U, 0U, 0x0fU), signed_zero_registers);
+    check(signed_zero_maximum && std::signbit(signed_zero_maximum.previous_scalar) &&
+              signed_zero_minimum && !std::signbit(signed_zero_minimum.previous_scalar) &&
+              signed_zero_equal && signed_zero_equal.previous_scalar == 1.0F,
+          "Xenos scalar compare-select and SEQS preserve the documented signed-zero choices");
+
+    auto nan_registers = registers;
+    nan_registers[3][3] = std::numeric_limits<float>::quiet_NaN();
+    const auto nan_maximum =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 5U, 4U, 5U, 0U, 0x0fU), nan_registers);
+    const auto nan_minimum =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 6U, 4U, 5U, 0U, 0x0fU), nan_registers);
+    const auto nan_not_equal =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 10U, 4U, 5U, 0U, 0x0fU), nan_registers);
+    check(nan_maximum && nan_maximum.previous_scalar == 5.0F && nan_minimum &&
+              nan_minimum.previous_scalar == 5.0F &&
+              nan_maximum.registers[5] == std::array<float, 4>{5.0F, 5.0F, 5.0F, 5.0F} &&
+              nan_minimum.registers[5] == std::array<float, 4>{5.0F, 5.0F, 5.0F, 5.0F} &&
+              nan_not_equal && nan_not_equal.previous_scalar == 1.0F &&
+              nan_not_equal.registers[5] == std::array<float, 4>{1.0F, 1.0F, 1.0F, 1.0F},
+          "Xenos scalar compare-select and SNES follow the documented unordered expressions");
+
     const auto multiply_pair = encode_pair(1U, 2U, 1U, 1U, 0x03U, 0x0cU);
     const auto multiplied = execute_shader_alu_add_mul_pair(multiply_pair, registers);
     check(multiplied &&
