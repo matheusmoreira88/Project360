@@ -140,6 +140,14 @@ RegisterApplyResult apply_register_packets(std::span<const Packet> packets,
         } else if (packet.type == PacketType::type3_command && packet.opcode == 0x10U) {
             // PM4_NOP carries optional payload words used as padding or comments.
             continue;
+        } else if (packet.type == PacketType::type3_command && packet.opcode == 0x26U) {
+            // The current frontend applies packets synchronously and has no GPU queue,
+            // so WAIT_FOR_IDLE is already satisfied once prior packets are applied.
+            if (packet.predicated || packet.payload_word_count != 1U) {
+                return failure("PM4_WAIT_FOR_IDLE requires one unpredicated payload dword",
+                               packet.header_word_offset);
+            }
+            continue;
         } else if (packet.type == PacketType::type3_command) {
             return failure("PM4 type-3 opcode is not implemented by register application",
                            packet.header_word_offset);

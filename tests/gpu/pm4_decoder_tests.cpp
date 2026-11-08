@@ -251,6 +251,27 @@ void test_unimplemented_commands_fail_explicitly() {
           "register application rejects a packet list that omits stream contents");
 }
 
+void test_wait_for_idle_is_synchronous_barrier() {
+    using namespace project360::gpu::xenos;
+    std::vector<std::uint8_t> stream;
+    append_u32_be(stream, 0xc0000000U | (0x26U << 8U)); // WAIT_FOR_IDLE, one dword.
+    append_u32_be(stream, 0U);
+    const auto decoded = decode_pm4(stream);
+    std::vector<std::uint32_t> registers(1U, 0x12345678U);
+    const auto applied = apply_register_packets(decoded.packets, stream, registers);
+    check(static_cast<bool>(applied) && registers[0] == 0x12345678U,
+          "WAIT_FOR_IDLE completes immediately with the synchronous unimplemented GPU");
+
+    auto malformed = stream;
+    malformed[1U] = 1U; // Two payload dwords instead of the required one.
+    append_u32_be(malformed, 0U);
+    const auto malformed_decoded = decode_pm4(malformed);
+    const auto rejected = apply_register_packets(malformed_decoded.packets, malformed,
+                                                 registers);
+    check(!rejected && registers[0] == 0x12345678U,
+          "malformed WAIT_FOR_IDLE packet is rejected without changing registers");
+}
+
 } // namespace
 
 int main() {
@@ -259,6 +280,7 @@ int main() {
     test_register_packet_application();
     test_type3_constant_uploads();
     test_unimplemented_commands_fail_explicitly();
+    test_wait_for_idle_is_synchronous_barrier();
     if (failures != 0) {
         std::cerr << failures << " GPU packet test(s) failed\n";
         return 1;
