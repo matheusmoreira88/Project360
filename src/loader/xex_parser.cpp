@@ -3,7 +3,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <vector>
 
 namespace project360::loader {
 namespace {
@@ -122,6 +125,37 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
     }
 
     return {metadata, {}};
+}
+
+XexParseResult parse_xex2_file(const std::filesystem::path& path) {
+    std::error_code size_error;
+    const auto file_size = std::filesystem::file_size(path, size_error);
+    if (size_error) return {{}, "unable to read XEX file size: " + size_error.message()};
+    if (file_size < kFixedHeaderSize) return {{}, "file is shorter than the XEX2 fixed header"};
+
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {{}, "unable to open XEX file"};
+    std::array<std::byte, kFixedHeaderSize> fixed_header{};
+    input.read(reinterpret_cast<char*>(fixed_header.data()),
+               static_cast<std::streamsize>(fixed_header.size()));
+    if (input.gcount() != static_cast<std::streamsize>(fixed_header.size())) {
+        return {{}, "unable to read the complete XEX2 fixed header"};
+    }
+
+    std::uint32_t header_size = 0;
+    if (!read_be32(fixed_header, 8U, header_size) || header_size < kFixedHeaderSize ||
+        header_size > kMaximumHeaderSize || header_size > file_size) {
+        return {{}, "declared XEX header size is invalid or exceeds the file"};
+    }
+
+    std::vector<std::byte> header(header_size);
+    input.clear();
+    input.seekg(0, std::ios::beg);
+    input.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+    if (input.gcount() != static_cast<std::streamsize>(header.size())) {
+        return {{}, "unable to read the complete declared XEX header"};
+    }
+    return parse_xex2(header);
 }
 
 } // namespace project360::loader

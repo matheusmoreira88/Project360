@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -27,5 +28,6 @@ struct XexParseResult {
 
 // Parses unencrypted XEX2 container metadata only; it does not decrypt or load an image.
 [[nodiscard]] XexParseResult parse_xex2(std::span<const std::byte> file);
+[[nodiscard]] XexParseResult parse_xex2_file(const std::filesystem::path& path);
 
 } // namespace project360::loader

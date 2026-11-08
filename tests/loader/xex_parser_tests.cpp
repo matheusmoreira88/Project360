@@ -1,8 +1,12 @@
 #include "loader/xex_parser.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -97,6 +101,26 @@ int main() {
     const auto without_ids = parse_xex2(no_execution);
     check(without_ids && !without_ids.metadata->title_id && !without_ids.metadata->media_id,
           "XEX2 containers without execution metadata remain parseable without invented IDs");
+
+    const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto test_path = std::filesystem::temp_directory_path() /
+                           ("Project360_XexParser_" + std::to_string(unique) + ".xex");
+    {
+        std::ofstream output(test_path, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+    }
+    const auto parsed_file = project360::loader::parse_xex2_file(test_path);
+    check(parsed_file && parsed_file.metadata->title_id == 0x545408a7U,
+          "file parser reads only the bounded XEX header and extracts metadata");
+    {
+        std::ofstream output(test_path, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char*>(bytes.data()), 0x400);
+    }
+    check(!project360::loader::parse_xex2_file(test_path),
+          "file parser rejects a truncated declared header");
+    std::error_code remove_error;
+    std::filesystem::remove(test_path, remove_error);
 
     if (failures != 0) {
         std::cerr << failures << " XEX parser test(s) failed\n";
