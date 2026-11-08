@@ -186,6 +186,13 @@ std::uint32_t mtfsfi_form(std::uint8_t bf, std::uint8_t immediate, bool record =
            (record ? 1U : 0U) | reserved;
 }
 
+std::uint32_t mtfsb_form(std::uint8_t bt, bool set, bool record = false,
+                         std::uint32_t reserved = 0) {
+    const auto xo = set ? 38U : 70U;
+    return (63U << 26U) | (static_cast<std::uint32_t>(bt) << 21U) | (xo << 1U) |
+           (record ? 1U : 0U) | reserved;
+}
+
 std::uint32_t cr_logical_form(std::uint8_t bt, std::uint8_t ba, std::uint8_t bb,
                               std::uint16_t xo, bool record = false) {
     return (19U << 26U) | (static_cast<std::uint32_t>(bt) << 21U) |
@@ -1541,11 +1548,12 @@ void test_floating_point_compare_instructions() {
 void test_floating_point_unavailable_exception() {
     using namespace project360;
     memory::GuestMemory mem(16);
-    const std::array<std::uint32_t, 4> floating_instructions{
+    const std::array<std::uint32_t, 5> floating_instructions{
         fpr_unary(2, 1, 72),                  // fmr f2,f1
         d_form(50, 3, 1, 0),                 // lfd f3,0(r1)
         indexed_memory(4, 1, 2, 983),        // stfiwx f4,r1,r2
         mtfsfi_form(0, 0xf, true),            // mtfsfi. 0,0xf
+        mtfsb_form(0, true, true),            // mtfsb1. 0
     };
     constexpr std::uint64_t old_msr = (std::uint64_t{1} << 63U) |
                                       (std::uint64_t{1} << 60U) |
@@ -3017,6 +3025,88 @@ void test_move_to_fpscr_field_immediate() {
               !cpu::decode(mtfsfi_form(2, 3, false, 1U << 16U)) &&
               !cpu::decode(mtfsfi_form(2, 3, false, 1U << 11U)),
           "mtfsfi rejects all reserved field groups");
+
+    memory::GuestMemory exception_mem(4);
+    put_word(exception_mem, 0, mtfsfi_form(5, 0x4)); // Set VXSOFT with VE enabled.
+    cpu::CpuState exception_state{};
+    exception_state.msr = 1ULL << 50U;
+    exception_state.fpscr = 0x00000080U;
+    const auto exception_result = cpu::Interpreter{}.step(exception_state, exception_mem);
+    check(exception_result.status == cpu::StepStatus::fault && exception_result.fault_info &&
+              exception_result.fault_info->kind == cpu::FaultKind::unsupported_instruction &&
+              exception_state.pc == 0U && exception_state.fpscr == 0x00000080U &&
+              exception_state.cr == 0U,
+          "mtfsfi VXSOFT with VE enabled reports unsupported exception delivery atomically");
+}
+
+void test_move_to_fpscr_bit_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(16);
+    put_word(mem, 0, mtfsb_form(7, true, true));   // mtfsb1. VXSNAN
+    put_word(mem, 4, mtfsb_form(7, false, true));  // mtfsb0. VXSNAN
+    put_word(mem, 8, mtfsb_form(29, true));        // Set NI, not an exception flag.
+    put_word(mem, 12, mtfsb_form(0, false, true)); // Clear FX.
+
+    cpu::CpuState state{};
+    state.cr = 0x12345678U;
+    state.msr = 1ULL << 50U; // MSR[FP]
+    state.fpscr = 0x00000080U; // VE enabled.
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.fpscr == 0xe1000080U &&
+              ((state.cr >> 24U) & 0xfU) == 0xeU,
+          "mtfsb1 sets an exception bit, sticky FX, derived summaries, and record CR1");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.fpscr == 0x80000080U &&
+              ((state.cr >> 24U) & 0xfU) == 0x8U,
+          "mtfsb0 clears the selected exception and recalculates summaries without clearing FX");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.fpscr == 0x80000084U &&
+              ((state.cr >> 24U) & 0xfU) == 0x8U,
+          "mtfsb1 can set a non-exception control bit without raising FX");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.fpscr == 0x84U &&
+              ((state.cr >> 24U) & 0xfU) == 0U,
+          "mtfsb0 clears FX directly and record form observes the resulting CR1 field");
+
+    constexpr auto mtfsb1_golden = 0xfc00004dU;
+    constexpr auto mtfsb0_golden = 0xfc00008dU;
+    const auto set_decoded = cpu::decode(mtfsb1_golden);
+    const auto clear_decoded = cpu::decode(mtfsb0_golden);
+    check(set_decoded && set_decoded.instruction.opcode ==
+                             cpu::Opcode::floating_move_to_fpscr_bit_one &&
+              clear_decoded && clear_decoded.instruction.opcode ==
+                                   cpu::Opcode::floating_move_to_fpscr_bit_zero,
+          "mtfsb0/mtfsb1 decoders match literal architectural encodings");
+    check(!cpu::decode(mtfsb_form(3, true, false, 1U << 11U)) &&
+              !cpu::decode(mtfsb_form(3, false, false, 1U << 20U)),
+          "mtfsb0/mtfsb1 reject reserved field bits");
+
+    memory::GuestMemory software_exception_mem(4);
+    put_word(software_exception_mem, 0, mtfsb_form(21, true, true));
+    cpu::CpuState software_exception_state{};
+    software_exception_state.msr = 1ULL << 50U;
+    const auto software_result = cpu::Interpreter{}.step(software_exception_state,
+                                                         software_exception_mem);
+    check(software_result.status == cpu::StepStatus::executed &&
+              software_exception_state.fpscr == 0xa0000400U &&
+              ((software_exception_state.cr >> 24U) & 0xfU) == 0xaU,
+          "mtfsb1 VXSOFT with VE disabled records FX and the invalid summary");
+
+    cpu::CpuState enabled_state{};
+    enabled_state.msr = 1ULL << 50U;
+    enabled_state.fpscr = 0x00000080U;
+    const auto enabled_result = cpu::Interpreter{}.step(enabled_state,
+                                                        software_exception_mem);
+    check(enabled_result.status == cpu::StepStatus::fault && enabled_result.fault_info &&
+              enabled_result.fault_info->kind == cpu::FaultKind::unsupported_instruction &&
+              enabled_state.pc == 0U && enabled_state.fpscr == 0x00000080U &&
+              enabled_state.cr == 0U,
+          "mtfsb1 VXSOFT with VE enabled reports unsupported exception delivery atomically");
 }
 
 void test_condition_register_logical_operations() {
@@ -3578,6 +3668,7 @@ int main() {
     test_move_condition_register_field();
     test_move_condition_register_from_fpscr();
     test_move_to_fpscr_field_immediate();
+    test_move_to_fpscr_bit_instructions();
     test_condition_register_logical_operations();
     test_special_register_transfers();
     test_move_condition_register_from_xer();

@@ -30,6 +30,8 @@ constexpr std::uint32_t kFpscrUx = 0x08000000U;
 constexpr std::uint32_t kFpscrZx = 0x04000000U;
 constexpr std::uint32_t kFpscrXx = 0x02000000U;
 constexpr std::uint32_t kFpscrInvalidFlags = 0x01f80700U;
+constexpr std::uint32_t kFpscrStickyExceptionFlags =
+    kFpscrOx | kFpscrUx | kFpscrZx | kFpscrXx | kFpscrInvalidFlags;
 constexpr std::uint64_t kProgramExceptionVector = 0x700U;
 constexpr std::uint64_t kXenonDataCacheBlockSize = 128U;
 
@@ -87,6 +89,8 @@ bool is_floating_point_instruction(Opcode opcode) {
     case Opcode::floating_move_from_fpscr:
     case Opcode::floating_move_condition_register_from_fpscr:
     case Opcode::floating_move_to_fpscr_field_immediate:
+    case Opcode::floating_move_to_fpscr_bit_zero:
+    case Opcode::floating_move_to_fpscr_bit_one:
     case Opcode::floating_negate:
     case Opcode::floating_absolute:
     case Opcode::floating_negative_absolute:
@@ -1034,8 +1038,38 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
     case Opcode::floating_move_to_fpscr_field_immediate: {
         const auto field_shift = static_cast<unsigned>(28U - 4U * ins.bf);
         const auto field_mask = 0xfU << field_shift;
+        if (ins.bf == 5U && (ins.immediate & 0x4) != 0 &&
+            (state.fpscr & kFpscrVe) != 0U) {
+            return fault(
+                FaultKind::unsupported_instruction, old_pc,
+                "mtfsfi VXSOFT with VE=1 requires unsupported floating-point exception delivery",
+                word);
+        }
         state.fpscr = (state.fpscr & ~field_mask) |
                       (static_cast<std::uint32_t>(ins.immediate) << field_shift);
+        update_fpscr_exception_summaries(state);
+        if (ins.record) set_cr_field(state, 1U, (state.fpscr >> 28U) & 0xfU);
+        break;
+    }
+    case Opcode::floating_move_to_fpscr_bit_zero:
+    case Opcode::floating_move_to_fpscr_bit_one: {
+        const auto bit_mask = std::uint32_t{1} << (31U - ins.bt);
+        const bool set_bit = ins.opcode == Opcode::floating_move_to_fpscr_bit_one;
+        if (set_bit && ins.bt == 21U && (state.fpscr & kFpscrVe) != 0U) {
+            return fault(
+                FaultKind::unsupported_instruction, old_pc,
+                "mtfsb1 VXSOFT with VE=1 requires unsupported floating-point exception delivery",
+                word);
+        }
+        if (set_bit) {
+            if ((state.fpscr & bit_mask) == 0U &&
+                (kFpscrStickyExceptionFlags & bit_mask) != 0U) {
+                state.fpscr |= kFpscrFx;
+            }
+            state.fpscr |= bit_mask;
+        } else {
+            state.fpscr &= ~bit_mask;
+        }
         update_fpscr_exception_summaries(state);
         if (ins.record) set_cr_field(state, 1U, (state.fpscr >> 28U) & 0xfU);
         break;

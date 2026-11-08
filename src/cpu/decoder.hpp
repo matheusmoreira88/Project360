@@ -143,6 +143,8 @@ enum class Opcode {
     floating_move_from_fpscr,
     floating_move_condition_register_from_fpscr,
     floating_move_to_fpscr_field_immediate,
+    floating_move_to_fpscr_bit_zero,
+    floating_move_to_fpscr_bit_one,
     floating_negate,
     floating_absolute,
     floating_negative_absolute,
@@ -166,6 +168,7 @@ struct DecodedInstruction {
     std::uint8_t bo{};
     std::uint8_t bi{};
     std::uint8_t to{};
+    std::uint8_t bt{};
     std::uint8_t level{};
     std::uint8_t branch_hint{};
     std::uint8_t shift{};
