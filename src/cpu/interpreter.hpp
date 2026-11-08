@@ -14,6 +14,7 @@ enum class StepStatus { executed, instruction_limit_reached, fault, exception_ta
 
 enum class FaultKind {
     illegal_instruction,
+    unsupported_instruction,
     privileged_instruction,
     instruction_alignment,
     instruction_access,
@@ -22,7 +23,7 @@ enum class FaultKind {
     interpreter_internal
 };
 
-enum class GuestExceptionKind { program };
+enum class GuestExceptionKind { program, system_call };
 
 struct GuestException {
     GuestExceptionKind kind{};

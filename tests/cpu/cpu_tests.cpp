@@ -101,6 +101,10 @@ std::uint32_t rfid_form(std::uint32_t reserved = 0) {
     return (19U << 26U) | (18U << 1U) | reserved;
 }
 
+std::uint32_t system_call_form(std::uint8_t level = 0U) {
+    return (17U << 26U) | (level == 1U ? (1U << 5U) : 0U) | 2U;
+}
+
 std::uint32_t mtcrf_form(std::uint8_t fxm, std::uint8_t rs, bool record = false,
                          std::uint8_t reserved_instruction_bit11 = 0,
                          std::uint8_t reserved_instruction_bit20 = 0) {
@@ -1501,6 +1505,64 @@ void test_program_exception_and_rfid_return() {
           "rfid uses the low 32-bit return address when restored MSR.SF is clear");
 }
 
+void test_system_call_exception_and_return() {
+    using namespace project360;
+    memory::GuestMemory mem(0x1000U);
+    put_word(mem, 0, d_form(14, 2, 0, 1)); // addi r2,r0,1
+    put_word(mem, 4, system_call_form()); // sc 0
+    put_word(mem, 8, d_form(14, 4, 0, 7)); // addi r4,r0,7
+    put_word(mem, 0xc00U, d_form(14, 3, 0, 42)); // kernel handler body
+    put_word(mem, 0xc04U, rfid_form()); // return to SRR0
+
+    cpu::CpuState state{};
+    const auto msr_bit = [](unsigned bit) { return std::uint64_t{1} << (63U - bit); };
+    state.msr = msr_bit(0U) | msr_bit(3U) | msr_bit(11U) | msr_bit(49U) |
+                msr_bit(51U) | msr_bit(58U) | msr_bit(59U) | msr_bit(62U);
+    const auto original_msr = state.msr;
+    const auto decoded = cpu::decode(system_call_form());
+    check(decoded && decoded.instruction.opcode == cpu::Opcode::system_call,
+          "SC-form sc 0 decodes as a system call");
+    const auto hypervisor_call = cpu::decode(system_call_form(1U));
+    check(hypervisor_call && hypervisor_call.instruction.level == 1U &&
+              !cpu::decode((17U << 26U) | 2U | (1U << 31U)),
+          "sc LEV=1 is decoded distinctly and reserved SC-form fields are rejected");
+    memory::GuestMemory hypervisor_mem(4U);
+    put_word(hypervisor_mem, 0, system_call_form(1U));
+    cpu::CpuState hypervisor_state{};
+    const auto unsupported_hypercall = cpu::Interpreter{}.step(hypervisor_state, hypervisor_mem);
+    check(unsupported_hypercall.status == cpu::StepStatus::fault &&
+              unsupported_hypercall.fault_info &&
+              unsupported_hypercall.fault_info->kind == cpu::FaultKind::unsupported_instruction &&
+              hypervisor_state.pc == 0U && hypervisor_state.srr0 == 0U,
+          "unsupported hypervisor call reports a host diagnostic without fake guest success");
+
+    const cpu::Interpreter interpreter{};
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[2] == 1U,
+          "guest executes a setup instruction before sc");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::exception_taken && !result.fault_info &&
+              result.guest_exception &&
+              result.guest_exception->kind == cpu::GuestExceptionKind::system_call &&
+              result.guest_exception->vector == 0xc00U && state.pc == 0xc00U &&
+              state.srr0 == 8U && state.srr1 == original_msr &&
+              state.msr == (msr_bit(0U) | msr_bit(3U) | msr_bit(51U)),
+          "sc saves the next PC and OEA MSR state, then vectors to 0xC00");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 42U &&
+              state.pc == 0xc04U,
+          "system-call handler executes guest code");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.pc == 8U &&
+              state.msr == (original_msr | msr_bit(48U)),
+          "rfid restores the pre-system-call privilege state and resumes after sc");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[4] == 7U &&
+              state.pc == 12U,
+          "guest resumes at the instruction immediately following sc");
+}
+
 void test_cpu_fetch_from_mapped_executable_page() {
     using namespace project360;
     memory::GuestMemory mem(2U * static_cast<std::size_t>(memory::GuestMemory::page_size));
@@ -1955,6 +2017,7 @@ int main() {
     test_xor_and_immediate_logic_instructions();
     test_branch_and_faults();
     test_program_exception_and_rfid_return();
+    test_system_call_exception_and_return();
     test_cpu_fetch_from_mapped_executable_page();
     test_compare_immediates();
     test_compare_registers();

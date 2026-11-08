@@ -203,6 +203,13 @@ DecodeResult decode(std::uint32_t word) {
         if (!valid_branch_options(ins.bo)) return {{}, "reserved branch option encoding"};
         return {ins, {}};
     }
+    case 17:
+        if (word != ((17U << 26U) | 2U) && word != ((17U << 26U) | (1U << 5U) | 2U)) {
+            return {{}, "system-call instruction has reserved fields set"};
+        }
+        ins.opcode = Opcode::system_call;
+        ins.level = (word & (1U << 5U)) != 0U ? 1U : 0U;
+        return {ins, {}};
     case 19: {
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
         if (xo10 == 18U) {

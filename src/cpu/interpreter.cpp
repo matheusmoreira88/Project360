@@ -20,14 +20,34 @@ constexpr std::uint64_t powerpc_bit(unsigned bit) {
     return std::uint64_t{1} << (63U - bit);
 }
 
-std::uint64_t program_exception_srr1(std::uint64_t msr, unsigned cause_bit) {
+std::uint64_t saved_msr_for_srr1(std::uint64_t msr) {
     std::uint64_t saved = 0;
     for (unsigned bit = 0; bit < 64U; ++bit) {
         if (bit <= 32U || (bit >= 37U && bit <= 41U) || bit >= 48U) {
             saved |= msr & powerpc_bit(bit);
         }
     }
-    return saved | powerpc_bit(cause_bit);
+    return saved;
+}
+
+std::uint64_t program_exception_srr1(std::uint64_t msr, unsigned cause_bit) {
+    return saved_msr_for_srr1(msr) | powerpc_bit(cause_bit);
+}
+
+StepResult take_system_call_exception(CpuState& state) {
+    constexpr std::uint64_t kSystemCallExceptionVector = 0xc00U;
+    const auto fault_pc = state.pc;
+    state.srr0 = fault_pc + 4U;
+    state.srr1 = saved_msr_for_srr1(state.msr);
+
+    // Apply the modeled OEA interrupt-entry state. SF, HV and ME are retained;
+    // Xenon hypervisor routing and LPCR/LPES-dependent state are not modeled.
+    state.msr = powerpc_bit(0U) | (state.msr & powerpc_bit(3U)) |
+                (state.msr & powerpc_bit(51U));
+    state.pc = kSystemCallExceptionVector;
+    return {StepStatus::exception_taken, "PowerPC system call exception (LEV=0)",
+            std::nullopt, GuestException{GuestExceptionKind::system_call,
+                                         kSystemCallExceptionVector}};
 }
 
 StepResult take_program_exception(CpuState& state, FaultKind cause, unsigned syndrome_bit,
@@ -210,6 +230,12 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         return fault(FaultKind::interpreter_internal, old_pc, std::move(message), word);
     };
     switch (ins.opcode) {
+    case Opcode::system_call:
+        if (ins.level == 1U) {
+            return fault(FaultKind::unsupported_instruction, old_pc,
+                         "sc LEV=1 hypervisor call is unsupported", word);
+        }
+        return take_system_call_exception(state);
     case Opcode::floating_move_register:
     case Opcode::floating_negate:
     case Opcode::floating_absolute:

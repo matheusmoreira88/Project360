@@ -102,6 +102,7 @@ enum class Opcode {
     branch_lr,
     branch_ctr,
     return_from_interrupt_doubleword,
+    system_call,
     floating_move_register,
     floating_negate,
     floating_absolute,
@@ -119,6 +120,7 @@ struct DecodedInstruction {
     std::uint16_t spr{};
     std::uint8_t bo{};
     std::uint8_t bi{};
+    std::uint8_t level{};
     std::uint8_t branch_hint{};
     std::uint8_t shift{};
     std::uint8_t mask_begin{};
