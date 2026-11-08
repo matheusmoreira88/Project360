@@ -314,6 +314,13 @@ DecodeResult decode(std::uint32_t word) {
             ins.indexed = true;
             return {ins, {}};
         }
+        if (xo10 == 598U) {
+            if ((ins.rt > 1U) || ins.ra != 0U || ins.rb != 0U || (word & 1U) != 0U) {
+                return {{}, "sync reserved fields are nonzero or L is reserved"};
+            }
+            ins.opcode = ins.rt == 0U ? Opcode::sync : Opcode::lwsync;
+            return {ins, {}};
+        }
         if (xo10 == 150U) {
             if ((word & 1U) == 0U) return {{}, "stwcx. requires its record bit"};
             ins.opcode = Opcode::store_word_conditional_indexed;

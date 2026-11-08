@@ -3,6 +3,7 @@
 #include "cpu/decoder.hpp"
 
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <limits>
@@ -260,6 +261,13 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
                          "sc LEV=1 hypervisor call is unsupported", word);
         }
         return take_system_call_exception(state);
+    case Opcode::sync:
+    case Opcode::lwsync:
+        // GuestMemory completes and synchronizes each bounded access before
+        // returning. The full host fence prevents native/compiler reordering
+        // across this instruction; Xenon-specific weak ordering is not modeled.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        break;
     case Opcode::floating_move_register:
     case Opcode::floating_negate:
     case Opcode::floating_absolute:

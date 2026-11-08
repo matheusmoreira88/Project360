@@ -46,6 +46,15 @@ std::uint32_t add(std::uint8_t rd, std::uint8_t ra, std::uint8_t rb, bool record
            (266U << 1U) | (record ? 1U : 0U);
 }
 
+std::uint32_t sync_form(std::uint8_t level = 0U, std::uint8_t reserved_rt = 0U,
+                        std::uint8_t reserved_ra = 0U, std::uint8_t reserved_rb = 0U,
+                        bool record = false) {
+    return (31U << 26U) | (static_cast<std::uint32_t>(reserved_rt | (level & 1U)) << 21U) |
+           (static_cast<std::uint32_t>(reserved_ra) << 16U) |
+           (static_cast<std::uint32_t>(reserved_rb) << 11U) | (598U << 1U) |
+           (record ? 1U : 0U);
+}
+
 std::uint32_t fpr_unary(std::uint8_t fd, std::uint8_t fb, std::uint16_t xo,
                         bool record = false, std::uint8_t reserved_fra = 0) {
     return (63U << 26U) | (static_cast<std::uint32_t>(fd) << 21U) |
@@ -1949,6 +1958,38 @@ void test_system_call_exception_and_return() {
           "guest resumes at the instruction immediately following sc");
 }
 
+void test_storage_barrier_instructions() {
+    using namespace project360;
+    const auto heavy = cpu::decode(sync_form());
+    const auto light = cpu::decode(sync_form(1U));
+    check(heavy && heavy.instruction.opcode == cpu::Opcode::sync,
+          "sync L=0 decodes as the heavyweight storage barrier");
+    check(light && light.instruction.opcode == cpu::Opcode::lwsync,
+          "sync L=1 decodes as the lightweight storage barrier");
+    check(!cpu::decode(sync_form(0U, 2U)) && !cpu::decode(sync_form(0U, 0U, 1U)) &&
+              !cpu::decode(sync_form(0U, 0U, 0U, 1U)) &&
+              !cpu::decode(sync_form(0U, 0U, 0U, 0U, true)),
+          "storage barriers reject reserved operand and record fields");
+
+    memory::GuestMemory mem(12U);
+    put_word(mem, 0U, sync_form());
+    put_word(mem, 4U, sync_form(1U));
+    put_word(mem, 8U, d_form(14U, 3U, 0U, 7U));
+    cpu::Interpreter interpreter{};
+    cpu::CpuState state{};
+    state.gpr[3] = 0xdeadbeefU;
+    state.cr = 0x12345678U;
+    state.xer = 0xa0000000U;
+    const auto full_result = interpreter.step(state, mem);
+    const auto light_result = interpreter.step(state, mem);
+    const auto arithmetic_result = interpreter.step(state, mem);
+    check(full_result.status == cpu::StepStatus::executed &&
+              light_result.status == cpu::StepStatus::executed &&
+              arithmetic_result.status == cpu::StepStatus::executed && state.pc == 12U &&
+              state.gpr[3] == 7U && state.cr == 0x12345678U && state.xer == 0xa0000000U,
+          "storage barriers advance execution without changing guest registers");
+}
+
 void test_cpu_fetch_from_mapped_executable_page() {
     using namespace project360;
     memory::GuestMemory mem(2U * static_cast<std::size_t>(memory::GuestMemory::page_size));
@@ -2546,6 +2587,7 @@ int main() {
     test_branch_and_faults();
     test_program_exception_and_rfid_return();
     test_system_call_exception_and_return();
+    test_storage_barrier_instructions();
     test_cpu_fetch_from_mapped_executable_page();
     test_compare_immediates();
     test_compare_registers();
