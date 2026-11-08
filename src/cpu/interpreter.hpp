@@ -24,7 +24,7 @@ enum class FaultKind {
     interpreter_internal
 };
 
-enum class GuestExceptionKind { program, system_call };
+enum class GuestExceptionKind { program, system_call, floating_point_unavailable };
 
 struct GuestException {
     GuestExceptionKind kind{};

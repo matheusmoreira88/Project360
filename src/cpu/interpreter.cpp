@@ -54,6 +54,38 @@ StepResult take_system_call_exception(CpuState& state) {
                                          kSystemCallExceptionVector}};
 }
 
+StepResult take_floating_point_unavailable_exception(CpuState& state) {
+    constexpr std::uint64_t kFloatingPointUnavailableVector = 0x800U;
+    const auto old_msr = state.msr;
+    state.srr0 = state.pc;
+    state.srr1 = saved_msr_for_srr1(old_msr);
+    state.msr = powerpc_bit(0U) | (old_msr & powerpc_bit(3U)) |
+                (old_msr & powerpc_bit(51U));
+    state.pc = kFloatingPointUnavailableVector;
+    return {StepStatus::exception_taken, "PowerPC floating-point unavailable exception",
+            std::nullopt,
+            GuestException{GuestExceptionKind::floating_point_unavailable,
+                           kFloatingPointUnavailableVector}};
+}
+
+bool is_floating_point_instruction(Opcode opcode) {
+    switch (opcode) {
+    case Opcode::floating_move_register:
+    case Opcode::floating_negate:
+    case Opcode::floating_absolute:
+    case Opcode::floating_negative_absolute:
+    case Opcode::floating_select:
+    case Opcode::floating_compare_unordered:
+    case Opcode::floating_compare_ordered:
+    case Opcode::lfs:
+    case Opcode::lfd:
+    case Opcode::stfs:
+    case Opcode::stfd:
+    case Opcode::stfiwx: return true;
+    default: return false;
+    }
+}
+
 StepResult take_program_exception(CpuState& state, FaultKind cause, unsigned syndrome_bit,
                                   std::uint32_t instruction, std::string message) {
     const auto fault_pc = state.pc;
@@ -254,6 +286,11 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
 
     const auto ins = decoded.instruction;
     const auto old_pc = state.pc;
+    constexpr auto kMsrFloatingPointAvailable = powerpc_bit(13U);
+    if (is_floating_point_instruction(ins.opcode) &&
+        (state.msr & kMsrFloatingPointAvailable) == 0U) {
+        return take_floating_point_unavailable_exception(state);
+    }
     auto next_pc = old_pc + 4U;
     const auto base = ins.ra == 0 ? 0U : state.gpr[ins.ra];
     const auto data_fault = [&](std::uint64_t address, std::size_t width,

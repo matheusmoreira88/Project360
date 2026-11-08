@@ -17,6 +17,7 @@
 namespace {
 
 int failures = 0;
+constexpr std::uint64_t kMsrFloatingPointAvailable = std::uint64_t{1} << 50U;
 
 void check(bool condition, const char* message) {
     if (!condition) {
@@ -1236,6 +1237,7 @@ void test_floating_point_load_store_transfers() {
     put_word(mem, 32, d_form(55, 5, 1, 8)); // stfdu f5,8(r1)
 
     cpu::CpuState state{};
+    state.msr = kMsrFloatingPointAvailable;
     const auto result = cpu::Interpreter{}.run(state, mem, 9);
     std::uint64_t stored_double = 0;
     std::uint64_t stored_updated_double = 0;
@@ -1259,6 +1261,7 @@ void test_floating_point_load_store_transfers() {
     memory::GuestMemory fault_mem(64);
     put_word(fault_mem, 0, d_form(50, 5, 1, 0)); // lfd f5,0(r1)
     cpu::CpuState fault_state{};
+    fault_state.msr = kMsrFloatingPointAvailable;
     fault_state.gpr[1] = 4;
     fault_state.fpr[5] = 0x0123456789abcdefULL;
     const auto fault = cpu::Interpreter{}.step(fault_state, fault_mem);
@@ -1279,6 +1282,7 @@ void test_floating_point_load_store_transfers() {
     put_word(indexed_mem, 20, indexed_memory(6, 1, 6, 695)); // stfsux f6,r1,r6
     put_word(indexed_mem, 24, indexed_memory(7, 0, 8, 983)); // stfiwx f7,0,r8
     cpu::CpuState indexed_state{};
+    indexed_state.msr = kMsrFloatingPointAvailable;
     indexed_state.gpr[1] = 0x100U;
     indexed_state.gpr[2] = 0x20U;
     indexed_state.gpr[3] = 0x24U;
@@ -1315,6 +1319,7 @@ void test_floating_point_load_store_transfers() {
     put_word(indexed_double_update_mem, 0, indexed_memory(3, 1, 2, 631)); // lfdux f3,r1,r2
     put_word(indexed_double_update_mem, 4, indexed_memory(3, 1, 4, 759)); // stfdux f3,r1,r4
     cpu::CpuState indexed_double_update_state{};
+    indexed_double_update_state.msr = kMsrFloatingPointAvailable;
     indexed_double_update_state.gpr[1] = 0x100U;
     indexed_double_update_state.gpr[2] = 0x28U;
     indexed_double_update_state.gpr[4] = 8U;
@@ -1338,6 +1343,7 @@ void test_floating_point_load_store_transfers() {
     memory::GuestMemory stfiwx_fault_memory(32);
     put_word(stfiwx_fault_memory, 0, indexed_memory(1, 1, 2, 983));
     cpu::CpuState stfiwx_fault_state{};
+    stfiwx_fault_state.msr = kMsrFloatingPointAvailable;
     stfiwx_fault_state.gpr[1] = 4U;
     stfiwx_fault_state.gpr[2] = 1U;
     stfiwx_fault_state.fpr[1] = 0x0123456789abcdefULL;
@@ -1359,6 +1365,7 @@ void test_floating_point_sign_and_move_instructions() {
     put_word(mem, 12, fpr_unary(5, 3, 136)); // fnabs f5,f3
 
     cpu::CpuState state{};
+    state.msr = kMsrFloatingPointAvailable;
     constexpr std::uint64_t kNegativeNanPayload = 0xfff0000012345678ULL;
     constexpr std::uint64_t kPositiveNanPayload = 0x7ff0000012345678ULL;
     state.fpr[1] = kNegativeNanPayload;
@@ -1390,6 +1397,7 @@ void test_floating_point_select_instruction() {
     put_word(mem, 16, fpr_select(9, 9, 3, 2));      // fsel f9,f9,f3,f2
 
     cpu::CpuState state{};
+    state.msr = kMsrFloatingPointAvailable;
     state.fpr[1] = std::bit_cast<std::uint64_t>(1.0);
     state.fpr[2] = std::bit_cast<std::uint64_t>(42.0);
     state.fpr[3] = std::bit_cast<std::uint64_t>(43.0);
@@ -1434,6 +1442,7 @@ void test_floating_point_compare_instructions() {
     put_word(mem, 12, fpr_compare(7, 7, 8, 0)); // fcmpu cr7,f7,f8
 
     cpu::CpuState state{};
+    state.msr = kMsrFloatingPointAvailable;
     state.fpr[1] = std::bit_cast<std::uint64_t>(-2.0);
     state.fpr[2] = std::bit_cast<std::uint64_t>(1.0);
     state.fpr[3] = std::bit_cast<std::uint64_t>(9.0);
@@ -1460,6 +1469,7 @@ void test_floating_point_compare_instructions() {
     memory::GuestMemory nan_memory(4);
     put_word(nan_memory, 0, fpr_compare(0, 1, 2, 32)); // ordered compare with quiet NaN
     cpu::CpuState nan_state{};
+    nan_state.msr = kMsrFloatingPointAvailable;
     nan_state.fpr[1] = 0x7ff8000000000001ULL;
     nan_state.fpr[2] = std::bit_cast<std::uint64_t>(1.0);
     nan_state.cr = 0xabcdef01U;
@@ -1470,6 +1480,53 @@ void test_floating_point_compare_instructions() {
               nan_state.pc == 0U && nan_state.cr == 0xabcdef01U &&
               nan_state.fpscr == 0x76543210U,
           "ordered NaN compare reports unsupported exception behavior without partial state changes");
+}
+
+void test_floating_point_unavailable_exception() {
+    using namespace project360;
+    memory::GuestMemory mem(16);
+    const std::array<std::uint32_t, 3> floating_instructions{
+        fpr_unary(2, 1, 72),                  // fmr f2,f1
+        d_form(50, 3, 1, 0),                 // lfd f3,0(r1)
+        indexed_memory(4, 1, 2, 983),        // stfiwx f4,r1,r2
+    };
+    constexpr std::uint64_t old_msr = (std::uint64_t{1} << 63U) |
+                                      (std::uint64_t{1} << 60U) |
+                                      (std::uint64_t{1} << 15U) |
+                                      (std::uint64_t{1} << 14U) |
+                                      (std::uint64_t{1} << 12U) |
+                                      (std::uint64_t{1} << 11U) |
+                                      (std::uint64_t{1} << 10U);
+    constexpr std::uint64_t handler_msr = (std::uint64_t{1} << 63U) |
+                                          (std::uint64_t{1} << 60U) |
+                                          (std::uint64_t{1} << 12U);
+
+    for (const auto instruction : floating_instructions) {
+        put_word(mem, 0, instruction);
+        cpu::CpuState state{};
+        state.msr = old_msr; // FP=0, with PR/EE/FE enabled before entry
+        state.gpr[1] = 0xfffffff0U;
+        state.gpr[2] = 0x100U;
+        state.fpr[1] = 0x0123456789abcdefULL;
+        state.fpr[2] = 0xfedcba9876543210ULL;
+        state.fpr[3] = 0x1111222233334444ULL;
+        state.fpr[4] = 0x5555666677778888ULL;
+        state.cr = 0x12345678U;
+        state.fpscr = 0xabcdef01U;
+
+        const auto result = cpu::Interpreter{}.step(state, mem);
+        check(result.status == cpu::StepStatus::exception_taken && result.guest_exception &&
+                  result.guest_exception->kind ==
+                      cpu::GuestExceptionKind::floating_point_unavailable &&
+                  result.guest_exception->vector == 0x800U && state.pc == 0x800U &&
+                  state.srr0 == 0U && state.srr1 == old_msr && state.msr == handler_msr &&
+                  state.fpr[1] == 0x0123456789abcdefULL &&
+                  state.fpr[2] == 0xfedcba9876543210ULL &&
+                  state.fpr[3] == 0x1111222233334444ULL &&
+                  state.fpr[4] == 0x5555666677778888ULL && state.cr == 0x12345678U &&
+                  state.fpscr == 0xabcdef01U,
+              "MSR FP=0 vectors floating-point compute/load/store before side effects");
+    }
 }
 
 void test_indexed_memory_instructions() {
@@ -3326,6 +3383,7 @@ int main() {
     test_floating_point_sign_and_move_instructions();
     test_floating_point_select_instruction();
     test_floating_point_compare_instructions();
+    test_floating_point_unavailable_exception();
     test_indexed_memory_instructions();
     test_indexed_update_memory_instructions();
     test_byte_reversed_indexed_memory_instructions();
