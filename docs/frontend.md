@@ -22,15 +22,15 @@ The library file uses a small versioned format with bounded entry and path sizes
 
 Install Qt 6.5 or newer with the Widgets module and make its CMake package files discoverable (for example with `CMAKE_PREFIX_PATH`). The GUI target is optional: CMake skips it when Qt is not found, while preserving the core executable and tests.
 
-The `Windows Qt build` GitHub Actions workflow pins Qt 6.10.3 and the Qt downloader, and builds/tests the GUI on the Windows 2022/MSVC 2022 runner. Qt 6.10.3 is used because the pinned downloader does not understand the Windows repository layout introduced in Qt 6.11. The workflow runs model tests and an offscreen window smoke test; that checks construction and rendering, not visual design quality. The corrected run is pending; this local machine does not have Qt installed, so local builds cannot validate the widget code.
+The `Windows Qt build` GitHub Actions workflow pins Qt 6.10.3 and the Qt downloader, and builds/tests the GUI on the Windows 2022/MSVC 2022 runner. Qt 6.10.3 is used because the pinned downloader does not understand the Windows repository layout introduced in Qt 6.11. Run [42451851613](https://github.com/matheusmoreira88/Project360/actions/runs/42451851613) passed configure, Debug and Release builds, and model/window smoke tests. The offscreen window test checks construction and frame rendering, not visual design quality. Qt is still absent from this development machine, so the widget code cannot be built locally or reviewed interactively here.
 
 ```powershell
 cmake --preset windows-debug
 cmake --build --preset debug --target project360_gui
 ```
 
-This target has not yet been compiled or visually validated on the current development machine because a Qt SDK was not found. It should be built and checked on a Windows machine with Qt before the interface is treated as validated.
+The Qt target has been compiled and tested by Windows CI. It has not yet received a manual visual review; check keyboard navigation, narrow-window layout, and accessibility on a machine with Qt before treating those aspects as validated.
 
 ## Next frontend work
 
-The Qt model/view layer and its conditional model tests have not been compiled or visually validated here because Qt is not installed. Next, validate those targets on a supported Qt/MSVC toolchain and review keyboard navigation, narrow-window layout, and accessibility behavior. Keep unavailable actions visibly disabled until the corresponding backend is implemented.
+The Qt model/view layer and conditional model/window smoke tests pass on the supported Qt/MSVC CI toolchain. Next, review keyboard navigation, narrow-window layout, and accessibility behavior interactively. Keep unavailable actions visibly disabled until the corresponding backend is implemented.

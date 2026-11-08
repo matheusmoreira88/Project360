@@ -4,7 +4,7 @@ The roadmap tracks evidence rather than estimated completion percentages.
 
 | Phase | Status | Evidence / acceptance still needed |
 |---|---|---|
-| 0 — Foundation | Locally verified | CMake configure succeeded with CMake 4.3.1 and MSVC 19.51; Debug and Release builds completed; CTest passed in both configurations; smoke executable ran. Windows CI workflow is configured but has not run remotely. |
+| 0 — Foundation | Locally and remotely verified | CMake configure succeeded with CMake 4.3.1 and MSVC 19.51; Debug and Release builds completed; CTest passed in both configurations; smoke executable ran. Core Windows CI also passed on the Windows 2022 runner ([run 42451851612](https://github.com/matheusmoreira88/Project360/actions/runs/42451851612)). |
 | 1 — PowerPC interpreter | Incremental subset implemented and locally tested; incomplete | Debug and Release builds and CTest passed after adding `srawi`, `cntlzw`/`cntlzd`, `sld`/`srd`/`srad`, 64-bit big-endian accesses and `ld`/`ldu`/`std`/`stdu` plus indexed forms. Existing arithmetic, branch, word-memory and byte-reversed subsets remain tested. Floating point, VMX128, exceptions, atomics and most instructions remain absent. |
 | 2 — Memory subsystem | Flat-buffer widths extended; virtual memory not started | 8/16/32/64-bit big-endian accesses are bounded; multi-byte accesses enforce natural alignment. Guest address mapping, protection, translation and synchronization remain unimplemented. |
 | 3 — Loader | Not started | Safe format parsing and authorized test executable. |
@@ -19,7 +19,7 @@ The roadmap tracks evidence rather than estimated completion percentages.
 
 ## Frontend status
 
-The optional Qt 6 Widgets source now defines a dark Project360 shell, model-backed library, persistent local `.xex` paths, case-insensitive name search, name ordering, path removal, and explicit unavailable states. The independent library store has bounded, versioned parsing and passing unit tests. The GUI and Qt model source have not been compiled or visually validated on this development environment because Qt 6 is not installed; core emulator phases remain independent of this optional target.
+The optional Qt 6 Widgets source now defines a dark Project360 shell, model-backed library, persistent local `.xex` paths, case-insensitive name search, name ordering, path removal, and explicit unavailable states. The independent library store has bounded, versioned parsing and passing unit tests. Windows CI compiled the GUI and passed the Qt model and offscreen window smoke tests in Debug and Release ([run 42451851613](https://github.com/matheusmoreira88/Project360/actions/runs/42451851613)). Manual visual review has not been performed, and core emulator phases remain independent of this optional target.
 
 ## Next engineering step
 
