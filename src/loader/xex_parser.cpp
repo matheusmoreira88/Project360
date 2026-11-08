@@ -308,6 +308,28 @@ PeParseResult parse_xbox_pe32(std::span<const std::byte> image) {
             !range_fits(section.raw_offset, section.raw_size, image.size())) {
             return {{}, "PE section points outside the image"};
         }
+        if (section.raw_size != 0U && section.raw_offset < metadata.headers_size) {
+            return {{}, "PE section raw data overlaps the declared headers"};
+        }
+        for (const auto& previous : metadata.sections) {
+            const auto previous_virtual_extent =
+                std::max(previous.virtual_size, previous.raw_size);
+            if (virtual_extent != 0U && previous_virtual_extent != 0U &&
+                section.virtual_address <
+                    static_cast<std::uint64_t>(previous.virtual_address) +
+                        previous_virtual_extent &&
+                previous.virtual_address <
+                    static_cast<std::uint64_t>(section.virtual_address) + virtual_extent) {
+                return {{}, "PE sections have overlapping virtual ranges"};
+            }
+            if (section.raw_size != 0U && previous.raw_size != 0U &&
+                section.raw_offset <
+                    static_cast<std::uint64_t>(previous.raw_offset) + previous.raw_size &&
+                previous.raw_offset <
+                    static_cast<std::uint64_t>(section.raw_offset) + section.raw_size) {
+                return {{}, "PE sections have overlapping raw-data ranges"};
+            }
+        }
         if ((section.characteristics & kSectionExecutable) != 0U &&
             metadata.entry_point_rva >= section.virtual_address &&
             metadata.entry_point_rva - section.virtual_address < virtual_extent) {

@@ -206,6 +206,19 @@ int main() {
     write_le32(bad_pe_section, 0x178U + 20U, 0xfffffff0U);
     check(!project360::loader::parse_xbox_pe32(bad_pe_section),
           "PE section raw ranges outside the image are rejected");
+    auto pe_section_overlapping_headers = pe;
+    write_le32(pe_section_overlapping_headers, 0x178U + 20U, 0x1f0U);
+    check(!project360::loader::parse_xbox_pe32(pe_section_overlapping_headers),
+          "PE section data overlapping declared headers is rejected");
+    auto pe_overlapping_sections = pe;
+    write_le16(pe_overlapping_sections, 0x84U + 2U, 2U);
+    constexpr std::size_t second_section = 0x178U + 40U;
+    write_le32(pe_overlapping_sections, second_section + 8U, 0x20U);
+    write_le32(pe_overlapping_sections, second_section + 12U, 0x1000U);
+    write_le32(pe_overlapping_sections, second_section + 16U, 0x20U);
+    write_le32(pe_overlapping_sections, second_section + 20U, 0x280U);
+    check(!project360::loader::parse_xbox_pe32(pe_overlapping_sections),
+          "overlapping PE virtual section ranges are rejected");
 
     auto loadable_pe = make_xbox_pe32();
     write_be32(loadable_pe, 0x200U, (14U << 26U) | (3U << 21U) | 5U); // addi r3,r0,5
