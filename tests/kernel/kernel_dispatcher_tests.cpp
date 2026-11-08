@@ -1021,6 +1021,20 @@ int main() {
               state.pc == 0x8001b0U,
           "guest pool rejects paged allocation until a page-reclamation model exists");
 
+    const KernelDispatcher multi_page_pool_dispatcher(
+        {}, {0x81000000U, 3U * static_cast<std::uint32_t>(GuestMemory::page_size)});
+    state.gpr[3] = 0U;
+    state.gpr[4] = 5000U;
+    state.lr = 0x33a7U;
+    const auto multi_page_allocation = multi_page_pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_allocate_pool_ordinal}, state, pool_memory);
+    const auto multi_page_address = static_cast<std::uint32_t>(state.gpr[3]);
+    check(multi_page_allocation == KernelDispatchStatus::handled &&
+              multi_page_address == 0x81000000U &&
+              pool_memory.write_u8(multi_page_address + 4095U, 0x12U) &&
+              pool_memory.write_u8(multi_page_address + 4096U, 0x34U),
+          "guest pool combines newly mapped pages for allocations larger than one page");
+
     state.gpr[3] = data_page;
     state.gpr[4] = 4U;
     state.gpr[5] = 0x11223344U;

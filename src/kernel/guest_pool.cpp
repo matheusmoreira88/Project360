@@ -148,17 +148,44 @@ bool GuestPoolAllocator::grow(memory::GuestMemory& memory) const noexcept {
         if (!mapped) return false;
 
         const auto virtual_address = static_cast<std::uint32_t>(virtual_candidate);
-        try {
-            const auto [unused, inserted] =
-                free_blocks_.emplace(virtual_address, static_cast<std::uint32_t>(page_size));
-            (void)unused;
-            if (!inserted) {
+        const auto page_end = virtual_candidate + page_size;
+        auto next = free_blocks_.lower_bound(virtual_address);
+        auto previous = free_blocks_.end();
+        if (next != free_blocks_.begin()) previous = std::prev(next);
+        if ((previous != free_blocks_.end() &&
+             static_cast<std::uint64_t>(previous->first) + previous->second > virtual_address) ||
+            (next != free_blocks_.end() && page_end > next->first)) {
+            (void)memory.unmap_page(virtual_address);
+            return false;
+        }
+
+        const bool joins_previous = previous != free_blocks_.end() &&
+            static_cast<std::uint64_t>(previous->first) + previous->second == virtual_address;
+        const bool joins_next = next != free_blocks_.end() && page_end == next->first;
+        if (joins_previous) {
+            previous->second += static_cast<std::uint32_t>(page_size);
+            if (joins_next) {
+                previous->second += next->second;
+                free_blocks_.erase(next);
+            }
+        } else if (joins_next) {
+            auto node = free_blocks_.extract(next);
+            node.key() = virtual_address;
+            node.mapped() += static_cast<std::uint32_t>(page_size);
+            free_blocks_.insert(std::move(node));
+        } else {
+            try {
+                const auto [unused, inserted] = free_blocks_.emplace(
+                    virtual_address, static_cast<std::uint32_t>(page_size));
+                (void)unused;
+                if (!inserted) {
+                    (void)memory.unmap_page(virtual_address);
+                    return false;
+                }
+            } catch (const std::bad_alloc&) {
                 (void)memory.unmap_page(virtual_address);
                 return false;
             }
-        } catch (const std::bad_alloc&) {
-            (void)memory.unmap_page(virtual_address);
-            return false;
         }
 
         mapped_bytes_ += static_cast<std::uint32_t>(page_size);
