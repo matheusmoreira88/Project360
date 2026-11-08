@@ -5,6 +5,7 @@
 #include "gpu/xenos/registers.hpp"
 #include "gpu/xenos/shader_alu.hpp"
 #include "gpu/xenos/shader_execution.hpp"
+#include "gpu/xenos/texture_fetch.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
@@ -1939,6 +1940,57 @@ void test_vertex_fetch_descriptors_and_memory() {
           "vertex fetch rejects physical memory ranges past guest backing storage");
 }
 
+void test_texture_fetch_constant_metadata() {
+    using namespace project360::gpu::xenos;
+    const std::array<std::uint32_t, 6> words{
+        0x80000000U | (0x12U << 22U) | (5U << 16U) | (6U << 13U) | (3U << 10U) |
+            (2U << 8U) | (1U << 6U) | (3U << 4U) | (2U << 2U) | 2U,
+        (0xabcdeU << 12U) | (1U << 11U) | (1U << 10U) | (2U << 8U) | (3U << 6U) |
+            0x25U,
+        0x11223344U,
+        0x55667788U,
+        0x99aabbccU,
+        0xddeeff00U,
+    };
+    const auto decoded = decode_texture_fetch_constant(words);
+    check(static_cast<bool>(decoded), "texture fetch constant accepts the texture type tag");
+    check(decoded.constant.raw_words == words,
+          "texture fetch constant preserves all six original dwords");
+    check(decoded.constant.sign_modes == std::array<std::uint8_t, 4>{2U, 3U, 1U, 2U},
+          "texture fetch constant decodes per-component sign modes");
+    check(decoded.constant.clamp_modes == std::array<std::uint8_t, 3>{3U, 6U, 5U},
+          "texture fetch constant decodes per-axis clamp modes");
+    check(decoded.constant.pitch == 0x12U && decoded.constant.tiled,
+          "texture fetch constant decodes pitch and tiling");
+    check(decoded.constant.format == 0x25U && decoded.constant.endian == 3U &&
+              decoded.constant.request_size == 2U && decoded.constant.stacked &&
+              decoded.constant.nearest_clamp_policy &&
+              decoded.constant.base_address_bytes == 0xabcde000U,
+          "texture fetch constant decodes storage fields and page-based address");
+    auto not_texture = words;
+    not_texture[0] = (not_texture[0] & ~0x3U) | 0x3U;
+    check(!decode_texture_fetch_constant(not_texture),
+          "texture fetch constant rejects non-texture fetch types");
+
+    constexpr std::array<std::uint8_t, 2> requested_slots{1U, 31U};
+    std::vector<std::uint32_t> registers(0x4800U + 32U * 6U);
+    for (std::size_t i = 0U; i < words.size(); ++i) {
+        registers[0x4800U + 1U * 6U + i] = words[i];
+        registers[0x4800U + 31U * 6U + i] = words[i];
+    }
+    const auto bank = decode_texture_fetch_constant_bank(registers, requested_slots);
+    check(bank && bank.constants[1].raw_words == words && bank.constants[31].raw_words == words,
+          "texture fetch bank reads only requested six-dword slots through slot 31");
+    constexpr std::array<std::uint8_t, 1> out_of_range_slot{32U};
+    constexpr std::array<std::uint8_t, 1> truncated_slot{31U};
+    const auto invalid_slot = decode_texture_fetch_constant_bank(registers, out_of_range_slot);
+    const auto truncated = decode_texture_fetch_constant_bank(
+        std::span<const std::uint32_t>(registers).first(registers.size() - 1U),
+        truncated_slot);
+    check(!invalid_slot && !truncated,
+          "texture fetch bank rejects invalid slots and truncated register storage");
+}
+
 void test_vfetch_instruction_and_attribute_range() {
     using namespace project360::gpu::xenos;
     project360::memory::GuestMemory memory(0x1000U);
@@ -2291,6 +2343,7 @@ int main() {
     test_primitive_assembly();
     test_vertex_shader_index_transform();
     test_vertex_fetch_descriptors_and_memory();
+    test_texture_fetch_constant_metadata();
     test_vfetch_instruction_and_attribute_range();
     test_wait_for_idle_is_synchronous_barrier();
     if (failures != 0) {
