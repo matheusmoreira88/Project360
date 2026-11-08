@@ -127,6 +127,29 @@ ShaderAluInstruction decode_shader_alu_instruction(
     return instruction;
 }
 
+ShaderAluFloatConstantBankResult decode_shader_alu_float_constant_bank(
+    std::span<const std::uint32_t> register_file,
+    std::span<const std::uint8_t> required_constants) {
+    constexpr std::size_t alu_register_base = 0x4000U;
+    constexpr std::size_t components_per_constant = 4U;
+    ShaderAluFloatConstantBankResult result{};
+    for (const auto constant_index : required_constants) {
+        const auto first_register = alu_register_base +
+                                    static_cast<std::size_t>(constant_index) *
+                                        components_per_constant;
+        if (first_register > register_file.size() ||
+            components_per_constant > register_file.size() - first_register) {
+            return {{}, "Register file does not contain Xenos ALU float constant c" +
+                            std::to_string(constant_index)};
+        }
+        for (std::size_t component = 0U; component < components_per_constant; ++component) {
+            result.constants[constant_index][component] =
+                std::bit_cast<float>(register_file[first_register + component]);
+        }
+    }
+    return result;
+}
+
 ShaderAluSourceResult resolve_shader_alu_source(
     const ShaderAluInstruction& instruction, ShaderAluSource source,
     const ShaderAluTemporaryRegisterBank& temporary_registers,

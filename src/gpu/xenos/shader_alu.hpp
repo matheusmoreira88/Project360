@@ -51,6 +51,13 @@ enum class ShaderAluSource : std::uint8_t { source_1, source_2, source_3 };
 using ShaderAluTemporaryRegisterBank = std::array<std::array<float, 4>, 64>;
 using ShaderAluFloatConstantBank = std::array<std::array<float, 4>, 256>;
 
+struct ShaderAluFloatConstantBankResult {
+    ShaderAluFloatConstantBank constants{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct ShaderVertexOutputs {
     std::array<float, 4> position{};
     std::uint8_t position_write_mask{};
@@ -79,6 +86,12 @@ struct ShaderAluExecutionResult {
 // execute the instruction or imply support for its opcode.
 [[nodiscard]] ShaderAluInstruction decode_shader_alu_instruction(
     const std::array<std::uint32_t, 3>& words) noexcept;
+
+// Decodes only requested float4 constants from the PM4 ALU register bank.
+// Each Xenos ALU constant occupies four IEEE-754 dwords starting at 0x4000.
+[[nodiscard]] ShaderAluFloatConstantBankResult decode_shader_alu_float_constant_bank(
+    std::span<const std::uint32_t> register_file,
+    std::span<const std::uint8_t> required_constants);
 
 // Resolves one temporary-register source, including its relative component
 // swizzle and abs/negate modifiers. Constant sources are rejected here; use

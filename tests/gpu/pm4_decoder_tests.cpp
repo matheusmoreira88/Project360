@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -376,6 +377,19 @@ void test_shader_alu_absolute_float_constant_sources() {
     check(scalar_constant && scalar_constant.previous_scalar == 5.0F &&
               scalar_constant.registers[5] == std::array<float, 4>{5.0F, 5.0F, 5.0F, 5.0F},
           "Xenos scalar ADDS resolves its absolute float constant from src3");
+
+    std::vector<std::uint32_t> register_file(0x4000U + 256U * 4U, 0U);
+    for (std::size_t lane = 0U; lane < constants[5].size(); ++lane) {
+        register_file[0x4000U + 5U * 4U + lane] =
+            std::bit_cast<std::uint32_t>(constants[5][lane]);
+    }
+    constexpr std::array<std::uint8_t, 1> required_constants{5U};
+    const auto decoded_bank = decode_shader_alu_float_constant_bank(
+        register_file, required_constants);
+    const auto missing_bank = decode_shader_alu_float_constant_bank(
+        std::span<const std::uint32_t>(register_file.data(), 0x4000U), required_constants);
+    check(decoded_bank && decoded_bank.constants[5] == constants[5] && !missing_bank,
+          "PM4 ALU constant register dwords decode to the requested IEEE float4 values");
 }
 
 void test_shader_vector_alu_from_encoded_temporaries() {

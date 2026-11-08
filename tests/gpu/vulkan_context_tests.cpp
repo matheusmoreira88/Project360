@@ -83,9 +83,11 @@ int main() {
             (offset_dwords << 8U) | 8U,
         };
     };
-    const std::array<std::array<std::uint32_t, 3>, 4> vertex_ucode{
+    const std::array<std::array<std::uint32_t, 3>, 5> vertex_ucode{
         encode_vfetch(1U, 0U),
         encode_vfetch(3U, 4U),
+        std::array<std::uint32_t, 3>{(0x0fU << 16U) | 2U, 0U,
+                                    (1U << 31U) | (1U << 30U) | (4U << 8U) | 7U},
         std::array<std::uint32_t, 3>{62U | (1U << 15U) | (0x0fU << 16U), 0U,
                                     0xe0030201U},
         std::array<std::uint32_t, 3>{(1U << 15U) | (0x0fU << 16U), 0U,
@@ -93,9 +95,10 @@ int main() {
     };
     const std::array<ShaderExecInstruction, 2> vertex_exec_blocks{
         decode_shader_exec_instruction(
-            {(0b11U | (0b11U << 2U)) << 16U | (2U << 12U), 1U << 12U}),
+            {(0b11U | (0b11U << 2U) | (0b10U << 4U)) << 16U | (3U << 12U),
+             1U << 12U}),
         decode_shader_exec_instruction(
-            {2U | ((0b10U | (0b10U << 2U)) << 16U) | (2U << 12U), 2U << 12U}),
+            {3U | ((0b10U | (0b10U << 2U)) << 16U) | (2U << 12U), 2U << 12U}),
     };
 
     const auto append_pm4_u32 = [](std::vector<std::uint8_t>& bytes, std::uint32_t value) {
@@ -107,6 +110,12 @@ int main() {
     std::vector<std::uint8_t> pm4_draw_stream;
     append_pm4_u32(pm4_draw_stream, (2U << 16U) | 0x2100U); // VGT_MAX/MIN/INDX_OFFSET.
     append_pm4_u32(pm4_draw_stream, 0x00ffffffU);
+    append_pm4_u32(pm4_draw_stream, 0U);
+    append_pm4_u32(pm4_draw_stream, 0U);
+    append_pm4_u32(pm4_draw_stream, 0xc0000000U | (4U << 16U) | (0x2dU << 8U));
+    append_pm4_u32(pm4_draw_stream, 28U); // ALU float4 constant c7 (dword offset 7*4).
+    append_pm4_u32(pm4_draw_stream, 0U);
+    append_pm4_u32(pm4_draw_stream, 0U);
     append_pm4_u32(pm4_draw_stream, 0U);
     append_pm4_u32(pm4_draw_stream, 0U);
     append_pm4_u32(pm4_draw_stream, 0xc0000000U | (2U << 16U) | (0x2dU << 8U));
@@ -135,9 +144,17 @@ int main() {
         return 1;
     }
     const auto& fetch_constants = fetch_bank.descriptors;
+    constexpr std::array<std::uint8_t, 1> required_alu_constants{7U};
+    const auto alu_constant_bank = decode_shader_alu_float_constant_bank(
+        draw_dispatch.final_registers, required_alu_constants);
+    if (!alu_constant_bank) {
+        std::cerr << "FAIL: PM4 ALU constants did not decode: " << alu_constant_bank.error
+                  << '\n';
+        return 1;
+    }
     const auto vertex_batch = execute_shader_exec_vertex_batch(
         vertex_exec_blocks, vertex_ucode, fetch_constants, shader_memory,
-        prepared_geometry.indices, {}, {});
+        prepared_geometry.indices, {}, {}, alu_constant_bank.constants);
     if (!vertex_batch) {
         std::cerr << "FAIL: synthetic Xenos vertex batch failed: " << vertex_batch.error << '\n';
         return 1;
@@ -145,7 +162,7 @@ int main() {
     constexpr std::array<std::uint32_t, 3> out_of_range_vertex_indices{0U, 1U, 3U};
     const auto failed_vertex_batch = execute_shader_exec_vertex_batch(
         vertex_exec_blocks, vertex_ucode, fetch_constants, shader_memory,
-        out_of_range_vertex_indices, {}, {});
+        out_of_range_vertex_indices, {}, {}, alu_constant_bank.constants);
     if (failed_vertex_batch || !failed_vertex_batch.vertices.empty() ||
         failed_vertex_batch.error.find("item 2 (index 3)") == std::string::npos) {
         std::cerr << "FAIL: Xenos vertex batch exposed partial outputs after VFETCH failure\n";
