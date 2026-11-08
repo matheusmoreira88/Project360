@@ -17,6 +17,10 @@ struct CpuState {
     std::uint32_t cr{};
     std::uint32_t xer{};
     std::uint32_t fpscr{};
+    bool reservation_valid{};
+    std::uint64_t reservation_address{};
+    std::uint64_t reservation_granule{};
+    std::uint64_t reservation_generation{};
 };
 
 } // namespace project360::cpu

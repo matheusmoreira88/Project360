@@ -7,7 +7,9 @@
 
 namespace project360::memory {
 
-GuestMemory::GuestMemory(std::size_t size) : bytes_(size, std::byte{0}) {}
+GuestMemory::GuestMemory(std::size_t size)
+    : bytes_(size, std::byte{0}),
+      write_generations_(size / page_size + (size % page_size == 0U ? 0U : 1U), 0U) {}
 
 bool GuestMemory::contains(std::uint64_t address, std::size_t length) const noexcept {
     if (address > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
@@ -136,6 +138,14 @@ bool GuestMemory::resolve(std::uint64_t address, std::size_t length, GuestPageAc
     return contains(physical_address, length);
 }
 
+void GuestMemory::mark_write(std::uint64_t physical_address, std::size_t length) noexcept {
+    if (length == 0U) return;
+    const auto first_page = static_cast<std::size_t>(physical_address / page_size);
+    const auto last_page = static_cast<std::size_t>(
+        (physical_address + static_cast<std::uint64_t>(length - 1U)) / page_size);
+    for (auto page = first_page; page <= last_page; ++page) ++write_generations_[page];
+}
+
 bool GuestMemory::read_u8(std::uint64_t address, std::uint8_t& value) const noexcept {
     std::uint64_t physical = 0;
     if (!resolve(address, 1U, GuestPageAccess::read, physical)) return false;
@@ -149,6 +159,7 @@ bool GuestMemory::write_u8(std::uint64_t address, std::uint8_t value) noexcept {
     if (!resolve(address, 1U, GuestPageAccess::write, physical)) return false;
     const auto start = static_cast<std::size_t>(physical);
     bytes_[start] = static_cast<std::byte>(value);
+    mark_write(physical, 1U);
     return true;
 }
 
@@ -167,6 +178,7 @@ bool GuestMemory::write_u16_be(std::uint64_t address, std::uint16_t value) noexc
     const auto start = static_cast<std::size_t>(physical);
     bytes_[start] = static_cast<std::byte>((value >> 8U) & 0xffU);
     bytes_[start + 1] = static_cast<std::byte>(value & 0xffU);
+    mark_write(physical, 2U);
     return true;
 }
 
@@ -193,6 +205,52 @@ bool GuestMemory::write_u32_be(std::uint64_t address, std::uint32_t value) noexc
         const auto shift = static_cast<unsigned>((3U - static_cast<unsigned>(i)) * 8U);
         bytes_[start + i] = static_cast<std::byte>((value >> shift) & 0xffU);
     }
+    mark_write(physical, 4U);
+    return true;
+}
+
+bool GuestMemory::read_reserve_u32_be(std::uint64_t address, std::uint32_t& value,
+                                      std::uint64_t& reserved_address,
+                                      std::uint64_t& granule,
+                                      std::uint64_t& generation) const noexcept {
+    std::uint64_t physical = 0U;
+    if ((address & 3U) != 0U || !resolve(address, 4U, GuestPageAccess::read, physical)) {
+        return false;
+    }
+    const auto start = static_cast<std::size_t>(physical);
+    value = (std::to_integer<std::uint32_t>(bytes_[start]) << 24U) |
+            (std::to_integer<std::uint32_t>(bytes_[start + 1]) << 16U) |
+            (std::to_integer<std::uint32_t>(bytes_[start + 2]) << 8U) |
+            std::to_integer<std::uint32_t>(bytes_[start + 3]);
+    reserved_address = physical;
+    granule = physical / page_size;
+    generation = write_generations_[static_cast<std::size_t>(granule)];
+    return true;
+}
+
+bool GuestMemory::write_conditional_u32_be(std::uint64_t address, std::uint32_t value,
+                                           std::uint64_t reserved_address,
+                                           std::uint64_t granule,
+                                           std::uint64_t generation,
+                                           bool& stored) noexcept {
+    stored = false;
+    std::uint64_t physical = 0U;
+    if ((address & 3U) != 0U || !resolve(address, 4U, GuestPageAccess::write, physical)) {
+        return false;
+    }
+    const auto current_granule = physical / page_size;
+    if (physical != reserved_address || current_granule != granule ||
+        write_generations_[static_cast<std::size_t>(current_granule)] != generation) {
+        return true;
+    }
+
+    const auto start = static_cast<std::size_t>(physical);
+    for (std::size_t i = 0U; i < 4U; ++i) {
+        const auto shift = static_cast<unsigned>((3U - static_cast<unsigned>(i)) * 8U);
+        bytes_[start + i] = static_cast<std::byte>((value >> shift) & 0xffU);
+    }
+    mark_write(physical, 4U);
+    stored = true;
     return true;
 }
 
@@ -216,6 +274,7 @@ bool GuestMemory::write_u64_be(std::uint64_t address, std::uint64_t value) noexc
         const auto shift = static_cast<unsigned>((7U - static_cast<unsigned>(i)) * 8U);
         bytes_[start + i] = static_cast<std::byte>((value >> shift) & 0xffU);
     }
+    mark_write(physical, 8U);
     return true;
 }
 
@@ -240,6 +299,7 @@ bool GuestMemory::load(std::uint64_t address, std::span<const std::byte> data) n
     for (std::size_t i = 0; i < data.size(); ++i) {
         bytes_[start + i] = data[i];
     }
+    mark_write(address, data.size());
     return true;
 }
 
@@ -254,6 +314,7 @@ bool GuestMemory::write_bytes(std::uint64_t address,
         const auto start = static_cast<std::size_t>(address);
         std::copy(data.begin(), data.end(),
                   bytes_.begin() + static_cast<std::ptrdiff_t>(start));
+        mark_write(address, data.size());
         return true;
     }
 
@@ -283,6 +344,7 @@ bool GuestMemory::write_bytes(std::uint64_t address,
         const auto start = static_cast<std::size_t>(physical);
         std::copy_n(data.begin() + static_cast<std::ptrdiff_t>(data_offset), chunk,
                     bytes_.begin() + static_cast<std::ptrdiff_t>(start));
+        mark_write(physical, chunk);
         current += static_cast<std::uint64_t>(chunk);
         data_offset += chunk;
         remaining -= chunk;
@@ -298,6 +360,7 @@ bool GuestMemory::fill(std::uint64_t address, std::size_t length, std::byte valu
         const auto start = static_cast<std::size_t>(address);
         std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(start),
                     static_cast<std::ptrdiff_t>(length), value);
+        mark_write(address, length);
         return true;
     }
 
@@ -325,6 +388,7 @@ bool GuestMemory::fill(std::uint64_t address, std::size_t length, std::byte valu
         const auto start = static_cast<std::size_t>(physical);
         std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(start),
                     static_cast<std::ptrdiff_t>(chunk), value);
+        mark_write(physical, chunk);
         current += static_cast<std::uint64_t>(chunk);
         remaining -= chunk;
     }
@@ -376,6 +440,7 @@ bool GuestMemory::fill_u32_be(std::uint64_t address, std::size_t length,
             std::copy(pattern.begin(), pattern.end(), bytes_.begin() +
                       static_cast<std::ptrdiff_t>(start + offset));
         }
+        mark_write(physical, chunk);
         current += static_cast<std::uint64_t>(chunk);
         remaining -= chunk;
     }
@@ -462,6 +527,7 @@ bool GuestMemory::move(std::uint64_t destination, std::uint64_t source,
                     scratch.begin());
         std::copy_n(scratch.begin(), chunk,
                     bytes_.begin() + static_cast<std::ptrdiff_t>(destination_offset));
+        mark_write(destination_physical, chunk);
 
         remaining -= chunk;
     }

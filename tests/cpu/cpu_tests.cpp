@@ -2342,6 +2342,89 @@ void test_absolute_and_register_branches() {
           "invalid bcctr BO and reserved branch-register fields are diagnosed");
 }
 
+void test_reservation_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(2U * static_cast<std::size_t>(memory::GuestMemory::page_size));
+    check(mem.write_u32_be(0x100U, 0x12345678U), "seed lwarx target word");
+    put_word(mem, 0U, indexed_memory(3U, 0U, 2U, 20U)); // lwarx r3,0,r2
+    put_word(mem, 4U, indexed_memory(4U, 0U, 2U, 150U, true)); // stwcx. r4,0,r2
+
+    cpu::CpuState state{};
+    state.gpr[2] = 0x100U;
+    state.gpr[4] = 0xdeadbeefU;
+    state.xer = 0x80000000U;
+    const auto run = cpu::Interpreter{}.run(state, mem, 2U);
+    std::uint32_t word = 0U;
+    check(run.status == cpu::StepStatus::instruction_limit_reached &&
+              state.gpr[3] == 0x12345678U && mem.read_u32_be(0x100U, word) &&
+              word == 0xdeadbeefU && !state.reservation_valid &&
+              (state.cr >> 28U) == 3U,
+          "lwarx/stwcx. atomically exchange a reserved word and record success plus XER.SO");
+
+    cpu::CpuState no_reservation{};
+    no_reservation.pc = 4U;
+    no_reservation.gpr[2] = 0x100U;
+    no_reservation.gpr[4] = 0U;
+    const auto unreserved_store = cpu::Interpreter{}.step(no_reservation, mem);
+    check(unreserved_store.status == cpu::StepStatus::executed &&
+              mem.read_u32_be(0x100U, word) && word == 0xdeadbeefU &&
+              (no_reservation.cr >> 28U) == 0U,
+          "stwcx. without a preceding lwarx leaves memory unchanged and clears CR0.EQ");
+
+    check(mem.write_u32_be(0x100U, 0x01020304U), "reset conditional-store target word");
+    cpu::CpuState lost_reservation{};
+    lost_reservation.gpr[2] = 0x100U;
+    lost_reservation.gpr[4] = 0xaabbccddU;
+    check(cpu::Interpreter{}.step(lost_reservation, mem).status == cpu::StepStatus::executed &&
+              lost_reservation.reservation_valid,
+          "lwarx establishes a reservation before an intervening memory write");
+    check(mem.write_u8(0x180U, 0x55U), "write another word within the reservation granule");
+    const auto lost_store = cpu::Interpreter{}.step(lost_reservation, mem);
+    check(lost_store.status == cpu::StepStatus::executed &&
+              mem.read_u32_be(0x100U, word) && word == 0x01020304U &&
+              (lost_reservation.cr >> 28U) == 0U && !lost_reservation.reservation_valid,
+          "a write within the same reservation granule clears stwcx. success");
+
+    check(mem.write_u32_be(0x100U, 0x10203040U), "reset target for independent-granule case");
+    cpu::CpuState independent_granule{};
+    independent_granule.gpr[2] = 0x100U;
+    independent_granule.gpr[4] = 0xabcdef01U;
+    check(cpu::Interpreter{}.step(independent_granule, mem).status == cpu::StepStatus::executed &&
+              mem.write_u8(memory::GuestMemory::page_size, 0x77U),
+          "lwarx establishes a reservation before an outside-granule write");
+    const auto independent_store = cpu::Interpreter{}.step(independent_granule, mem);
+    check(independent_store.status == cpu::StepStatus::executed &&
+              mem.read_u32_be(0x100U, word) && word == 0xabcdef01U &&
+              (independent_granule.cr >> 28U) == 2U,
+          "writes outside the reserved backing-page granule preserve the reservation");
+
+    check(mem.write_u32_be(0x100U, 0x55667788U), "reset target for mismatched address case");
+    cpu::CpuState mismatched_address{};
+    mismatched_address.gpr[2] = 0x100U;
+    mismatched_address.gpr[4] = 0xffffffffU;
+    check(cpu::Interpreter{}.step(mismatched_address, mem).status == cpu::StepStatus::executed,
+          "lwarx loads the word for mismatched-address case");
+    mismatched_address.gpr[2] = 0x104U;
+    check(cpu::Interpreter{}.step(mismatched_address, mem).status == cpu::StepStatus::executed &&
+              mem.read_u32_be(0x100U, word) && word == 0x55667788U &&
+              (mismatched_address.cr >> 28U) == 0U,
+          "stwcx. fails when its effective address differs from the reserving load");
+
+    check(!cpu::decode(indexed_memory(3U, 0U, 2U, 20U, true)) &&
+              !cpu::decode(indexed_memory(4U, 0U, 2U, 150U, false)),
+          "reservation instructions reject their reserved record-bit encodings");
+
+    memory::GuestMemory fault_mem(64U);
+    put_word(fault_mem, 0U, indexed_memory(3U, 0U, 2U, 20U));
+    cpu::CpuState fault_state{};
+    fault_state.gpr[2] = 1U;
+    const auto fault = cpu::Interpreter{}.step(fault_state, fault_mem);
+    check(fault.status == cpu::StepStatus::fault && fault.fault_info &&
+              fault.fault_info->kind == cpu::FaultKind::data_alignment &&
+              !fault_state.reservation_valid && fault_state.pc == 0U,
+          "misaligned lwarx faults without establishing a reservation");
+}
+
 void test_memory_bounds_and_alignment() {
     project360::memory::GuestMemory mem(8);
     std::uint32_t value = 0;
@@ -2420,6 +2503,7 @@ int main() {
     test_move_condition_register_from_xer();
     test_conditional_branches();
     test_absolute_and_register_branches();
+    test_reservation_instructions();
     test_memory_bounds_and_alignment();
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

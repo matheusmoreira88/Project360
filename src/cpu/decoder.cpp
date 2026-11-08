@@ -308,6 +308,19 @@ DecodeResult decode(std::uint32_t word) {
             ins.bf = static_cast<std::uint8_t>((word >> 23U) & 0x7U);
             return {ins, {}};
         }
+        if (xo10 == 20U) {
+            if ((word & 1U) != 0U) return {{}, "lwarx reserved record bit is set"};
+            ins.opcode = Opcode::load_word_and_reserve_indexed;
+            ins.indexed = true;
+            return {ins, {}};
+        }
+        if (xo10 == 150U) {
+            if ((word & 1U) == 0U) return {{}, "stwcx. requires its record bit"};
+            ins.opcode = Opcode::store_word_conditional_indexed;
+            ins.indexed = true;
+            ins.record = true;
+            return {ins, {}};
+        }
         if (xo10 == 21U || xo10 == 53U || xo10 == 149U || xo10 == 181U ||
             xo10 == 23U || xo10 == 55U || xo10 == 87U || xo10 == 119U ||
             xo10 == 279U || xo10 == 331U || xo10 == 343U || xo10 == 375U ||

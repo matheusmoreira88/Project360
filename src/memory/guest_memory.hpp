@@ -36,6 +36,15 @@ public:
     [[nodiscard]] bool write_u16_be(std::uint64_t address, std::uint16_t value) noexcept;
     [[nodiscard]] bool read_u32_be(std::uint64_t address, std::uint32_t& value) const noexcept;
     [[nodiscard]] bool write_u32_be(std::uint64_t address, std::uint32_t value) noexcept;
+    [[nodiscard]] bool read_reserve_u32_be(std::uint64_t address, std::uint32_t& value,
+                                           std::uint64_t& reserved_address,
+                                           std::uint64_t& granule,
+                                           std::uint64_t& generation) const noexcept;
+    [[nodiscard]] bool write_conditional_u32_be(std::uint64_t address, std::uint32_t value,
+                                                std::uint64_t reserved_address,
+                                                std::uint64_t granule,
+                                                std::uint64_t generation,
+                                                bool& stored) noexcept;
     [[nodiscard]] bool read_u64_be(std::uint64_t address, std::uint64_t& value) const noexcept;
     [[nodiscard]] bool write_u64_be(std::uint64_t address, std::uint64_t value) noexcept;
     [[nodiscard]] bool fetch_u32_be(std::uint64_t address, std::uint32_t& value) const noexcept;
@@ -72,8 +81,10 @@ private:
     [[nodiscard]] bool resolve(std::uint64_t address, std::size_t length,
                                GuestPageAccess access,
                                std::uint64_t& physical_address) const noexcept;
+    void mark_write(std::uint64_t physical_address, std::size_t length) noexcept;
 
     std::vector<std::byte> bytes_;
+    std::vector<std::uint64_t> write_generations_;
     std::unordered_map<std::uint64_t, PageMapping> page_mappings_;
     bool mapping_enabled_{};
 };

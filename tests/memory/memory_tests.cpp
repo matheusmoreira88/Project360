@@ -41,6 +41,36 @@ int main() {
               memory.read_u32_be(0x200000, word) && word == 0xaabbccddU,
           "writes through one virtual alias are visible through another");
 
+    std::uint64_t reservation_granule = 0U;
+    std::uint64_t reservation_generation = 0U;
+    std::uint64_t reserved_address = 0U;
+    check(memory.read_reserve_u32_be(0x100000U, word, reserved_address, reservation_granule,
+                                     reservation_generation) && word == 0xaabbccddU,
+          "reserved reads capture the physical backing granule and its write generation");
+    bool conditional_store_succeeded = false;
+    check(memory.write_conditional_u32_be(0x200000U, 0x55667788U,
+                                          reserved_address, reservation_granule,
+                                          reservation_generation,
+                                          conditional_store_succeeded) &&
+              conditional_store_succeeded && memory.read_u32_be(0x100000U, word) &&
+              word == 0x55667788U,
+          "conditional stores follow physical aliases and commit an unchanged reservation");
+    check(memory.read_reserve_u32_be(0x100000U, word, reserved_address,
+                                     reservation_granule,
+                                     reservation_generation) &&
+              memory.write_u8(0x200080U, 0x42U),
+          "an intervening alias write changes the reserved physical granule generation");
+    conditional_store_succeeded = true;
+    check(memory.write_conditional_u32_be(0x100000U, 0xdeadbeefU,
+                                          reserved_address, reservation_granule,
+                                          reservation_generation,
+                                          conditional_store_succeeded) &&
+              !conditional_store_succeeded && memory.read_u32_be(0x100000U, word) &&
+              word == 0x55667788U,
+          "conditional stores fail after an intervening write to the reservation granule");
+    check(memory.write_u32_be(0x100000U, 0xaabbccddU),
+          "restore aliased backing data for later permission checks");
+
     check(!memory.map_page(0x100001, 0, GuestPageAccess::read),
           "unaligned virtual page bases are rejected");
     check(!memory.map_page(0x300000, 1, GuestPageAccess::read),
