@@ -529,6 +529,21 @@ int main() {
                   faulting_run.stop.status == project360::cpu::StepStatus::fault &&
                   faulting_cpu.pc == 0x700U,
               "bounded XEX execution continues after a modeled exception and reports the subsequent vector-fetch fault");
+
+        auto data_import_image = *loaded.image;
+        data_import_image.xex.import_libraries[0].import_types[0] = 0U;
+        const project360::kernel::GuestExecutor data_import_executor(data_import_image);
+        project360::cpu::CpuState data_import_cpu{};
+        data_import_cpu.pc = data_import_image.xex.import_libraries[0]
+                                 .import_record_addresses[0];
+        const auto data_import_result =
+            data_import_executor.step(data_import_cpu, guest_memory);
+        check(data_import_result.status == project360::cpu::StepStatus::fault &&
+                  data_import_result.message.find("data import") != std::string::npos &&
+                  data_import_cpu.pc ==
+                      data_import_image.xex.import_libraries[0]
+                          .import_record_addresses[0],
+              "executing a data import faults explicitly without advancing the guest PC");
     } else {
         check(false, "loaded XEX image is available for kernel execution integration");
     }
