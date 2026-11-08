@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -331,11 +332,25 @@ int main() {
     write_be32(loadable_pe, 0x2f0U, 0x4800000dU); // bl import thunk at +0x0c.
     write_be32(loadable_pe, 0x2f4U, (14U << 26U) | (12U << 21U) | (3U << 16U));
     write_be32(loadable_pe, 0x2fcU, 0x01000125U); // thunk, library 0, ordinal 293.
+    loadable_pe.resize(0x340U);
+    write_le32(loadable_pe, 0x178U + 8U, 0x140U);
+    write_le32(loadable_pe, 0x178U + 16U, 0x140U);
+    write_be32(loadable_pe, 0x300U, (14U << 26U) | (3U << 21U) | 0x5140U);
+    write_be32(loadable_pe, 0x304U, (14U << 26U) | (4U << 21U) | 0x5150U);
+    write_be32(loadable_pe, 0x308U, (14U << 26U) | (5U << 21U) | 1U);
+    write_be32(loadable_pe, 0x30cU, 0x48000025U); // bl import thunk at +0x24.
+    write_be32(loadable_pe, 0x310U, (14U << 26U) | (6U << 21U) | (3U << 16U));
+    write_be32(loadable_pe, 0x314U, (14U << 26U) | (3U << 21U) | 0x5140U);
+    write_be32(loadable_pe, 0x318U, (14U << 26U) | (4U << 21U) | 0x5150U);
+    write_be32(loadable_pe, 0x31cU, (14U << 26U) | (5U << 21U));
+    write_be32(loadable_pe, 0x320U, 0x48000011U); // bl import thunk at +0x10.
+    write_be32(loadable_pe, 0x324U, (14U << 26U) | (7U << 21U) | (3U << 16U));
+    write_be32(loadable_pe, 0x330U, 0x0100010eU); // thunk, library 0, ordinal 270.
     auto loadable_xex = make_xex2();
     write_be32(loadable_xex, 0x444U, 0x830a0U);
-    write_be32(loadable_xex, 0x400U, 0x74U);
-    write_be32(loadable_xex, 0x41cU, 0x58U);
-    write_be16(loadable_xex, 0x442U, 12U);
+    write_be32(loadable_xex, 0x400U, 0x78U);
+    write_be32(loadable_xex, 0x41cU, 0x5cU);
+    write_be16(loadable_xex, 0x442U, 13U);
     write_be32(loadable_xex, 0x448U, 0x830a4U);
     write_be32(loadable_xex, 0x44cU, 0x830a8U);
     write_be32(loadable_xex, 0x450U, 0x830acU);
@@ -347,6 +362,7 @@ int main() {
     write_be32(loadable_xex, 0x468U, 0x830c4U);
     write_be32(loadable_xex, 0x46cU, 0x830c8U);
     write_be32(loadable_xex, 0x470U, 0x830fcU);
+    write_be32(loadable_xex, 0x474U, 0x83130U);
     loadable_xex.insert(loadable_xex.end(), loadable_pe.begin(), loadable_pe.end());
     project360::memory::GuestMemory guest_memory(0x5000U);
     const std::array<std::byte, 8> kernel_destination_seed{
@@ -366,6 +382,16 @@ int main() {
     const std::array<std::byte, 8> integer_output_descriptor{
         std::byte{0}, std::byte{0}, std::byte{0}, std::byte{16},
         std::byte{0}, std::byte{0}, std::byte{0x50}, std::byte{0xe0}};
+    const std::array<std::byte, 8> compare_string_left_descriptor{
+        std::byte{0}, std::byte{5}, std::byte{0}, std::byte{5},
+        std::byte{0}, std::byte{0}, std::byte{0x51}, std::byte{0x60}};
+    const std::array<std::byte, 8> compare_string_right_descriptor{
+        std::byte{0}, std::byte{5}, std::byte{0}, std::byte{5},
+        std::byte{0}, std::byte{0}, std::byte{0x51}, std::byte{0x70}};
+    const std::array<std::byte, 5> compare_string_left{
+        std::byte{'A'}, std::byte{'l'}, std::byte{'p'}, std::byte{'h'}, std::byte{'a'}};
+    const std::array<std::byte, 5> compare_string_right{
+        std::byte{'a'}, std::byte{'L'}, std::byte{'P'}, std::byte{'H'}, std::byte{'A'}};
     check(guest_memory.load(0x4000U, kernel_destination_seed),
           "integration fixture initializes a separate guest kernel destination");
     check(guest_memory.load(0x4040U, ansi_source),
@@ -376,6 +402,11 @@ int main() {
               guest_memory.load(0x40c0U, integer_unicode_source) &&
               guest_memory.load(0x40d0U, integer_output_descriptor),
           "integration fixture seeds counted UTF-16 input and output descriptors");
+    check(guest_memory.load(0x4140U, compare_string_left_descriptor) &&
+              guest_memory.load(0x4150U, compare_string_right_descriptor) &&
+              guest_memory.load(0x4160U, compare_string_left) &&
+              guest_memory.load(0x4170U, compare_string_right),
+          "integration fixture seeds counted ANSI strings with different ASCII case");
     const std::array<std::byte, 68> integer_output_seed{};
     check(guest_memory.load(0x40e0U, integer_output_seed),
           "integration fixture reserves the Unicode conversion output buffer");
@@ -385,7 +416,7 @@ int main() {
               loaded.image->entry_point == 0x83000U && loaded.image->mapped_size == 0x2000U,
           "unencrypted uncompressed XEX2 maps decoded Xbox PE image pages");
     check(loaded && loaded.image->xex.import_libraries.size() == 1U &&
-              loaded.image->xex.import_libraries[0].import_types.size() == 12U &&
+              loaded.image->xex.import_libraries[0].import_types.size() == 13U &&
               loaded.image->xex.import_libraries[0].import_types[0] == 1U &&
               loaded.image->xex.import_libraries[0].import_ordinals[0] == 284U &&
               loaded.image->xex.import_libraries[0].import_ordinals[1] == 285U &&
@@ -398,7 +429,8 @@ int main() {
               loaded.image->xex.import_libraries[0].import_ordinals[8] == 307U &&
               loaded.image->xex.import_libraries[0].import_ordinals[9] == 318U &&
               loaded.image->xex.import_libraries[0].import_ordinals[10] == 309U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[11] == 293U,
+              loaded.image->xex.import_libraries[0].import_ordinals[11] == 293U &&
+              loaded.image->xex.import_libraries[0].import_ordinals[12] == 270U,
           "loader decodes function-thunk records and Xbox kernel ordinals from PE bytes");
     std::uint32_t loaded_instruction = 0;
     check(guest_memory.fetch_u32_be(0x83000U, loaded_instruction) &&
@@ -474,6 +506,9 @@ int main() {
         const auto compare_result = guest_cpu.gpr[9];
         const auto integer_call_run = executor.run(guest_cpu, guest_memory, 16U);
         const auto integer_to_unicode_run = executor.run(guest_cpu, guest_memory, 6U);
+        project360::cpu::CpuState compare_string_cpu{};
+        compare_string_cpu.pc = 0x83100U;
+        const auto compare_string_run = executor.run(compare_string_cpu, guest_memory, 12U);
         std::uint32_t parsed_integer = 0U;
         std::uint16_t output_string_length = 0U;
         check(set_destination.status == project360::cpu::StepStatus::executed &&
@@ -522,6 +557,12 @@ int main() {
                   integer_to_unicode_run.stop.status ==
                       project360::cpu::StepStatus::instruction_limit_reached,
               "loaded XEX program calls twelve imported kernel routines and resumes");
+        check(compare_string_run.instructions_executed == 12U &&
+                  compare_string_run.stop.status ==
+                      project360::cpu::StepStatus::instruction_limit_reached &&
+                  compare_string_cpu.pc == 0x83128U && compare_string_cpu.gpr[6] == 0U &&
+                  compare_string_cpu.gpr[7] == std::numeric_limits<std::uint64_t>::max(),
+              "synthetic XEX calls RtlCompareString through its import thunk in both ASCII case modes");
         check(fill_visible,
               "XEX RtlFillMemory thunk fills guest bytes using the Xenon argument registers");
         check(ulong_pattern_visible,
