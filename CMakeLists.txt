@@ -9,6 +9,8 @@ add_library(project360_core
     src/common/log.cpp
     src/cpu/decoder.cpp
     src/cpu/interpreter.cpp
+    src/gpu/xenos/pm4_decoder.cpp
+    src/gpu/xenos/pm4_registers.cpp
     src/kernel/guest_executor.cpp
     src/kernel/kernel_dispatcher.cpp
     src/loader/xex_parser.cpp
@@ -76,6 +78,10 @@ if(PROJECT360_BUILD_TESTS)
     add_executable(project360_tests tests/cpu/cpu_tests.cpp)
     target_link_libraries(project360_tests PRIVATE project360_core)
     add_test(NAME project360_tests COMMAND project360_tests)
+
+    add_executable(project360_gpu_tests tests/gpu/pm4_decoder_tests.cpp)
+    target_link_libraries(project360_gpu_tests PRIVATE project360_core)
+    add_test(NAME project360_gpu_tests COMMAND project360_gpu_tests)
 
     add_executable(project360_memory_tests tests/memory/memory_tests.cpp)
     target_link_libraries(project360_memory_tests PRIVATE project360_core)
