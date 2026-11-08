@@ -55,6 +55,14 @@ std::uint32_t sync_form(std::uint8_t level = 0U, std::uint8_t reserved_rt = 0U,
            (record ? 1U : 0U);
 }
 
+std::uint32_t isync_form(std::uint8_t reserved_rt = 0U, std::uint8_t reserved_ra = 0U,
+                         std::uint8_t reserved_rb = 0U, bool record = false) {
+    return (19U << 26U) | (static_cast<std::uint32_t>(reserved_rt) << 21U) |
+           (static_cast<std::uint32_t>(reserved_ra) << 16U) |
+           (static_cast<std::uint32_t>(reserved_rb) << 11U) | (150U << 1U) |
+           (record ? 1U : 0U);
+}
+
 std::uint32_t fpr_unary(std::uint8_t fd, std::uint8_t fb, std::uint16_t xo,
                         bool record = false, std::uint8_t reserved_fra = 0) {
     return (63U << 26U) | (static_cast<std::uint32_t>(fd) << 21U) |
@@ -1960,16 +1968,21 @@ void test_system_call_exception_and_return() {
 
 void test_storage_barrier_instructions() {
     using namespace project360;
+    const auto instruction = cpu::decode(isync_form());
     const auto heavy = cpu::decode(sync_form());
     const auto light = cpu::decode(sync_form(1U));
+    check(instruction && instruction.instruction.opcode == cpu::Opcode::isync,
+          "isync decodes as an instruction-fetch synchronization barrier");
     check(heavy && heavy.instruction.opcode == cpu::Opcode::sync,
           "sync L=0 decodes as the heavyweight storage barrier");
     check(light && light.instruction.opcode == cpu::Opcode::lwsync,
           "sync L=1 decodes as the lightweight storage barrier");
-    check(!cpu::decode(sync_form(0U, 2U)) && !cpu::decode(sync_form(0U, 0U, 1U)) &&
+    check(!cpu::decode(isync_form(1U)) && !cpu::decode(isync_form(0U, 1U)) &&
+              !cpu::decode(isync_form(0U, 0U, 1U)) && !cpu::decode(isync_form(0U, 0U, 0U, true)) &&
+              !cpu::decode(sync_form(0U, 2U)) && !cpu::decode(sync_form(0U, 0U, 1U)) &&
               !cpu::decode(sync_form(0U, 0U, 0U, 1U)) &&
               !cpu::decode(sync_form(0U, 0U, 0U, 0U, true)),
-          "storage barriers reject reserved operand and record fields");
+          "instruction and storage barriers reject reserved operand and record fields");
 
     memory::GuestMemory mem(12U);
     put_word(mem, 0U, sync_form());
@@ -1988,6 +2001,23 @@ void test_storage_barrier_instructions() {
               arithmetic_result.status == cpu::StepStatus::executed && state.pc == 12U &&
               state.gpr[3] == 7U && state.cr == 0x12345678U && state.xer == 0xa0000000U,
           "storage barriers advance execution without changing guest registers");
+
+    memory::GuestMemory self_modifying_mem(0x80U);
+    put_word(self_modifying_mem, 0U, d_form(14U, 2U, 0U, 0x40U));
+    put_word(self_modifying_mem, 4U, d_form(32U, 3U, 2U, 0U));
+    put_word(self_modifying_mem, 8U, d_form(14U, 2U, 0U, 20U));
+    put_word(self_modifying_mem, 12U, d_form(36U, 3U, 2U, 0U));
+    put_word(self_modifying_mem, 16U, isync_form());
+    put_word(self_modifying_mem, 20U, d_form(14U, 4U, 0U, 7U));
+    put_word(self_modifying_mem, 0x40U, d_form(14U, 4U, 0U, 42U));
+    cpu::CpuState self_modifying_state{};
+    for (std::uint32_t step = 0U; step < 6U; ++step) {
+        const auto result = interpreter.step(self_modifying_state, self_modifying_mem);
+        check(result.status == cpu::StepStatus::executed,
+              "self-modifying guest program executes through isync");
+    }
+    check(self_modifying_state.gpr[4] == 42U && self_modifying_state.pc == 24U,
+          "isync is followed by a fresh fetch of the code written to guest memory");
 }
 
 void test_cpu_fetch_from_mapped_executable_page() {

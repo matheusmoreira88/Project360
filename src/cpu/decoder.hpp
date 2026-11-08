@@ -117,6 +117,7 @@ enum class Opcode {
     branch_conditional,
     branch_lr,
     branch_ctr,
+    isync,
     sync,
     lwsync,
     return_from_interrupt_doubleword,

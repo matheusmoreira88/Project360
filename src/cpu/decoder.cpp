@@ -212,6 +212,13 @@ DecodeResult decode(std::uint32_t word) {
         return {ins, {}};
     case 19: {
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
+        if (xo10 == 150U) {
+            if (ins.rt != 0U || ins.ra != 0U || ins.rb != 0U || (word & 1U) != 0U) {
+                return {{}, "isync reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::isync;
+            return {ins, {}};
+        }
         if (xo10 == 18U) {
             constexpr std::uint32_t reserved_mask = (0x7fffU << 6U) | 1U;
             if ((word & reserved_mask) != 0U) {

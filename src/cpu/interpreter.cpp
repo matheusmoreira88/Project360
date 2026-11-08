@@ -261,6 +261,11 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
                          "sc LEV=1 hypervisor call is unsupported", word);
         }
         return take_system_call_exception(state);
+    case Opcode::isync:
+        // Guest instructions are fetched from memory on every step, so this
+        // interpreter has no prefetched host instruction cache to invalidate.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        break;
     case Opcode::sync:
     case Opcode::lwsync:
         // GuestMemory completes and synchronizes each bounded access before
