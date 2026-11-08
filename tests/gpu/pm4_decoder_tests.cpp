@@ -1,6 +1,7 @@
 #include "gpu/xenos/pm4_decoder.hpp"
 #include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/pm4_registers.hpp"
+#include "gpu/xenos/vertex_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
 #include <algorithm>
@@ -464,6 +465,51 @@ void test_primitive_assembly() {
           "primitive assembly rejects an index span inconsistent with draw metadata");
 }
 
+void test_vertex_fetch_descriptors_and_memory() {
+    using namespace project360::gpu::xenos;
+    project360::memory::GuestMemory memory(0x1000U);
+    const std::array<std::byte, 12> bytes{
+        std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44},
+        std::byte{0x55}, std::byte{0x66}, std::byte{0x77}, std::byte{0x88},
+        std::byte{0x99}, std::byte{0xaa}, std::byte{0xbb}, std::byte{0xcc}};
+    check(memory.load(8U, bytes), "vertex-fetch fixture loads into physical guest memory");
+
+    const auto descriptor = decode_vertex_fetch_descriptor((2U << 2U) | 3U, 3U << 2U);
+    check(static_cast<bool>(descriptor) && descriptor.descriptor.base_address_bytes == 8U &&
+              descriptor.descriptor.size_dwords == 3U &&
+              descriptor.descriptor.endian == VertexFetchEndian::none,
+          "vertex-fetch constant decodes dword address, size and endian fields");
+    const auto range = read_vertex_fetch_words(descriptor.descriptor, memory, 1U, 2U);
+    check(static_cast<bool>(range) &&
+              range.words == std::vector<std::uint32_t>{0x88776655U, 0xccbbaa99U},
+          "vertex fetch reads only the requested bounded physical dword range");
+    const auto past_descriptor = read_vertex_fetch_words(descriptor.descriptor, memory, 2U, 2U);
+    check(!past_descriptor && past_descriptor.words.empty(),
+          "vertex fetch rejects ranges beyond descriptor size");
+
+    constexpr std::array<std::uint32_t, 4> expected{0x44332211U, 0x33441122U,
+                                                     0x11223344U, 0x22114433U};
+    for (std::uint32_t mode = 0U; mode < 4U; ++mode) {
+        const auto mode_descriptor = decode_vertex_fetch_descriptor(
+            (2U << 2U) | 3U, (1U << 2U) | mode);
+        const auto word = read_vertex_fetch_words(mode_descriptor.descriptor, memory, 0U, 1U);
+        check(static_cast<bool>(word) && word.words.size() == 1U &&
+                  word.words[0] == expected[mode],
+              "vertex fetch applies each Xenos 32-bit endian mode");
+    }
+
+    const auto texture_descriptor = decode_vertex_fetch_descriptor((2U << 2U) | 2U, 4U);
+    const auto invalid_descriptor = decode_vertex_fetch_descriptor((2U << 2U) | 1U, 4U);
+    const auto reserved_bits = decode_vertex_fetch_descriptor((2U << 2U) | 3U, 0x04000000U);
+    check(!texture_descriptor && !invalid_descriptor && !reserved_bits,
+          "non-vertex kinds and reserved descriptor bits are rejected explicitly");
+
+    const auto out_of_bounds = decode_vertex_fetch_descriptor((0x3feU << 2U) | 3U, 3U << 2U);
+    const auto inaccessible = read_vertex_fetch_words(out_of_bounds.descriptor, memory, 0U, 3U);
+    check(!inaccessible && inaccessible.words.empty(),
+          "vertex fetch rejects physical memory ranges past guest backing storage");
+}
+
 void test_wait_for_idle_is_synchronous_barrier() {
     using namespace project360::gpu::xenos;
     std::vector<std::uint8_t> stream;
@@ -496,6 +542,7 @@ int main() {
     test_draw_packet_metadata_decoding();
     test_dma_index_fetch();
     test_primitive_assembly();
+    test_vertex_fetch_descriptors_and_memory();
     test_wait_for_idle_is_synchronous_barrier();
     if (failures != 0) {
         std::cerr << failures << " GPU packet test(s) failed\n";
