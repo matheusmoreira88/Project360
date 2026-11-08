@@ -1296,15 +1296,20 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto address = base + static_cast<std::uint64_t>(ins.immediate);
         const auto count = static_cast<std::size_t>(32U - ins.rt);
         const auto byte_count = count * sizeof(std::uint32_t);
-        if ((address & 3U) != 0U || !memory.contains(address, byte_count)) {
+        if ((address & 3U) != 0U) {
             return data_fault(address, 4U, "lmw alignment or address fault");
         }
+        if (address > std::numeric_limits<std::uint64_t>::max() - (byte_count - 1U)) {
+            return data_fault(address, 1U, "lmw address range overflows");
+        }
         std::array<std::uint32_t, 32> values{};
-        for (std::size_t i = 0; i < count; ++i) {
-            if (!memory.read_u32_be(address + i * sizeof(std::uint32_t), values[i])) {
-                return data_fault(address + i * sizeof(std::uint32_t), 4U,
-                                  "lmw alignment or address fault");
+        for (std::size_t index = 0U; index < byte_count; ++index) {
+            std::uint8_t byte = 0U;
+            if (!memory.read_u8(address + index, byte)) {
+                return data_fault(address + index, 1U, "lmw guest address fault");
             }
+            const auto shift = static_cast<unsigned>(24U - (index % 4U) * 8U);
+            values[index / 4U] |= static_cast<std::uint32_t>(byte) << shift;
         }
         for (std::size_t i = 0; i < count; ++i) {
             state.gpr[static_cast<std::size_t>(ins.rt) + i] = values[i];
@@ -1315,15 +1320,23 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto address = base + static_cast<std::uint64_t>(ins.immediate);
         const auto count = static_cast<std::size_t>(32U - ins.rt);
         const auto byte_count = count * sizeof(std::uint32_t);
-        if ((address & 3U) != 0U || !memory.contains(address, byte_count)) {
+        if ((address & 3U) != 0U) {
             return data_fault(address, 4U, "stmw alignment or address fault");
         }
+        if (address > std::numeric_limits<std::uint64_t>::max() - (byte_count - 1U)) {
+            return data_fault(address, 1U, "stmw address range overflows");
+        }
+        std::array<std::byte, 32U * sizeof(std::uint32_t)> bytes{};
         for (std::size_t i = 0; i < count; ++i) {
             const auto value = static_cast<std::uint32_t>(state.gpr[static_cast<std::size_t>(ins.rt) + i]);
-            if (!memory.write_u32_be(address + i * sizeof(std::uint32_t), value)) {
-                return data_fault(address + i * sizeof(std::uint32_t), 4U,
-                                  "stmw alignment or address fault");
+            for (std::size_t byte_index = 0U; byte_index < sizeof(std::uint32_t); ++byte_index) {
+                const auto shift = static_cast<unsigned>(24U - byte_index * 8U);
+                bytes[i * sizeof(std::uint32_t) + byte_index] =
+                    static_cast<std::byte>((value >> shift) & 0xffU);
             }
+        }
+        if (!memory.write_bytes(address, std::span<const std::byte>(bytes.data(), byte_count))) {
+            return data_fault(address, 1U, "stmw guest address fault");
         }
         break;
     }

@@ -1600,6 +1600,69 @@ void test_multiple_word_memory_instructions() {
           "failed stmw validates the full range before writing any word");
 }
 
+void test_multiple_word_instructions_on_mapped_guest_pages() {
+    using namespace project360;
+    constexpr auto page_size = memory::GuestMemory::page_size;
+    memory::GuestMemory mem(4U * static_cast<std::size_t>(page_size));
+    put_word(mem, 0U, d_form(46U, 30U, 1U, 0U)); // lmw r30,0(r1)
+    put_word(mem, 4U, d_form(47U, 30U, 2U, 0U)); // stmw r30,0(r2)
+    put_word(mem, 8U, d_form(46U, 30U, 3U, 0U)); // lmw r30,0(r3), crosses into unmapped page
+    put_word(mem, 12U, d_form(47U, 30U, 3U, 0U)); // stmw r30,0(r3), crosses into unmapped page
+    check(mem.write_u32_be(0x1ffcU, 0x11223344U) &&
+              mem.write_u32_be(0x3000U, 0x55667788U) &&
+              mem.write_u32_be(0x3ffcU, 0xdeadbeefU),
+          "seed physical backing for mapped multiple-word transfers");
+    check(mem.map_page(0x80000000U, 0U,
+                       memory::GuestPageAccess::read | memory::GuestPageAccess::execute) &&
+              mem.map_page(0x90000000U, 0x1000U,
+                           memory::GuestPageAccess::read | memory::GuestPageAccess::write) &&
+              mem.map_page(0x90001000U, 0x3000U,
+                           memory::GuestPageAccess::read | memory::GuestPageAccess::write),
+          "map code and non-contiguous guest data pages");
+
+    cpu::CpuState state{};
+    state.pc = 0x80000000U;
+    state.gpr[1] = 0x90000ffcU;
+    state.gpr[2] = 0x90000ffcU;
+    state.gpr[3] = 0x90001ffcU;
+    const auto loaded = cpu::Interpreter{}.step(state, mem);
+    check(loaded.status == cpu::StepStatus::executed &&
+              state.gpr[30] == 0x11223344U && state.gpr[31] == 0x55667788U,
+          "lmw reads across adjacent virtual pages with discontinuous physical backing");
+
+    state.gpr[30] = 0xaabbccddU;
+    state.gpr[31] = 0x99aabbccU;
+    const auto stored = cpu::Interpreter{}.step(state, mem);
+    std::uint32_t first_word = 0U;
+    std::uint32_t second_word = 0U;
+    check(stored.status == cpu::StepStatus::executed &&
+              mem.read_u32_be(0x90000ffcU, first_word) && first_word == 0xaabbccddU &&
+              mem.read_u32_be(0x90001000U, second_word) && second_word == 0x99aabbccU,
+          "stmw writes across mapped pages as one validated guest range");
+
+    state.gpr[30] = 0x11112222U;
+    state.gpr[31] = 0x33334444U;
+    const auto failed_load = cpu::Interpreter{}.step(state, mem);
+    check(failed_load.status == cpu::StepStatus::fault && failed_load.fault_info &&
+              failed_load.fault_info->effective_address == 0x90002000U &&
+              state.gpr[30] == 0x11112222U && state.gpr[31] == 0x33334444U &&
+              state.pc == 0x80000008U,
+          "mapped lmw failure leaves the entire destination set and PC unchanged");
+
+    state.pc = 0x8000000cU;
+    const auto failed_store = cpu::Interpreter{}.step(state, mem);
+    std::array<std::byte, sizeof(std::uint32_t)> physical_tail{};
+    check(failed_store.status == cpu::StepStatus::fault &&
+              failed_store.fault_info &&
+              failed_store.fault_info->effective_address == 0x90001ffcU &&
+              mem.read_physical(0x3ffcU, physical_tail) &&
+              physical_tail == std::array<std::byte, sizeof(std::uint32_t)>{
+                                   std::byte{0xdeU}, std::byte{0xadU},
+                                   std::byte{0xbeU}, std::byte{0xefU}} &&
+              state.pc == 0x8000000cU,
+          "mapped stmw fault validates the full destination before any partial write");
+}
+
 void test_string_word_memory_instructions() {
     using namespace project360;
     memory::GuestMemory mem(2048U);
@@ -3075,6 +3138,7 @@ int main() {
     test_indexed_update_memory_instructions();
     test_byte_reversed_indexed_memory_instructions();
     test_multiple_word_memory_instructions();
+    test_multiple_word_instructions_on_mapped_guest_pages();
     test_string_word_memory_instructions();
     test_integer_divide_instructions();
     test_integer_multiply_instructions();
