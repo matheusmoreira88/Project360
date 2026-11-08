@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -546,6 +547,23 @@ void test_vfetch_instruction_and_attribute_range() {
               decoded.instruction.exponent_adjust == -1 &&
               decoded.instruction.index_rounded && decoded.instruction.prefetch_count == 3U,
           "VFETCH decoder extracts constant selection, format, stride and signed fields");
+    const auto selected_index = resolve_vertex_fetch_index(
+        decoded.instruction, {1.0F, 2.0F, 30.25F, 4.0F});
+    auto floor_instruction = decoded.instruction;
+    floor_instruction.index_rounded = false;
+    const auto floored_index = resolve_vertex_fetch_index(
+        floor_instruction, {1.0F, 2.0F, 4.75F, 4.0F});
+    const auto rounded_index = resolve_vertex_fetch_index(
+        decoded.instruction, {1.0F, 2.0F, 4.5F, 4.0F});
+    check(selected_index && selected_index.index == 30U && floored_index &&
+              floored_index.index == 4U && rounded_index && rounded_index.index == 5U,
+          "VFETCH selects the encoded source lane and applies floor or floor(x + 0.5)");
+    const auto negative_index = resolve_vertex_fetch_index(
+        floor_instruction, {1.0F, 2.0F, -0.25F, 4.0F});
+    const auto infinite_index = resolve_vertex_fetch_index(
+        floor_instruction, {1.0F, 2.0F, std::numeric_limits<float>::infinity(), 4.0F});
+    check(!negative_index && !infinite_index,
+          "VFETCH rejects negative and non-finite source indexes explicitly");
     auto encoded_negative_offset = words;
     encoded_negative_offset[2] = 0x7fffff01U;
     const auto decoded_negative_offset =

@@ -53,6 +53,13 @@ struct VertexFetchSwizzleResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct VertexFetchIndexResult {
+    std::uint32_t index{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct VertexFetchInstruction {
     std::uint8_t fetch_constant_index{};
     std::uint8_t format{};
@@ -98,6 +105,11 @@ struct VertexFetchInstructionDecodeResult {
 // are rejected until their inherited-state and predicate semantics are modeled.
 [[nodiscard]] VertexFetchInstructionDecodeResult decode_vertex_fetch_instruction(
     const std::array<std::uint32_t, 3>& dwords);
+
+// Selects the source register lane and converts its nonnegative finite float
+// index using floor or the instruction's floor(x + 0.5) rounding mode.
+[[nodiscard]] VertexFetchIndexResult resolve_vertex_fetch_index(
+    const VertexFetchInstruction& instruction, const std::array<float, 4>& source_register);
 
 // Reads the encoded storage dwords for a single vertex. Packed and half-width
 // formats occupy fewer dwords than their logical component count.

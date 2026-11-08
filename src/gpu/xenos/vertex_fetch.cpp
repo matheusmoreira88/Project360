@@ -3,6 +3,7 @@
 #include "memory/guest_memory.hpp"
 
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <new>
@@ -227,6 +228,22 @@ VertexFetchInstructionDecodeResult decode_vertex_fetch_instruction(
     instruction.storage_dword_count = info.dwords;
     instruction.is_float_format = info.floating_point;
     return {instruction, {}};
+}
+
+VertexFetchIndexResult resolve_vertex_fetch_index(
+    const VertexFetchInstruction& instruction, const std::array<float, 4>& source_register) {
+    if (instruction.source_swizzle >= source_register.size()) {
+        return {0U, "VFETCH source swizzle selects an invalid register lane"};
+    }
+    const auto value = static_cast<double>(source_register[instruction.source_swizzle]);
+    if (!std::isfinite(value)) {
+        return {0U, "VFETCH source index is not finite"};
+    }
+    const auto rounded = instruction.index_rounded ? std::floor(value + 0.5) : std::floor(value);
+    if (rounded < 0.0 || rounded > static_cast<double>(UINT32_MAX)) {
+        return {0U, "VFETCH source index is outside the supported unsigned range"};
+    }
+    return {static_cast<std::uint32_t>(rounded), {}};
 }
 
 VertexFetchWordsResult read_vertex_fetch_attribute(const VertexFetchInstruction& instruction,
