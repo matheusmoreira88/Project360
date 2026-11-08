@@ -418,4 +418,35 @@ VertexFetchBatchResult execute_vertex_fetch_attribute_batch(
     return result;
 }
 
+VertexFetchProgramResult execute_vertex_fetch_instructions(
+    std::span<const VertexFetchInstruction> instructions,
+    std::span<const VertexFetchDescriptor> fetch_constants, const memory::GuestMemory& memory,
+    const VertexFetchRegisterBank& initial_registers,
+    const std::array<float, 4>& missing_component_values) {
+    auto registers = initial_registers;
+    for (std::size_t instruction_index = 0U; instruction_index < instructions.size();
+         ++instruction_index) {
+        const auto& instruction = instructions[instruction_index];
+        if (instruction.source_register_relative || instruction.destination_register_relative) {
+            return {{}, "VFETCH instruction " + std::to_string(instruction_index) +
+                            " uses unsupported relative register addressing"};
+        }
+        if (instruction.fetch_constant_index >= fetch_constants.size()) {
+            return {{}, "VFETCH instruction " + std::to_string(instruction_index) +
+                            " selects a missing fetch-constant descriptor"};
+        }
+
+        const auto fetched = execute_vertex_fetch_attribute(
+            instruction, fetch_constants[instruction.fetch_constant_index], memory,
+            registers[instruction.source_register], missing_component_values,
+            registers[instruction.destination_register]);
+        if (!fetched) {
+            return {{}, "VFETCH instruction " + std::to_string(instruction_index) + ": " +
+                            fetched.error};
+        }
+        registers[instruction.destination_register] = fetched.destination_components;
+    }
+    return {registers, {}};
+}
+
 } // namespace project360::gpu::xenos

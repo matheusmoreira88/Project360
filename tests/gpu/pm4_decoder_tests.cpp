@@ -831,6 +831,43 @@ void test_vfetch_instruction_and_attribute_range() {
         check(!failed_batch && failed_batch.destination_components.empty(),
               "VFETCH batch rejects out-of-range attributes without exposing partial output");
 
+        std::array<VertexFetchDescriptor, 9> fetch_constants{};
+        fetch_constants[7] = packed_descriptor.descriptor;
+        if (batch_descriptor) fetch_constants[8] = batch_descriptor.descriptor;
+        auto second_fetch_instruction = execution_instruction;
+        second_fetch_instruction.fetch_constant_index = 8U;
+        second_fetch_instruction.source_register = 4U;
+        second_fetch_instruction.destination_register = 10U;
+        second_fetch_instruction.source_register_relative = false;
+        second_fetch_instruction.destination_register_relative = false;
+        auto first_fetch_instruction = execution_instruction;
+        first_fetch_instruction.source_register_relative = false;
+        first_fetch_instruction.destination_register_relative = false;
+        const std::array<VertexFetchInstruction, 2> fetch_program{
+            first_fetch_instruction, second_fetch_instruction};
+        VertexFetchRegisterBank initial_registers{};
+        initial_registers[3][2] = 0.0F;
+        initial_registers[4][2] = 1.0F;
+        const auto fetch_execution = execute_vertex_fetch_instructions(
+            fetch_program, fetch_constants, memory, initial_registers,
+            {7.0F, 8.0F, 9.0F, 10.0F});
+        check(fetch_execution &&
+                  fetch_execution.registers[9] == std::array<float, 4>{1.0F, -2.0F, 9.0F,
+                                                                        10.0F} &&
+                  fetch_execution.registers[10] == std::array<float, 4>{0.5F, 0.25F, 9.0F,
+                                                                         10.0F} &&
+                  fetch_execution.registers[3] == initial_registers[3],
+              "ordered VFETCH instructions resolve descriptor slots and write destination registers");
+        auto missing_constant_program = fetch_program;
+        missing_constant_program[1].fetch_constant_index = 9U;
+        const auto failed_program = execute_vertex_fetch_instructions(
+            missing_constant_program, fetch_constants, memory, initial_registers,
+            {7.0F, 8.0F, 9.0F, 10.0F});
+        check(!failed_program && failed_program.error.find("missing fetch-constant") !=
+                                     std::string::npos &&
+                  failed_program.registers[9] == std::array<float, 4>{},
+              "VFETCH instruction list rejects a missing later descriptor without partial register state");
+
         const std::array<std::byte, 16> float_vector{
             std::byte{0x00}, std::byte{0x00}, std::byte{0x80}, std::byte{0x3f},
             std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0xc0},

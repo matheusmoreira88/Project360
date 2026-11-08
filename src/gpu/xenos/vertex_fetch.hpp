@@ -76,6 +76,15 @@ struct VertexFetchBatchResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+using VertexFetchRegisterBank = std::array<std::array<float, 4>, 64>;
+
+struct VertexFetchProgramResult {
+    VertexFetchRegisterBank registers{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct VertexFetchInstruction {
     std::uint8_t fetch_constant_index{};
     std::uint8_t format{};
@@ -164,5 +173,15 @@ struct VertexFetchInstructionDecodeResult {
     const std::array<float, 4>& source_register_template,
     const std::array<float, 4>& missing_component_values,
     const std::array<float, 4>& previous_destination);
+
+// Executes an ordered list of full VFETCH instructions for one vertex against
+// a temporary-register bank. Descriptor lookup uses each instruction's fetch
+// constant slot; relative register addressing is rejected until modeled. The
+// input bank is never mutated, including on a failure partway through the list.
+[[nodiscard]] VertexFetchProgramResult execute_vertex_fetch_instructions(
+    std::span<const VertexFetchInstruction> instructions,
+    std::span<const VertexFetchDescriptor> fetch_constants, const memory::GuestMemory& memory,
+    const VertexFetchRegisterBank& initial_registers,
+    const std::array<float, 4>& missing_component_values);
 
 } // namespace project360::gpu::xenos
