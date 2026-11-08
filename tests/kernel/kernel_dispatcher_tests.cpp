@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -57,6 +58,26 @@ bool write_ascii_c_string(project360::memory::GuestMemory& memory,
         const auto character = index == text.size() ? '\0' : text[index];
         if (!memory.write_u8(address + index,
                              static_cast<std::uint8_t>(character))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool write_ansi_string_descriptor(project360::memory::GuestMemory& memory,
+                                  std::uint64_t descriptor,
+                                  std::uint64_t buffer,
+                                  std::uint16_t maximum_length,
+                                  std::string_view text) {
+    if (text.size() > 0xffffU || buffer > 0xffff'ffffU ||
+        !memory.write_u16_be(descriptor, static_cast<std::uint16_t>(text.size())) ||
+        !memory.write_u16_be(descriptor + 2U, maximum_length) ||
+        !memory.write_u32_be(descriptor + 4U, static_cast<std::uint32_t>(buffer))) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < text.size(); ++index) {
+        if (!memory.write_u8(buffer + index,
+                             static_cast<std::uint8_t>(text[index]))) {
             return false;
         }
     }
@@ -132,6 +153,73 @@ int main() {
         {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state, memory);
     check(differing == KernelDispatchStatus::handled && state.gpr[3] == 2U,
           "RtlCompareMemory returns the matching prefix length up to the first difference");
+
+    constexpr std::uint64_t ansi_left_descriptor = data_page + 0x100U;
+    constexpr std::uint64_t ansi_right_descriptor = data_page + 0x110U;
+    constexpr std::uint64_t ansi_left_buffer = data_page + 0x200U;
+    constexpr std::uint64_t ansi_right_buffer = data_page + 0x300U;
+    const auto call_compare_string = [&](std::uint64_t left, std::uint64_t right,
+                                         std::uint64_t ignore_case,
+                                         std::uint64_t lr) {
+        state.gpr[3] = left;
+        state.gpr[4] = right;
+        state.gpr[5] = ignore_case;
+        state.lr = lr;
+        return KernelDispatcher{}.dispatch(
+            {"xboxkrnl.exe", KernelDispatcher::rtl_compare_string_ordinal}, state,
+            memory);
+    };
+    check(write_ansi_string_descriptor(memory, ansi_left_descriptor, ansi_left_buffer,
+                                       5U, "Alpha") &&
+              write_ansi_string_descriptor(memory, ansi_right_descriptor,
+                                           ansi_right_buffer, 5U, "alpha"),
+          "test fixture seeds counted ANSI strings");
+    check(call_compare_string(ansi_left_descriptor, ansi_right_descriptor, 0U,
+                              0x1047U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == std::numeric_limits<std::uint64_t>::max() &&
+              state.pc == 0x1044U,
+          "RtlCompareString returns a negative signed result for case-sensitive ordering");
+    check(call_compare_string(ansi_left_descriptor, ansi_right_descriptor, 1U,
+                              0x1057U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0U && state.pc == 0x1054U,
+          "RtlCompareString compares ASCII case-insensitively when requested");
+    check(write_ansi_string_descriptor(memory, ansi_right_descriptor,
+                                       ansi_right_buffer, 4U, "Alph"),
+          "test fixture shortens the second counted ANSI string");
+    check(call_compare_string(ansi_left_descriptor, ansi_right_descriptor, 0U,
+                              0x1067U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 1U,
+          "RtlCompareString orders equal prefixes by counted byte length");
+    check(memory.write_u16_be(ansi_right_descriptor, 5U) &&
+              memory.write_u16_be(ansi_right_descriptor + 2U, 4U),
+          "test fixture creates an invalid ANSI_STRING length pair");
+    state.pc = 0x800080U;
+    const auto invalid_ansi_descriptor = call_compare_string(
+        ansi_left_descriptor, ansi_right_descriptor, 0U, 0x1077U);
+    check(invalid_ansi_descriptor == KernelDispatchStatus::invalid_guest_argument &&
+              state.pc == 0x800080U && state.gpr[3] == ansi_left_descriptor,
+          "RtlCompareString rejects Length greater than MaximumLength");
+    check(write_ansi_string_descriptor(memory, ansi_right_descriptor, 0U, 0U, ""),
+          "test fixture seeds a valid empty ANSI_STRING with a null buffer");
+    check(call_compare_string(ansi_right_descriptor, ansi_right_descriptor, 0U,
+                              0x1087U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0U && state.pc == 0x1084U,
+          "RtlCompareString accepts empty counted strings without a buffer");
+    state.pc = 0x800090U;
+    const auto inaccessible_ansi_descriptor = call_compare_string(
+        0x300000U, ansi_right_descriptor, 0U, 0x1097U);
+    check(inaccessible_ansi_descriptor == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x800090U,
+          "RtlCompareString reports an inaccessible descriptor without returning");
+    check(write_ansi_string_descriptor(memory, ansi_right_descriptor,
+                                       ansi_right_buffer, 1U, "\x80"),
+          "test fixture seeds non-ASCII bytes for case-fold diagnostics");
+    state.pc = 0x8000a0U;
+    const auto unsupported_ansi_casefold = call_compare_string(
+        ansi_right_descriptor, ansi_right_descriptor, 1U, 0x10a7U);
+    check(unsupported_ansi_casefold == KernelDispatchStatus::unsupported_export &&
+              state.pc == 0x8000a0U,
+          "RtlCompareString reports non-ASCII case folding as unsupported");
 
     state.gpr[3] = data_page;
     state.gpr[4] = 8U;

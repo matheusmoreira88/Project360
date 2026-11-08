@@ -28,6 +28,7 @@ class KernelDispatcher {
 public:
     static constexpr std::uint16_t rtl_compare_memory_ordinal = 268;
     static constexpr std::uint16_t rtl_compare_memory_ulong_ordinal = 269;
+    static constexpr std::uint16_t rtl_compare_string_ordinal = 270;
     static constexpr std::uint16_t rtl_char_to_integer_ordinal = 267;
     static constexpr std::uint16_t rtl_fill_memory_ordinal = 284;
     static constexpr std::uint16_t rtl_fill_memory_ulong_ordinal = 285;
