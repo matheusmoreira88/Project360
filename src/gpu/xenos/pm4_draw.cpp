@@ -242,6 +242,7 @@ Pm4DrawStreamResult process_pm4_draw_stream(
     constexpr std::uint8_t draw_indx2_opcode = 0x36U;
     constexpr std::size_t maximum_prepared_draws = 256U;
     constexpr std::size_t maximum_prepared_indices = 4'194'304U;
+    constexpr std::size_t maximum_register_snapshot_bytes = 32U * 1024U * 1024U;
 
     try {
         const auto decoded = decode_pm4(stream);
@@ -251,6 +252,7 @@ Pm4DrawStreamResult process_pm4_draw_stream(
                                                     initial_registers.end());
         Pm4DrawStreamResult result{};
         std::size_t prepared_index_count = 0U;
+        std::size_t prepared_register_snapshot_bytes = 0U;
         for (const auto& packet : decoded.packets) {
             const auto byte_offset = packet.header_word_offset * 4U;
             const auto packet_byte_size =
@@ -297,8 +299,20 @@ Pm4DrawStreamResult process_pm4_draw_stream(
                 return {{}, {}, "PM4 draw stream exceeds the 4,194,304-index limit",
                         packet.header_word_offset};
             }
+            if (registers.size() > maximum_register_snapshot_bytes / sizeof(std::uint32_t)) {
+                return {{}, {}, "PM4 draw register snapshot exceeds the 32 MiB limit",
+                        packet.header_word_offset};
+            }
+            const auto register_snapshot_bytes = registers.size() * sizeof(std::uint32_t);
+            if (register_snapshot_bytes >
+                maximum_register_snapshot_bytes - prepared_register_snapshot_bytes) {
+                return {{}, {}, "PM4 draw stream exceeds the 32 MiB register snapshot limit",
+                        packet.header_word_offset};
+            }
             prepared_index_count += geometry.indices.size();
-            result.draws.push_back({std::move(command), std::move(geometry)});
+            prepared_register_snapshot_bytes += register_snapshot_bytes;
+            result.draws.push_back(
+                {std::move(command), std::move(geometry), registers});
         }
         result.final_registers = std::move(registers);
         return result;

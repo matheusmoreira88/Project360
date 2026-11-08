@@ -1203,6 +1203,12 @@ void test_pm4_sequential_draw_dispatch() {
     append_u32_be(stream, (1U << 16U) | 14U); // Fetch slot 7, two dwords per slot.
     append_u32_be(stream, (0x10U << 2U) | 3U); // Base 0x40, vertex-buffer type.
     append_u32_be(stream, 3U << 2U); // Three dwords.
+    append_u32_be(stream, 0xc0000000U | (4U << 16U) | (0x2dU << 8U));
+    append_u32_be(stream, 28U); // ALU float4 c7.
+    append_u32_be(stream, std::bit_cast<std::uint32_t>(1.5F));
+    append_u32_be(stream, 0U);
+    append_u32_be(stream, 0U);
+    append_u32_be(stream, 0U);
     const auto append_dma_draw = [&stream]() {
         append_u32_be(stream, 0xc0000000U | (3U << 16U) | (0x22U << 8U));
         append_u32_be(stream, 0U); // Visibility-query token.
@@ -1210,27 +1216,55 @@ void test_pm4_sequential_draw_dispatch() {
         append_u32_be(stream, 0x10U);
         append_u32_be(stream, 3U);
     };
+    const auto first_draw_word_offset = stream.size() / 4U;
     append_dma_draw();
     append_u32_be(stream, 0x2102U); // Change vertex-index offset before draw two.
     append_u32_be(stream, 1U);
+    append_u32_be(stream, 0xc0000000U | (2U << 16U) | (0x2dU << 8U));
+    append_u32_be(stream, (1U << 16U) | 14U); // Change fetch slot 7's base.
+    append_u32_be(stream, (0x18U << 2U) | 3U);
+    append_u32_be(stream, 3U << 2U);
+    append_u32_be(stream, 0xc0000000U | (4U << 16U) | (0x2dU << 8U));
+    append_u32_be(stream, 28U); // Change ALU float4 c7 for draw two.
+    append_u32_be(stream, std::bit_cast<std::uint32_t>(2.5F));
+    append_u32_be(stream, 0U);
+    append_u32_be(stream, 0U);
+    append_u32_be(stream, 0U);
+    const auto second_draw_word_offset = stream.size() / 4U;
     append_dma_draw();
 
     std::vector<std::uint32_t> initial_registers(0x5000U, 0U);
     const auto dispatched = process_pm4_draw_stream(stream, initial_registers, memory);
+    check(dispatched && dispatched.draws.size() == 2U,
+          "PM4 stream prepares both draws before exposing their state snapshots");
+    if (!dispatched || dispatched.draws.size() != 2U) return;
     constexpr std::array<std::uint8_t, 1> required_fetch_slots{7U};
-    const auto fetch_bank = decode_vertex_fetch_descriptor_bank(
-        dispatched.final_registers, required_fetch_slots);
-    check(dispatched && dispatched.draws.size() == 2U &&
-              dispatched.draws[0].command.header_word_offset == 8U &&
-              dispatched.draws[1].command.header_word_offset == 15U &&
+    constexpr std::array<std::uint8_t, 1> required_alu_constants{7U};
+    const auto first_fetch_bank = decode_vertex_fetch_descriptor_bank(
+        dispatched.draws[0].register_snapshot, required_fetch_slots);
+    const auto second_fetch_bank = decode_vertex_fetch_descriptor_bank(
+        dispatched.draws[1].register_snapshot, required_fetch_slots);
+    const auto first_alu_bank = decode_shader_alu_float_constant_bank(
+        dispatched.draws[0].register_snapshot, required_alu_constants);
+    const auto second_alu_bank = decode_shader_alu_float_constant_bank(
+        dispatched.draws[1].register_snapshot, required_alu_constants);
+    check(dispatched.draws[0].command.header_word_offset == first_draw_word_offset &&
+              dispatched.draws[1].command.header_word_offset == second_draw_word_offset &&
               dispatched.draws[0].geometry.indices ==
                   std::vector<std::uint32_t>{0U, 1U, 2U} &&
               dispatched.draws[1].geometry.indices ==
                   std::vector<std::uint32_t>{1U, 2U, 3U} &&
               dispatched.final_registers[register_index::vgt_indx_offset] == 1U &&
-              fetch_bank && fetch_bank.descriptors[7U].base_address_bytes == 0x40U &&
-              fetch_bank.descriptors[7U].size_dwords == 3U,
-          "PM4 dispatch snapshots each draw and resolves SET_CONSTANT vertex-fetch descriptors");
+              first_fetch_bank && second_fetch_bank &&
+              first_fetch_bank.descriptors[7U].base_address_bytes == 0x40U &&
+              second_fetch_bank.descriptors[7U].base_address_bytes == 0x60U &&
+              first_fetch_bank.descriptors[7U].size_dwords == 3U &&
+              second_fetch_bank.descriptors[7U].size_dwords == 3U && first_alu_bank &&
+              second_alu_bank && first_alu_bank.constants[7U][0] == 1.5F &&
+              second_alu_bank.constants[7U][0] == 2.5F &&
+              dispatched.draws[0].register_snapshot[register_index::vgt_indx_offset] == 0U &&
+              dispatched.draws[1].register_snapshot[register_index::vgt_indx_offset] == 1U,
+          "PM4 dispatch retains independent per-draw fetch and ALU constant state");
 
     auto unsupported_stream = stream;
     append_u32_be(unsupported_stream, 0xc0000000U | (0x7fU << 8U));

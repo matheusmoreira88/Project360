@@ -138,7 +138,7 @@ int main() {
     const auto& prepared_geometry = draw_dispatch.draws[0].geometry;
     constexpr std::array<std::uint8_t, 1> required_fetch_slots{7U};
     const auto fetch_bank = decode_vertex_fetch_descriptor_bank(
-        draw_dispatch.final_registers, required_fetch_slots);
+        draw_dispatch.draws[0].register_snapshot, required_fetch_slots);
     if (!fetch_bank) {
         std::cerr << "FAIL: PM4 fetch constants did not decode: " << fetch_bank.error << '\n';
         return 1;
@@ -146,7 +146,7 @@ int main() {
     const auto& fetch_constants = fetch_bank.descriptors;
     constexpr std::array<std::uint8_t, 1> required_alu_constants{7U};
     const auto alu_constant_bank = decode_shader_alu_float_constant_bank(
-        draw_dispatch.final_registers, required_alu_constants);
+        draw_dispatch.draws[0].register_snapshot, required_alu_constants);
     if (!alu_constant_bank) {
         std::cerr << "FAIL: PM4 ALU constants did not decode: " << alu_constant_bank.error
                   << '\n';

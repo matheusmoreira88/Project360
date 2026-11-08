@@ -77,6 +77,8 @@ struct PrimitiveAssemblyResult {
 struct PreparedDrawCommand {
     DrawCommand command{};
     PrimitiveAssemblyResult geometry{};
+    // Register state after this draw's PM4 writes, before later packets mutate it.
+    std::vector<std::uint32_t> register_snapshot;
 };
 
 struct Pm4DrawStreamResult {
@@ -114,8 +116,9 @@ struct VertexIndexTransformReadResult {
 
 // Processes a bounded subset of PM4 packets in stream order, applying register
 // writes before each draw and preparing that draw's DMA/auto-index geometry
-// against the register snapshot at that point. Output is limited to 256 draws
-// and 4,194,304 total prepared indexes. Unsupported commands fail.
+// against the register snapshot at that point. Each prepared draw retains its
+// complete register snapshot, bounded to 32 MiB total across the result. Output
+// is limited to 256 draws and 4,194,304 total prepared indexes. Unsupported commands fail.
 // Failure is transactional: no prepared draws or final register state escapes.
 [[nodiscard]] Pm4DrawStreamResult process_pm4_draw_stream(
     std::span<const std::uint8_t> stream,
