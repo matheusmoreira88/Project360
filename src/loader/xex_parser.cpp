@@ -893,6 +893,7 @@ constexpr std::uint32_t kXexImagePageSize4KiB = 0x10000000U;
     loaded.pe = pe;
     loaded.image_base = static_cast<std::uint32_t>(image_base);
     loaded.entry_point = entry_point;
+    loaded.physical_base = physical_base;
     loaded.mapped_size = static_cast<std::size_t>(mapped_size);
     return {std::move(loaded), {}};
 }

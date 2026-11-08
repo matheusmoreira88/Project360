@@ -115,6 +115,7 @@ struct LoadedXexImage {
     XboxPeMetadata pe;
     std::uint32_t image_base{};
     std::uint32_t entry_point{};
+    std::uint64_t physical_base{};
     std::size_t mapped_size{};
 };
 

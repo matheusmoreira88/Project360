@@ -1,6 +1,7 @@
 #include "cpu/interpreter.hpp"
 #include "common/log.hpp"
 #include "kernel/guest_executor.hpp"
+#include "kernel/guest_thread_context.hpp"
 #include "loader/xex_parser.hpp"
 #include "memory/guest_memory.hpp"
 
@@ -137,7 +138,13 @@ int run_xex(const std::filesystem::path& path) {
         }
 
         project360::cpu::CpuState state{};
-        state.pc = loaded.image->entry_point;
+        const auto thread_context = project360::kernel::initialize_main_thread_context(
+            *loaded.image, memory, state);
+        if (!thread_context) {
+            project360::common::log(project360::common::LogLevel::error, "kernel",
+                                    thread_context.error);
+            return 1;
+        }
         const project360::kernel::GuestExecutor executor(*loaded.image);
         const auto result = executor.run(state, memory, instruction_limit);
         std::cout << "XEX execution stopped after " << result.instructions_executed

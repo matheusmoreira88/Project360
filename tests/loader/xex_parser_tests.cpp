@@ -3,6 +3,7 @@
 #include "cpu/cpu_state.hpp"
 #include "cpu/interpreter.hpp"
 #include "kernel/guest_executor.hpp"
+#include "kernel/guest_thread_context.hpp"
 #include "memory/guest_memory.hpp"
 
 #include <algorithm>
@@ -799,6 +800,73 @@ int main() {
     check(compressed_result &&
               compressed_result.image->xex.import_libraries[0].import_ordinals.back() == 270U,
           "basic-compressed XEX import thunks are decoded from guest image addresses");
+
+    auto thread_xex = loadable_xex;
+    thread_xex.resize(thread_xex.size() + 0x10U, std::byte{0});
+    write_be32(thread_xex, 0x324U, 0x83140U); // Separate TLS template at PE RVA 0x1140.
+    write_le32(thread_xex, 0x1000U + 0x178U + 8U, 0x150U);
+    write_le32(thread_xex, 0x1000U + 0x178U + 16U, 0x150U);
+    thread_xex[0x1340U] = std::byte{0xa5};
+    thread_xex[0x1341U] = std::byte{0x5a};
+    project360::memory::GuestMemory thread_memory(0x40000U);
+    const auto thread_loaded = project360::loader::load_xex2(
+        thread_xex, thread_memory, 0U);
+    std::uint8_t template_byte = 0U;
+    const bool template_read = thread_loaded &&
+                               thread_memory.read_u8(0x83140U, template_byte);
+    project360::cpu::CpuState launch_state{};
+    const auto thread_init = thread_loaded
+                                 ? project360::kernel::initialize_main_thread_context(
+                                       *thread_loaded.image, thread_memory, launch_state)
+                                 : project360::kernel::GuestThreadInitResult{};
+    std::uint8_t copied_template_byte = 0U;
+    std::uint8_t zero_tail_byte = 0xffU;
+    std::uint32_t pcr_tls = 0U;
+    std::uint32_t pcr_self = 0U;
+    std::uint32_t pcr_stack_base = 0U;
+    std::uint32_t pcr_stack_limit = 0U;
+    std::uint32_t pcr_dpc_active = 1U;
+    std::uint8_t pcr_cpu = 0xffU;
+    check(thread_init && template_read &&
+              thread_memory.read_u8(thread_init.context->tls_address, copied_template_byte) &&
+              template_byte == 0xa5U && copied_template_byte == template_byte &&
+              thread_memory.read_u8(thread_init.context->tls_address + 0x10U,
+                                    zero_tail_byte) && zero_tail_byte == 0U &&
+              thread_memory.read_u32_be(thread_init.context->pcr_address, pcr_tls) &&
+              thread_memory.read_u32_be(thread_init.context->pcr_address + 0x30U, pcr_self) &&
+              thread_memory.read_u32_be(thread_init.context->pcr_address + 0x70U,
+                                        pcr_stack_base) &&
+              thread_memory.read_u32_be(thread_init.context->pcr_address + 0x74U,
+                                        pcr_stack_limit) &&
+              thread_memory.read_u8(thread_init.context->pcr_address + 0x10cU, pcr_cpu) &&
+              thread_memory.read_u32_be(thread_init.context->pcr_address + 0x150U,
+                                        pcr_dpc_active) &&
+              pcr_tls == thread_init.context->tls_address &&
+              pcr_self == thread_init.context->pcr_address &&
+              pcr_stack_base == thread_init.context->stack_base &&
+              pcr_stack_limit == thread_init.context->stack_limit &&
+              pcr_cpu == 0U && pcr_dpc_active == 0U &&
+              launch_state.pc == thread_loaded.image->entry_point &&
+              launch_state.gpr[13] == thread_init.context->pcr_address &&
+              launch_state.gpr[1] == thread_init.context->stack_base &&
+              !thread_memory.page_mapped(thread_init.context->stack_limit - 0x1000U),
+          "XEX main-thread setup copies static TLS, builds PCR and stack, and leaves a guard page");
+
+    project360::memory::GuestMemory constrained_thread_memory(0x4000U);
+    const auto constrained_loaded = project360::loader::load_xex2(
+        loadable_xex, constrained_thread_memory, 0U);
+    project360::cpu::CpuState unchanged_launch_state{};
+    const auto constrained_init = constrained_loaded
+                                      ? project360::kernel::initialize_main_thread_context(
+                                            *constrained_loaded.image,
+                                            constrained_thread_memory,
+                                            unchanged_launch_state)
+                                      : project360::kernel::GuestThreadInitResult{};
+    check(!constrained_init && !constrained_init.error.empty() &&
+              unchanged_launch_state.pc == 0U && unchanged_launch_state.gpr[1] == 0U &&
+              unchanged_launch_state.gpr[13] == 0U &&
+              constrained_thread_memory.page_mapped(0x83000U),
+          "main-thread setup reports exhausted backing without changing CPU launch state");
 
     const auto code_pages_xex = make_page_descriptor_xex(loadable_xex, 1U);
     project360::memory::GuestMemory code_pages_memory(0x4000U);
