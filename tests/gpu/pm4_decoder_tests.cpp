@@ -5,6 +5,7 @@
 #include "gpu/xenos/registers.hpp"
 #include "gpu/xenos/shader_alu.hpp"
 #include "gpu/xenos/shader_execution.hpp"
+#include "gpu/xenos/texture_decode.hpp"
 #include "gpu/xenos/texture_fetch.hpp"
 #include "gpu/xenos/texture_memory.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <span>
 #include <vector>
 
 namespace {
@@ -2070,6 +2072,44 @@ void test_texture_fetch_constant_metadata() {
           "unsupported Xenos texture storage formats fail explicitly");
 }
 
+void test_texture_block_rgba_decoding() {
+    using namespace project360::gpu::xenos;
+
+    constexpr std::array<std::byte, 4> rgba_storage{
+        std::byte{0x33}, std::byte{0x22}, std::byte{0x11}, std::byte{0x44}};
+    const auto rgba = decode_xenos_texture_block_rgba8(6U, rgba_storage);
+    check(rgba && rgba.texel_count == 1U &&
+              rgba.texels[0] == TextureRgba8{0x11U, 0x22U, 0x33U, 0x44U},
+          "8:8:8:8 decoder extracts channels using Xenos format bit masks");
+
+    constexpr std::array<std::byte, 8> dxt1_four_color{
+        std::byte{0x00}, std::byte{0xf8}, std::byte{0xe0}, std::byte{0x07},
+        std::byte{0xe4}, std::byte{0xe4}, std::byte{0xe4}, std::byte{0xe4}};
+    const auto four_color = decode_xenos_texture_block_rgba8(18U, dxt1_four_color);
+    check(four_color && four_color.texel_count == 16U &&
+              four_color.texels[0] == TextureRgba8{255U, 0U, 0U, 255U} &&
+              four_color.texels[1] == TextureRgba8{0U, 255U, 0U, 255U} &&
+              four_color.texels[2] == TextureRgba8{170U, 85U, 0U, 255U} &&
+              four_color.texels[3] == TextureRgba8{85U, 170U, 0U, 255U},
+          "DXT1 decoder expands RGB565 endpoints and interpolates four-color palette");
+
+    constexpr std::array<std::byte, 8> dxt1_transparent{
+        std::byte{0x00}, std::byte{0x00}, std::byte{0xff}, std::byte{0xff},
+        std::byte{0xff}, std::byte{0xff}, std::byte{0xff}, std::byte{0xff}};
+    const auto transparent = decode_xenos_texture_block_rgba8(18U, dxt1_transparent);
+    check(transparent && transparent.texels[3] == TextureRgba8{0U, 0U, 0U, 0U},
+          "DXT1 three-color mode decodes the transparent selector as transparent black");
+
+    constexpr std::array<std::byte, 7> truncated_dxt1{};
+    const auto truncated = decode_xenos_texture_block_rgba8(18U, truncated_dxt1);
+    const std::array<std::byte, 2> unsupported_storage{};
+    const auto unsupported = decode_xenos_texture_block_rgba8(4U, unsupported_storage);
+    const std::array<std::byte, 3> wrong_size{};
+    const auto wrong_block_size = decode_xenos_texture_block_rgba8(6U, wrong_size);
+    check(!truncated && !unsupported && !wrong_block_size,
+          "texture block decoder rejects truncated, unsupported and mismatched storage inputs");
+}
+
 void test_tiled_texture_block_addressing_and_reads() {
     using namespace project360::gpu::xenos;
     const auto check_offset = [](std::uint32_t x, std::uint32_t y,
@@ -2197,6 +2237,16 @@ void test_tiled_texture_block_addressing_and_reads() {
                   std::equal(descriptor_rgba_bytes.begin(), descriptor_rgba_bytes.end(),
                              descriptor_block.bytes.begin()),
               "decoded texture descriptor resolves pitch, dimensions and physical block address");
+        if (descriptor_block) {
+            const auto decoded_texel = decode_xenos_texture_block_rgba8(
+                rgba_fetch.constant.format,
+                std::span<const std::byte>(descriptor_block.bytes)
+                    .first(descriptor_block.byte_count));
+            check(decoded_texel && decoded_texel.texel_count == 1U &&
+                      decoded_texel.texels[0] ==
+                          TextureRgba8{0xccU, 0xbbU, 0xaaU, 0xddU},
+                  "descriptor read and endian path feeds the RGBA8 block decoder correctly");
+        }
         check(!read_xenos_tiled_2d_texture_block(rgba_fetch.constant, 64U, 0U, memory),
               "descriptor-backed texture read rejects coordinates outside visible dimensions");
     }
@@ -2625,6 +2675,7 @@ int main() {
     test_vertex_shader_index_transform();
     test_vertex_fetch_descriptors_and_memory();
     test_texture_fetch_constant_metadata();
+    test_texture_block_rgba_decoding();
     test_tiled_texture_block_addressing_and_reads();
     test_vfetch_instruction_and_attribute_range();
     test_wait_for_idle_is_synchronous_barrier();

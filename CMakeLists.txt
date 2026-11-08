@@ -17,6 +17,7 @@ add_library(project360_core
     src/gpu/xenos/raster_state.cpp
     src/gpu/xenos/shader_alu.cpp
     src/gpu/xenos/shader_execution.cpp
+    src/gpu/xenos/texture_decode.cpp
     src/gpu/xenos/texture_fetch.cpp
     src/gpu/xenos/texture_memory.cpp
     src/gpu/xenos/vertex_fetch.cpp
