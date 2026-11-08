@@ -9,6 +9,7 @@ add_library(project360_core
     src/common/log.cpp
     src/cpu/decoder.cpp
     src/cpu/interpreter.cpp
+    src/kernel/kernel_dispatcher.cpp
     src/loader/xex_parser.cpp
     src/memory/guest_memory.cpp
 )
@@ -78,6 +79,10 @@ if(PROJECT360_BUILD_TESTS)
     add_executable(project360_memory_tests tests/memory/memory_tests.cpp)
     target_link_libraries(project360_memory_tests PRIVATE project360_core)
     add_test(NAME project360_memory_tests COMMAND project360_memory_tests)
+
+    add_executable(project360_kernel_tests tests/kernel/kernel_dispatcher_tests.cpp)
+    target_link_libraries(project360_kernel_tests PRIVATE project360_core)
+    add_test(NAME project360_kernel_tests COMMAND project360_kernel_tests)
 
     add_executable(project360_loader_tests tests/loader/xex_parser_tests.cpp)
     target_link_libraries(project360_loader_tests PRIVATE project360_core)
