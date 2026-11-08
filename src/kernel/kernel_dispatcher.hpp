@@ -36,6 +36,7 @@ public:
     static constexpr std::uint16_t rtl_compare_memory_ordinal = 268;
     static constexpr std::uint16_t rtl_compare_memory_ulong_ordinal = 269;
     static constexpr std::uint16_t rtl_compare_string_ordinal = 270;
+    static constexpr std::uint16_t rtl_downcase_unicode_char_ordinal = 275;
     static constexpr std::uint16_t rtl_char_to_integer_ordinal = 267;
     static constexpr std::uint16_t rtl_fill_memory_ordinal = 284;
     static constexpr std::uint16_t rtl_fill_memory_ulong_ordinal = 285;
@@ -48,6 +49,7 @@ public:
     static constexpr std::uint16_t rtl_ushort_byte_swap_ordinal = 318;
     static constexpr std::uint16_t rtl_zero_memory_ordinal = 320;
     static constexpr std::uint16_t rtl_unicode_string_to_integer_ordinal = 309;
+    static constexpr std::uint16_t rtl_upcase_unicode_char_ordinal = 313;
     static constexpr std::uint16_t ke_get_current_thread_ordinal = 104;
     static constexpr std::uint16_t ke_tls_alloc_ordinal = 338;
     static constexpr std::uint16_t ke_tls_free_ordinal = 339;

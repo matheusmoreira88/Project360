@@ -224,6 +224,36 @@ int main() {
               state.pc == 0x8000a0U,
           "RtlCompareString reports non-ASCII case folding as unsupported");
 
+    const auto call_case_map = [&](std::uint16_t ordinal, std::uint64_t character,
+                                   std::uint64_t return_address) {
+        state.gpr[3] = character;
+        state.lr = return_address;
+        return KernelDispatcher{}.dispatch({"xboxkrnl.exe", ordinal}, state, memory);
+    };
+    check(call_case_map(KernelDispatcher::rtl_upcase_unicode_char_ordinal, 0x00e9U,
+                        0x10b7U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0x00c9U && state.pc == 0x10b4U,
+          "RtlUpcaseUnicodeChar maps Latin-1 lowercase through the Xenon return ABI");
+    check(call_case_map(KernelDispatcher::rtl_downcase_unicode_char_ordinal, 0x00c9U,
+                        0x10c7U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0x00e9U && state.pc == 0x10c4U,
+          "RtlDowncaseUnicodeChar maps Latin-1 uppercase characters");
+    check(call_case_map(KernelDispatcher::rtl_upcase_unicode_char_ordinal, 0x00ffU,
+                        0x10d7U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0x0178U,
+          "RtlUpcaseUnicodeChar handles the Latin-1 y-diaeresis mapping");
+    state.pc = 0x8000b0U;
+    const auto unsupported_case_map = call_case_map(
+        KernelDispatcher::rtl_upcase_unicode_char_ordinal, 0x03b1U, 0x10e7U);
+    check(unsupported_case_map == KernelDispatchStatus::unsupported_export &&
+              state.pc == 0x8000b0U && state.gpr[3] == 0x03b1U,
+          "Unicode case mapping outside the implemented table fails without returning");
+    const auto oversized_case_map = call_case_map(
+        KernelDispatcher::rtl_downcase_unicode_char_ordinal, 0x10000U, 0x10f7U);
+    check(oversized_case_map == KernelDispatchStatus::invalid_guest_argument &&
+              state.pc == 0x8000b0U && state.gpr[3] == 0x10000U,
+          "Unicode case mapping rejects values outside the guest WCHAR width");
+
     state.gpr[3] = data_page;
     state.gpr[4] = 8U;
     state.gpr[5] = 0xaabbccddU;

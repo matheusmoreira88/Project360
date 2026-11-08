@@ -60,6 +60,43 @@ constexpr std::uint32_t kMaximumIntegerTextLength = 0x10000U;
     return character == 0x20U || (character >= 0x09U && character <= 0x0dU);
 }
 
+[[nodiscard]] bool upcase_latin1(std::uint16_t input, std::uint16_t& output) noexcept {
+    if (input <= 0x00ffU) {
+        output = input;
+        if (input >= 0x0061U && input <= 0x007aU) {
+            output = static_cast<std::uint16_t>(input - 0x20U);
+        } else if ((input >= 0x00e0U && input <= 0x00f6U) ||
+                   (input >= 0x00f8U && input <= 0x00feU)) {
+            output = static_cast<std::uint16_t>(input - 0x20U);
+        } else if (input == 0x00ffU) {
+            output = 0x0178U;
+        }
+        return true;
+    }
+    if (input == 0x0178U) {
+        output = input;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool downcase_latin1(std::uint16_t input, std::uint16_t& output) noexcept {
+    if (input <= 0x00ffU) {
+        output = input;
+        if ((input >= 0x0041U && input <= 0x005aU) ||
+            (input >= 0x00c0U && input <= 0x00d6U) ||
+            (input >= 0x00d8U && input <= 0x00deU)) {
+            output = static_cast<std::uint16_t>(input + 0x20U);
+        }
+        return true;
+    }
+    if (input == 0x0178U) {
+        output = 0x00ffU;
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] int digit_value(std::uint16_t character) noexcept {
     if (character >= static_cast<std::uint16_t>('0') &&
         character <= static_cast<std::uint16_t>('9')) {
@@ -672,6 +709,19 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
         }
         state.gpr[3] = static_cast<std::uint64_t>(static_cast<std::int64_t>(comparison));
         state.pc = state.lr & ~std::uint64_t{3};
+        return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == rtl_upcase_unicode_char_ordinal ||
+        import.ordinal == rtl_downcase_unicode_char_ordinal) {
+        if (state.gpr[3] > 0xffffU) return KernelDispatchStatus::invalid_guest_argument;
+        std::uint16_t converted = 0U;
+        const auto character = static_cast<std::uint16_t>(state.gpr[3]);
+        const bool supported = import.ordinal == rtl_upcase_unicode_char_ordinal
+                                   ? upcase_latin1(character, converted)
+                                   : downcase_latin1(character, converted);
+        if (!supported) return KernelDispatchStatus::unsupported_export;
+        state.gpr[3] = converted;
+        state.pc = state.lr & ~std::uint64_t{3U};
         return KernelDispatchStatus::handled;
     }
     if (import.ordinal == rtl_compare_memory_ulong_ordinal) {
