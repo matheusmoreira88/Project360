@@ -2775,6 +2775,20 @@ void test_reservation_instructions() {
               (unreserved_doubleword.cr >> 28U) == 0U,
           "stdcx. without ldarx leaves a doubleword unchanged and clears CR0.EQ");
 
+    cpu::CpuState mismatched_doubleword{};
+    mismatched_doubleword.gpr[2] = 0x100U;
+    mismatched_doubleword.gpr[4] = 0xaaaaaaaaaaaaaaaaULL;
+    check(cpu::Interpreter{}.step(mismatched_doubleword, doubleword_mem).status ==
+              cpu::StepStatus::executed,
+          "ldarx establishes a reservation for the mismatched-address case");
+    mismatched_doubleword.gpr[2] = 0x108U;
+    check(cpu::Interpreter{}.step(mismatched_doubleword, doubleword_mem).status ==
+                  cpu::StepStatus::executed &&
+              doubleword_mem.read_u64_be(0x100U, doubleword) &&
+              doubleword == 0xfedcba9876543210ULL &&
+              (mismatched_doubleword.cr >> 28U) == 0U,
+          "stdcx. fails when its effective address differs from the ldarx address");
+
     put_word(doubleword_mem, 0U, indexed_memory(3U, 0U, 2U, 84U));
     cpu::CpuState misaligned_doubleword{};
     misaligned_doubleword.gpr[2] = 0x104U;
