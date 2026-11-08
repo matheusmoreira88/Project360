@@ -440,8 +440,15 @@ Pm4DrawStreamResult process_pm4_draw_stream(
                 const auto source_address = read_u32_be(packet_stream, 4U) & 0x3fffffffU;
                 const auto offset_type = read_u32_be(packet_stream, 8U);
                 const auto constant_type = (offset_type >> 16U) & 0xffU;
-                if (constant_type != 0U) {
-                    return {{}, {}, "PM4_LOAD_ALU_CONSTANT only supports the ALU constant bank",
+                std::size_t register_base = 0U;
+                switch (constant_type) {
+                case 0U: register_base = 0x4000U; break; // ALU constants.
+                case 1U: register_base = 0x4800U; break; // Fetch constants.
+                case 2U: register_base = 0x4900U; break; // Boolean constants.
+                case 3U: register_base = 0x4908U; break; // Loop constants.
+                case 4U: register_base = 0x2000U; break; // Direct registers.
+                default:
+                    return {{}, {}, "PM4_LOAD_ALU_CONSTANT selects an unsupported constant type",
                             packet.header_word_offset};
                 }
                 const auto size_dwords = read_u32_be(packet_stream, 12U) & 0xfffU;
@@ -449,7 +456,7 @@ Pm4DrawStreamResult process_pm4_draw_stream(
                     return {{}, {}, "PM4_LOAD_ALU_CONSTANT size must be nonzero",
                             packet.header_word_offset};
                 }
-                const auto register_base = 0x4000U + (offset_type & 0x7ffU);
+                register_base += offset_type & 0x7ffU;
                 if (register_base > registers.size() ||
                     size_dwords > registers.size() - register_base) {
                     return {{}, {}, "PM4_LOAD_ALU_CONSTANT exceeds the configured register file",

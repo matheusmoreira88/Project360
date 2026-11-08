@@ -1530,13 +1530,58 @@ void test_pm4_sequential_draw_dispatch() {
     append_u32_be(unsupported_constant_bank,
                   0xc0000000U | (2U << 16U) | (0x2fU << 8U));
     append_u32_be(unsupported_constant_bank, 0x60U);
-    append_u32_be(unsupported_constant_bank, (1U << 16U) | 9U);
+    append_u32_be(unsupported_constant_bank, (5U << 16U) | 9U);
     append_u32_be(unsupported_constant_bank, 4U);
     const auto rejected_constant_bank = process_pm4_draw_stream(
         unsupported_constant_bank, initial_registers, memory);
     check(!rejected_constant_bank && rejected_constant_bank.final_registers.empty() &&
-              rejected_constant_bank.error.find("only supports the ALU") != std::string::npos,
+              rejected_constant_bank.error.find("unsupported constant type") != std::string::npos,
           "PM4_LOAD_ALU_CONSTANT rejects unsupported constant banks explicitly");
+}
+
+void test_pm4_load_constant_banks_from_memory() {
+    using namespace project360::gpu::xenos;
+    project360::memory::GuestMemory memory(64U);
+    const std::array<std::uint32_t, 4> source_words{
+        std::bit_cast<std::uint32_t>(1.25F), std::bit_cast<std::uint32_t>(-3.0F),
+        std::bit_cast<std::uint32_t>(0.75F), std::bit_cast<std::uint32_t>(8.0F)};
+    std::array<std::byte, 16> source_bytes{};
+    for (std::size_t i = 0U; i < source_words.size(); ++i) {
+        const auto value = source_words[i];
+        source_bytes[i * 4U] = static_cast<std::byte>((value >> 24U) & 0xffU);
+        source_bytes[i * 4U + 1U] = static_cast<std::byte>((value >> 16U) & 0xffU);
+        source_bytes[i * 4U + 2U] = static_cast<std::byte>((value >> 8U) & 0xffU);
+        source_bytes[i * 4U + 3U] = static_cast<std::byte>(value & 0xffU);
+    }
+    check(memory.load(0U, source_bytes), "PM4 bank-load fixture initializes physical source memory");
+
+    std::vector<std::uint8_t> stream;
+    const auto append_load = [&stream](std::uint32_t type, std::uint32_t index,
+                                       std::uint32_t size_dwords) {
+        append_u32_be(stream, 0xc0000000U | (2U << 16U) | (0x2fU << 8U));
+        append_u32_be(stream, 0U);
+        append_u32_be(stream, (type << 16U) | index);
+        append_u32_be(stream, size_dwords);
+    };
+    append_load(0U, 36U, 4U);    // ALU c9, float4.
+    append_load(1U, 19U, 1U);    // Fetch bank.
+    append_load(2U, 5U, 1U);     // Boolean bank.
+    append_load(3U, 2U, 1U);     // Loop bank.
+    append_load(4U, 0x100U, 1U); // Direct register bank.
+
+    const std::vector<std::uint32_t> initial_registers(0x5000U, 0U);
+    const auto loaded = process_pm4_draw_stream(stream, initial_registers, memory);
+    const std::array<std::uint8_t, 1> required_constant{9U};
+    const auto alu_bank = loaded ? decode_shader_alu_float_constant_bank(
+                                       loaded.final_registers, required_constant)
+                                 : ShaderAluFloatConstantBankResult{};
+    check(loaded && loaded.draws.empty() && alu_bank &&
+              alu_bank.constants[9U] == std::array<float, 4>{1.25F, -3.0F, 0.75F, 8.0F} &&
+              loaded.final_registers[0x4813U] == source_words[0U] &&
+              loaded.final_registers[0x4905U] == source_words[0U] &&
+              loaded.final_registers[0x490aU] == source_words[0U] &&
+              loaded.final_registers[0x2100U] == source_words[0U],
+          "PM4_LOAD_ALU_CONSTANT maps ALU, fetch, boolean, loop and direct register banks");
 }
 
 void test_xenos_scissor_register_resolution() {
@@ -2239,6 +2284,7 @@ int main() {
     test_unimplemented_commands_fail_explicitly();
     test_draw_packet_metadata_decoding();
     test_pm4_sequential_draw_dispatch();
+    test_pm4_load_constant_banks_from_memory();
     test_xenos_scissor_register_resolution();
     test_xenos_viewport_register_resolution();
     test_dma_index_fetch();
