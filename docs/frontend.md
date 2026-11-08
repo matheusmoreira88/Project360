@@ -5,14 +5,16 @@ The initial desktop frontend is a separate C++20/Qt Widgets executable called `p
 ## Current behavior
 
 - Opens a native file picker filtered for `.xex` files.
-- Lists selected existing files in memory for the current application session.
+- Saves selected local XEX paths in the user's application data directory and restores them on the next launch.
+- Validates the `.xex` extension and that a selected path points to an existing regular file before adding it.
+- Keeps entries whose source file was later moved or deleted, and labels those paths as missing.
 - Shows the selected local path and a clear loader status.
 - Hides the introductory banner after a file is added so the library and details have more room.
 - Keeps **Iniciar** disabled because loading and execution are not implemented.
 - Shows only the library navigation entry; other destinations will appear when they have working screens.
 - Does not read or parse the executable contents.
 
-The selection is not saved across restarts. File names come from the local path and are not verified title metadata.
+The library file uses a small versioned format with bounded entry and path sizes and atomic replacement on Windows. It stores paths only. File names come from the local path and are not verified title metadata; the loader does not read or parse executable contents.
 
 ## Build
 
@@ -27,4 +29,4 @@ This target has not yet been compiled or visually validated on the current devel
 
 ## Next frontend work
 
-After the target is built and reviewed on Windows, add persistent library metadata only alongside a safe library model, then wire settings and recent execution to real emulator subsystems as those become available. Keep unavailable actions visibly disabled until the corresponding backend is implemented.
+After the target is built and reviewed on Windows, move the widget list to a Qt model/view implementation and add search, sorting, and a real remove action. Keep unavailable actions visibly disabled until the corresponding backend is implemented.

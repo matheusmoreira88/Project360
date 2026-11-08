@@ -13,6 +13,9 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <filesystem>
+#include <utility>
+
 namespace {
 
 QLabel* makeLabel(const QString& text, const QString& styleClass = {}) {
@@ -93,7 +96,8 @@ QWidget* makeHero() {
 
 } // namespace
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(std::filesystem::path library_file, QWidget* parent)
+    : QMainWindow(parent), library_store_(std::move(library_file)) {
     setWindowTitle("Project360 — Biblioteca");
     resize(1180, 760);
     setMinimumSize(880, 600);
@@ -177,6 +181,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     connect(importButton_, &QPushButton::clicked, this, &MainWindow::importExecutable);
     connect(library_, &QListWidget::currentRowChanged, this, [this](int) { showSelection(); });
+
+    const auto load_result = library_store_.load();
+    if (load_result == project360::frontend::LibraryLoadResult::io_error ||
+        load_result == project360::frontend::LibraryLoadResult::invalid_data) {
+        selectionStatus_->setText("Não foi possível ler a biblioteca salva. Os arquivos originais não foram alterados.");
+    }
+    refreshLibrary();
 }
 
 void MainWindow::importExecutable() {
@@ -198,22 +209,39 @@ void MainWindow::importExecutable() {
     }
 
     selectedExecutable_ = file.absoluteFilePath();
-    const QString displayName = file.completeBaseName();
-    bool alreadyListed = false;
-    for (int row = 0; row < library_->count(); ++row) {
-        if (library_->item(row)->data(Qt::UserRole).toString() == selectedExecutable_) {
-            library_->setCurrentRow(row);
-            alreadyListed = true;
-            break;
-        }
+    const auto result = library_store_.add(std::filesystem::path(selectedExecutable_.toStdWString()));
+    if (result == project360::frontend::LibraryAddResult::persistence_error) {
+        selectedTitle_->setText("Não foi possível salvar a biblioteca");
+        selectedPath_->setText(selectedExecutable_);
+        selectionStatus_->setText("O caminho não foi adicionado. Verifique as permissões da pasta de dados do Project360.");
+        return;
     }
-    if (!alreadyListed) {
-        auto* item = new QListWidgetItem(QStringLiteral("◈   %1\n     XEX • não carregado").arg(displayName));
-        item->setData(Qt::UserRole, selectedExecutable_);
-        item->setToolTip(selectedExecutable_);
+    if (result == project360::frontend::LibraryAddResult::invalid_file ||
+        result == project360::frontend::LibraryAddResult::unsupported_extension) {
+        selectedTitle_->setText("Arquivo não adicionado");
+        selectedPath_->setText("Selecione um arquivo .xex existente.");
+        selectionStatus_->setText("O arquivo não passou na validação local e não foi salvo na biblioteca.");
+        return;
+    }
+    refreshLibrary(selectedExecutable_);
+}
+
+void MainWindow::refreshLibrary(const QString& selected_path) {
+    library_->clear();
+    for (const auto& path : library_store_.entries()) {
+        const QString path_text = QString::fromStdWString(path.native());
+        const QFileInfo file_info(path_text);
+        const bool exists = file_info.exists() && file_info.isFile();
+        const QString title = file_info.completeBaseName();
+        const QString state = exists ? "XEX • não carregado" : "Arquivo não encontrado";
+        auto* item = new QListWidgetItem(QStringLiteral("◈   %1\n     %2").arg(title, state));
+        item->setData(Qt::UserRole, path_text);
+        item->setToolTip(path_text);
         item->setSizeHint(QSize(0, 62));
         library_->addItem(item);
-        library_->setCurrentItem(item);
+        if (!selected_path.isEmpty() && path_text.compare(selected_path, Qt::CaseInsensitive) == 0) {
+            library_->setCurrentItem(item);
+        }
     }
     hero_->setVisible(library_->count() == 0);
     showSelection();
@@ -228,8 +256,12 @@ void MainWindow::showSelection() {
     const QFileInfo file(selectedExecutable_);
     selectedTitle_->setText(file.completeBaseName());
     selectedPath_->setText(file.absoluteFilePath());
-    selectionStatus_->setText(
-        "Arquivo encontrado. O Project360 ainda não analisa metadados, mapeia nem executa este XEX.");
+    if (!file.exists() || !file.isFile()) {
+        selectionStatus_->setText("Este caminho salvo não existe mais. O Project360 ainda não analisa nem executa arquivos XEX.");
+    } else {
+        selectionStatus_->setText(
+            "Arquivo encontrado. O Project360 ainda não analisa metadados, mapeia nem executa este XEX.");
+    }
 }
 
 void MainWindow::applyTheme() {

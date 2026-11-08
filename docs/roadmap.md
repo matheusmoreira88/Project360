@@ -19,7 +19,7 @@ The roadmap tracks evidence rather than estimated completion percentages.
 
 ## Frontend status
 
-An early optional Qt 6 Widgets desktop shell is present in `src/frontend/qt`: dark Project360 theme, library view, local `.xex` path selection, and explicit unavailable states. File entries are session-only. It does not parse, persist, or run executables. The GUI has not been compiled or visually validated on this development environment because Qt 6 is not installed; core emulator phases remain independent of this optional target.
+An early optional Qt 6 Widgets desktop shell is present in `src/frontend/qt`: dark Project360 theme, library view, persistent local `.xex` paths, and explicit unavailable states. The independent library store has bounded, versioned parsing and unit tests. It does not parse or run executables. The GUI has not been compiled or visually validated on this development environment because Qt 6 is not installed; core emulator phases remain independent of this optional target.
 
 ## Next engineering step
 

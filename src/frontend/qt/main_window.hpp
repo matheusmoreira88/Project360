@@ -1,5 +1,8 @@
 #pragma once
 
+#include "frontend/game_library_store.hpp"
+
+#include <filesystem>
 #include <QMainWindow>
 #include <QString>
 
@@ -12,10 +15,11 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(std::filesystem::path library_file, QWidget* parent = nullptr);
 
 private:
     void importExecutable();
+    void refreshLibrary(const QString& selected_path = {});
     void showSelection();
     void applyTheme();
 
@@ -26,5 +30,6 @@ private:
     QLabel* selectionStatus_ = nullptr;
     QPushButton* launchButton_ = nullptr;
     QPushButton* importButton_ = nullptr;
+    project360::frontend::GameLibraryStore library_store_;
     QString selectedExecutable_;
 };

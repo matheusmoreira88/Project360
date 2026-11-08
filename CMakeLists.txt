@@ -19,6 +19,17 @@ else()
     target_compile_options(project360_core PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+add_library(project360_frontend_core
+    src/frontend/game_library_store.cpp
+)
+target_include_directories(project360_frontend_core PUBLIC src)
+target_compile_features(project360_frontend_core PUBLIC cxx_std_20)
+if(MSVC)
+    target_compile_options(project360_frontend_core PRIVATE /W4 /permissive- /EHsc /utf-8)
+else()
+    target_compile_options(project360_frontend_core PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 add_executable(project360 src/app/main.cpp)
 target_link_libraries(project360 PRIVATE project360_core)
 
@@ -31,7 +42,7 @@ if(PROJECT360_BUILD_GUI)
             src/frontend/qt/main_window.cpp
             src/frontend/qt/main_window.hpp
         )
-        target_link_libraries(project360_gui PRIVATE Qt6::Widgets)
+        target_link_libraries(project360_gui PRIVATE Qt6::Widgets project360_frontend_core)
         target_compile_features(project360_gui PRIVATE cxx_std_20)
         if(MSVC)
             target_compile_options(project360_gui PRIVATE /W4 /permissive- /EHsc /utf-8)
@@ -48,4 +59,8 @@ if(PROJECT360_BUILD_TESTS)
     add_executable(project360_tests tests/cpu/cpu_tests.cpp)
     target_link_libraries(project360_tests PRIVATE project360_core)
     add_test(NAME project360_tests COMMAND project360_tests)
+
+    add_executable(project360_library_tests tests/frontend/library_store_tests.cpp)
+    target_link_libraries(project360_library_tests PRIVATE project360_frontend_core)
+    add_test(NAME project360_library_tests COMMAND project360_library_tests)
 endif()
