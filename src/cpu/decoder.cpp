@@ -174,6 +174,24 @@ DecodeResult decode(std::uint32_t word) {
     }
     case 19: {
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
+        switch (xo10) {
+        case 257U: ins.cr_logical_operation = CrLogicalOperation::and_; break;
+        case 129U: ins.cr_logical_operation = CrLogicalOperation::and_complement; break;
+        case 289U: ins.cr_logical_operation = CrLogicalOperation::equivalent; break;
+        case 225U: ins.cr_logical_operation = CrLogicalOperation::nand; break;
+        case 33U: ins.cr_logical_operation = CrLogicalOperation::nor; break;
+        case 449U: ins.cr_logical_operation = CrLogicalOperation::or_; break;
+        case 417U: ins.cr_logical_operation = CrLogicalOperation::or_complement; break;
+        case 193U: ins.cr_logical_operation = CrLogicalOperation::xor_; break;
+        default: break;
+        }
+        if (ins.cr_logical_operation != CrLogicalOperation::invalid) {
+            if ((word & 1U) != 0U) {
+                return {{}, "condition-register logical Rc bit is reserved"};
+            }
+            ins.opcode = Opcode::condition_register_logical;
+            return {ins, {}};
+        }
         if (xo10 == 0U) {
             constexpr std::uint32_t reserved_mask = (0x3U << 21U) | (0x3U << 16U) |
                                                     (0x1fU << 11U) | 1U;

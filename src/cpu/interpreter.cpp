@@ -476,6 +476,29 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         set_cr_field(state, ins.bf, source_field);
         break;
     }
+    case Opcode::condition_register_logical: {
+        const auto bit_mask = [](std::uint8_t bit) {
+            return std::uint32_t{1} << (31U - bit);
+        };
+        const bool a = (state.cr & bit_mask(ins.ra)) != 0U;
+        const bool b = (state.cr & bit_mask(ins.rb)) != 0U;
+        bool value = false;
+        switch (ins.cr_logical_operation) {
+        case CrLogicalOperation::invalid:
+            return fault("invalid decoded condition-register logical operation");
+        case CrLogicalOperation::and_: value = a && b; break;
+        case CrLogicalOperation::and_complement: value = a && !b; break;
+        case CrLogicalOperation::equivalent: value = a == b; break;
+        case CrLogicalOperation::nand: value = !(a && b); break;
+        case CrLogicalOperation::nor: value = !(a || b); break;
+        case CrLogicalOperation::or_: value = a || b; break;
+        case CrLogicalOperation::or_complement: value = a || !b; break;
+        case CrLogicalOperation::xor_: value = a != b; break;
+        }
+        const auto target_mask = bit_mask(ins.rt);
+        state.cr = value ? (state.cr | target_mask) : (state.cr & ~target_mask);
+        break;
+    }
     case Opcode::move_to_condition_register_fields: {
         const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);
         for (std::uint8_t field = 0; field < 8U; ++field) {

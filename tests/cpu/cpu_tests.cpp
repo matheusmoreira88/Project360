@@ -9,6 +9,7 @@
 #include <iostream>
 #include <span>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -68,6 +69,14 @@ std::uint32_t mfcr_form(std::uint8_t rt, bool record = false,
 std::uint32_t mcrf_form(std::uint8_t bf, std::uint8_t bfa, std::uint32_t reserved = 0) {
     return (19U << 26U) | (static_cast<std::uint32_t>(bf) << 23U) |
            (static_cast<std::uint32_t>(bfa) << 18U) | reserved;
+}
+
+std::uint32_t cr_logical_form(std::uint8_t bt, std::uint8_t ba, std::uint8_t bb,
+                              std::uint16_t xo, bool record = false) {
+    return (19U << 26U) | (static_cast<std::uint32_t>(bt) << 21U) |
+           (static_cast<std::uint32_t>(ba) << 16U) |
+           (static_cast<std::uint32_t>(bb) << 11U) | (static_cast<std::uint32_t>(xo) << 1U) |
+           (record ? 1U : 0U);
 }
 
 std::uint32_t mtcrf_form(std::uint8_t fxm, std::uint8_t rs, bool record = false,
@@ -1343,6 +1352,74 @@ void test_move_condition_register_field() {
           "mcrf reserved fields and record bit are rejected");
 }
 
+void test_condition_register_logical_operations() {
+    using namespace project360;
+    constexpr std::uint8_t target_bit = 9;
+    constexpr std::uint8_t source_a_bit = 2;
+    constexpr std::uint8_t source_b_bit = 17;
+    constexpr std::uint32_t target_mask = 1U << (31U - target_bit);
+    constexpr std::uint32_t source_a_mask = 1U << (31U - source_a_bit);
+    constexpr std::uint32_t source_b_mask = 1U << (31U - source_b_bit);
+    constexpr std::uint32_t base_cr = 0x5aa55aa5U & ~target_mask;
+    constexpr std::array<std::pair<std::uint16_t, cpu::CrLogicalOperation>, 8> operations{{
+        {257U, cpu::CrLogicalOperation::and_},
+        {129U, cpu::CrLogicalOperation::and_complement},
+        {289U, cpu::CrLogicalOperation::equivalent},
+        {225U, cpu::CrLogicalOperation::nand},
+        {33U, cpu::CrLogicalOperation::nor},
+        {449U, cpu::CrLogicalOperation::or_},
+        {417U, cpu::CrLogicalOperation::or_complement},
+        {193U, cpu::CrLogicalOperation::xor_},
+    }};
+    memory::GuestMemory mem(4);
+    const cpu::Interpreter interpreter{};
+
+    for (const auto& [xo, operation] : operations) {
+        for (unsigned inputs = 0; inputs < 4U; ++inputs) {
+            const bool a = (inputs & 1U) != 0U;
+            const bool b = (inputs & 2U) != 0U;
+            auto cr = base_cr & ~(source_a_mask | source_b_mask);
+            if (a) cr |= source_a_mask;
+            if (b) cr |= source_b_mask;
+            if ((inputs & 2U) != 0U) cr |= target_mask;
+            put_word(mem, 0, cr_logical_form(target_bit, source_a_bit, source_b_bit, xo));
+
+            cpu::CpuState state{};
+            state.cr = cr;
+            state.xer = 0xd2345678U;
+            const auto result = interpreter.step(state, mem);
+            const bool expected = [&] {
+                switch (operation) {
+                case cpu::CrLogicalOperation::and_: return a && b;
+                case cpu::CrLogicalOperation::and_complement: return a && !b;
+                case cpu::CrLogicalOperation::equivalent: return a == b;
+                case cpu::CrLogicalOperation::nand: return !(a && b);
+                case cpu::CrLogicalOperation::nor: return !(a || b);
+                case cpu::CrLogicalOperation::or_: return a || b;
+                case cpu::CrLogicalOperation::or_complement: return a || !b;
+                case cpu::CrLogicalOperation::xor_: return a != b;
+                }
+                return false;
+            }();
+            const auto expected_cr = expected ? (cr | target_mask) : (cr & ~target_mask);
+            check(result.status == cpu::StepStatus::executed && state.cr == expected_cr &&
+                      state.xer == 0xd2345678U,
+                  "CR logical operations implement their full truth tables and preserve other state");
+        }
+    }
+
+    check(!cpu::decode(cr_logical_form(target_bit, source_a_bit, source_b_bit, 257U, true)),
+          "CR logical record-bit encodings are rejected");
+
+    put_word(mem, 0, cr_logical_form(source_a_bit, source_a_bit, source_b_bit, 257U));
+    cpu::CpuState alias_state{};
+    alias_state.cr = source_a_mask | source_b_mask;
+    const auto alias_result = interpreter.step(alias_state, mem);
+    check(alias_result.status == cpu::StepStatus::executed &&
+              (alias_state.cr & source_a_mask) != 0U,
+          "CR logical operations read source bits before writing an aliased target");
+}
+
 void test_move_condition_register_from_xer() {
     using namespace project360;
     memory::GuestMemory mem(8);
@@ -1529,6 +1606,7 @@ int main() {
     test_compare_registers();
     test_condition_register_transfers();
     test_move_condition_register_field();
+    test_condition_register_logical_operations();
     test_move_condition_register_from_xer();
     test_conditional_branches();
     test_absolute_and_register_branches();

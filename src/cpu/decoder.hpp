@@ -5,6 +5,18 @@
 
 namespace project360::cpu {
 
+enum class CrLogicalOperation {
+    invalid,
+    and_,
+    and_complement,
+    equivalent,
+    nand,
+    nor,
+    or_,
+    or_complement,
+    xor_
+};
+
 enum class Opcode {
     addi,
     addis,
@@ -60,6 +72,7 @@ enum class Opcode {
     cmpli,
     move_from_condition_register,
     move_condition_register_field,
+    condition_register_logical,
     move_to_condition_register_fields,
     move_condition_register_from_xer,
     lbz,
@@ -90,6 +103,7 @@ struct DecodedInstruction {
     std::uint8_t rb{};
     std::uint8_t bf{};
     std::uint8_t bfa{};
+    CrLogicalOperation cr_logical_operation{};
     std::uint8_t bo{};
     std::uint8_t bi{};
     std::uint8_t branch_hint{};
