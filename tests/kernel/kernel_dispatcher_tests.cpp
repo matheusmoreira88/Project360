@@ -54,6 +54,19 @@ int main() {
               state.gpr[4] == initial.size() && state.gpr[14] == 0x1122334455667788ULL,
           "successful void import returns through LR and preserves argument/nonvolatile GPRs");
 
+    state.gpr[3] = data_page;
+    state.gpr[4] = initial.size();
+    state.gpr[5] = 0x1234abU;
+    state.lr = 0x2237U;
+    const auto filled = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_fill_memory_ordinal}, state, memory);
+    std::uint32_t filled_word = 0U;
+    check(filled == KernelDispatchStatus::handled &&
+              memory.read_u32_be(data_page, filled_word) && filled_word == 0xababababU,
+          "xboxkrnl ordinal 284 fills guest memory with the low byte of GPR5");
+    check(state.pc == 0x2234U,
+          "RtlFillMemory returns through LR after filling its destination");
+
     check(memory.load(GuestMemory::page_size - 2U, initial),
           "test fixture seeds both pages before checking failure atomicity");
     check(memory.map_page(data_page + GuestMemory::page_size, GuestMemory::page_size,
@@ -61,9 +74,10 @@ int main() {
           "second destination page is read-only");
     state.gpr[3] = data_page + GuestMemory::page_size - 2U;
     state.gpr[4] = 4U;
+    state.gpr[5] = 0x5aU;
     state.pc = 0x800200U;
     const auto fault = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_zero_memory_ordinal}, state, memory);
+        {"xboxkrnl.exe", KernelDispatcher::rtl_fill_memory_ordinal}, state, memory);
     std::uint8_t first_byte = 0;
     check(fault == KernelDispatchStatus::guest_memory_fault && state.pc == 0x800200U,
           "memory faults propagate without returning to the guest caller");
@@ -72,7 +86,7 @@ int main() {
           "failed service does not modify writable bytes before a protected page");
     check(memory.read_u8(data_page + GuestMemory::page_size - 1U, first_byte) &&
               first_byte == 0xbbU,
-          "failed cross-page service preserves its entire destination range");
+          "failed RtlFillMemory preserves its entire destination range");
 
     state.gpr[3] = 0x1'0000'0000ULL;
     state.gpr[4] = 1U;
