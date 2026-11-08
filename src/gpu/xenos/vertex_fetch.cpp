@@ -362,4 +362,29 @@ VertexFetchSwizzleResult apply_vertex_fetch_destination_swizzle(
     return result;
 }
 
+VertexFetchExecutionResult execute_vertex_fetch_attribute(
+    const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
+    const memory::GuestMemory& memory, const std::array<float, 4>& source_register,
+    const std::array<float, 4>& missing_component_values,
+    const std::array<float, 4>& previous_destination) {
+    const auto index = resolve_vertex_fetch_index(instruction, source_register);
+    if (!index) return {0U, {}, {}, index.error};
+
+    const auto values = read_vertex_fetch_attribute_values(instruction, descriptor, memory,
+                                                           index.index);
+    if (!values) return {0U, {}, {}, values.error};
+    if (values.components.size() > missing_component_values.size()) {
+        return {0U, {}, {}, "VFETCH format produced more than four logical components"};
+    }
+
+    auto source = missing_component_values;
+    for (std::size_t component = 0U; component < values.components.size(); ++component) {
+        source[component] = values.components[component];
+    }
+    const auto destination = apply_vertex_fetch_destination_swizzle(
+        instruction, source, previous_destination);
+    if (!destination) return {0U, source, {}, destination.error};
+    return {index.index, source, destination.components, {}};
+}
+
 } // namespace project360::gpu::xenos

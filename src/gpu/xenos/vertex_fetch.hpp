@@ -60,6 +60,15 @@ struct VertexFetchIndexResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct VertexFetchExecutionResult {
+    std::uint32_t vertex_index{};
+    std::array<float, 4> source_components{};
+    std::array<float, 4> destination_components{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct VertexFetchInstruction {
     std::uint8_t fetch_constant_index{};
     std::uint8_t format{};
@@ -128,6 +137,15 @@ struct VertexFetchInstructionDecodeResult {
 // source components; selector 7 preserves the corresponding prior register lane.
 [[nodiscard]] VertexFetchSwizzleResult apply_vertex_fetch_destination_swizzle(
     const VertexFetchInstruction& instruction, const std::array<float, 4>& source,
+    const std::array<float, 4>& previous_destination);
+
+// Connects source-index selection, bounded attribute reads, numeric conversion,
+// caller-specified values for absent lanes, and destination swizzling. This
+// computes a result only; it does not write guest shader registers.
+[[nodiscard]] VertexFetchExecutionResult execute_vertex_fetch_attribute(
+    const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
+    const memory::GuestMemory& memory, const std::array<float, 4>& source_register,
+    const std::array<float, 4>& missing_component_values,
     const std::array<float, 4>& previous_destination);
 
 } // namespace project360::gpu::xenos

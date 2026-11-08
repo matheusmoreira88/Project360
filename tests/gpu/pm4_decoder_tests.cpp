@@ -781,6 +781,25 @@ void test_vfetch_instruction_and_attribute_range() {
         check(half && half.components == std::vector<float>{1.0F, -2.0F},
               "VFETCH converts two IEEE binary16 components to float");
 
+        auto execution_instruction = at_offset(31U, false, false, 2);
+        execution_instruction.destination_swizzle = static_cast<std::uint16_t>(
+            0U | (1U << 3U) | (2U << 6U) | (3U << 9U));
+        const auto execution = execute_vertex_fetch_attribute(
+            execution_instruction, packed_descriptor.descriptor, memory,
+            {0.0F, 0.0F, 0.0F, 0.0F}, {7.0F, 8.0F, 9.0F, 10.0F},
+            {11.0F, 12.0F, 13.0F, 14.0F});
+        check(execution && execution.vertex_index == 0U &&
+                  execution.source_components == std::array<float, 4>{1.0F, -2.0F, 9.0F,
+                                                                      10.0F} &&
+                  execution.destination_components == execution.source_components,
+              "VFETCH execution composes index, bounded conversion, explicit missing lanes and swizzle");
+        const auto failed_execution = execute_vertex_fetch_attribute(
+            execution_instruction, packed_descriptor.descriptor, memory,
+            {0.0F, 0.0F, -1.0F, 0.0F}, {7.0F, 8.0F, 9.0F, 10.0F},
+            {11.0F, 12.0F, 13.0F, 14.0F});
+        check(!failed_execution && failed_execution.error.find("outside") != std::string::npos,
+              "VFETCH execution propagates invalid source-index failures without a result");
+
         const std::array<std::byte, 16> float_vector{
             std::byte{0x00}, std::byte{0x00}, std::byte{0x80}, std::byte{0x3f},
             std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0xc0},
