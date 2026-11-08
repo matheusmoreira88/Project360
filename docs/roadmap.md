@@ -17,6 +17,10 @@ The roadmap tracks evidence rather than estimated completion percentages.
 | 10 — Performance | Not started | Reproducible benchmarks and profiling. |
 | 11 — Expansion | Not started | Depends on prior compatibility evidence. |
 
+## Frontend status
+
+An early optional Qt 6 Widgets desktop shell is present in `src/frontend/qt`: dark Project360 theme, library view, local `.xex` path selection, and explicit unavailable states. File entries are session-only. It does not parse, persist, or run executables. The GUI has not been compiled or visually validated on this development environment because Qt 6 is not installed; core emulator phases remain independent of this optional target.
+
 ## Next engineering step
 
 Continue with additional integer operations and branch forms, then model CPU exception state and broaden instruction coverage. The flat guest buffer still is not a virtual memory subsystem. Avoid starting loader or game-specific work until the CPU subset is broader and its semantics have a verified execution baseline.

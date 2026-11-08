@@ -12,7 +12,11 @@ Project360 is an original Xbox 360 emulation project. This repository currently 
 - Unsupported or invalid instruction forms report explicit faults. Arithmetic `record` on `add` updates CR0.
 - A dependency-free test executable covering arithmetic, logical operations, shifts/rotates, memory, byte order, branches, bounds and unsupported instructions.
 
-This is not yet a complete PowerPC or Xenon implementation. Floating-point/SIMD state, exceptions, atomic operations, MMU, kernel, loader, GPU, audio, input and UI remain unsupported. The instruction and data access behavior here is a testable initial subset, not a compatibility claim for commercial titles.
+This is not yet a complete PowerPC or Xenon implementation. Floating-point/SIMD state, exceptions, atomic operations, MMU, kernel, loader, GPU, audio and input remain unsupported. The desktop frontend is an early scaffold described below. The instruction and data access behavior here is a testable initial subset, not a compatibility claim for commercial titles.
+
+## Desktop interface (early scaffold)
+
+A separate Qt 6 Widgets desktop target provides a Steam-inspired library shell with a local `.xex` file picker. Adding a file only lists its local path for the current session; it does not parse metadata, persist the library, or execute the file. The **Iniciar** action is intentionally disabled until the loader and required runtime subsystems exist. Qt 6.5 or newer with the Widgets module is needed to build this optional target. If Qt is not found, CMake still configures the core, smoke executable, and tests.
 
 ## Build and run on Windows
 
@@ -27,6 +31,14 @@ out\build\windows-debug\Debug\project360.exe
 ```
 
 The smoke program should report `r3=7 r4=12 r5=19`. The test target uses a small built-in harness and requires no downloaded test framework. Toolchain availability and these commands must be verified on the target machine before claiming a successful build.
+
+When Qt is installed and discoverable by CMake, the GUI target is `project360_gui`:
+
+```powershell
+cmake --build --preset debug --target project360_gui
+```
+
+See [docs/frontend.md](docs/frontend.md) for the current interface scope and build note.
 
 ## Project status
 
