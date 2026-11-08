@@ -282,8 +282,8 @@ VertexFetchValuesResult read_vertex_fetch_attribute_values(
         instruction.storage_dword_count != info.dwords) {
         return {{}, "VFETCH format metadata is unsupported or inconsistent"};
     }
-    if (info.floating_point && instruction.exponent_adjust != 0) {
-        return {{}, "VFETCH exponent adjustment is not implemented for floating formats"};
+    if (instruction.exponent_adjust != 0) {
+        return {{}, "VFETCH exponent adjustment is not implemented"};
     }
     if (!info.floating_point && instruction.signed_repeating_fraction &&
         instruction.normalized_number_format && instruction.format_component_all) {

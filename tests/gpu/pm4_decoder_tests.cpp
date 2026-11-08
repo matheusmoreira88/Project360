@@ -775,6 +775,11 @@ void test_vfetch_instruction_and_attribute_range() {
             at_offset(25U, true, false, 1), packed_descriptor.descriptor, memory, 0U);
         check(unsigned_int && unsigned_int.components == std::vector<float>{512.0F, 1.0F},
               "VFETCH converts packed 16-bit integer components without normalization");
+        auto integer_exponent_adjust = at_offset(25U, true, false, 1);
+        integer_exponent_adjust.exponent_adjust = 1;
+        check(!read_vertex_fetch_attribute_values(integer_exponent_adjust,
+                                                  packed_descriptor.descriptor, memory, 0U),
+              "VFETCH reports unsupported exponent adjustment instead of ignoring it for integers");
 
         const auto half = read_vertex_fetch_attribute_values(
             at_offset(31U, false, false, 2), packed_descriptor.descriptor, memory, 0U);
