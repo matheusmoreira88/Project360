@@ -1434,6 +1434,44 @@ void test_pm4_sequential_draw_dispatch() {
     check(!rejected_truncated_immediate && rejected_truncated_immediate.draws.empty() &&
               rejected_truncated_immediate.error.find("payload must match") != std::string::npos,
           "PM4_IM_LOAD_IMMEDIATE validates declared dwords against packet payload bounds");
+
+    std::vector<std::uint8_t> predicated_shader_load_skipped;
+    append_u32_be(predicated_shader_load_skipped,
+                  0xc0000000U | (1U << 16U) | (0x50U << 8U)); // SET_BIN_MASK.
+    append_u32_be(predicated_shader_load_skipped, 0U);
+    append_u32_be(predicated_shader_load_skipped, 1U);
+    append_u32_be(predicated_shader_load_skipped,
+                  0xc0000000U | (1U << 16U) | (0x51U << 8U)); // SET_BIN_SELECT.
+    append_u32_be(predicated_shader_load_skipped, 0U);
+    append_u32_be(predicated_shader_load_skipped, 0U);
+    append_u32_be(predicated_shader_load_skipped, 0xc0000001U | (0x27U << 8U));
+    append_u32_be(predicated_shader_load_skipped, 0U); // Invalid IM_LOAD body, skipped by bin test.
+    const auto skipped_bin_shader_load = process_pm4_draw_stream(
+        predicated_shader_load_skipped, initial_registers, memory);
+    check(skipped_bin_shader_load && skipped_bin_shader_load.draws.empty() &&
+              skipped_bin_shader_load.final_registers == initial_registers,
+          "PM4 bin mask skips a predicated shader packet when no selected bin matches");
+
+    std::vector<std::uint8_t> predicated_shader_load_selected;
+    append_u32_be(predicated_shader_load_selected,
+                  0xc0000000U | (0x60U << 8U)); // SET_BIN_MASK_LO.
+    append_u32_be(predicated_shader_load_selected, 1U);
+    append_u32_be(predicated_shader_load_selected,
+                  0xc0000000U | (0x61U << 8U)); // SET_BIN_MASK_HI.
+    append_u32_be(predicated_shader_load_selected, 0x80000000U);
+    append_u32_be(predicated_shader_load_selected,
+                  0xc0000000U | (0x62U << 8U)); // SET_BIN_SELECT_LO.
+    append_u32_be(predicated_shader_load_selected, 1U);
+    append_u32_be(predicated_shader_load_selected,
+                  0xc0000000U | (0x63U << 8U)); // SET_BIN_SELECT_HI.
+    append_u32_be(predicated_shader_load_selected, 0x80000000U);
+    append_u32_be(predicated_shader_load_selected, 0xc0000001U | (0x27U << 8U));
+    append_u32_be(predicated_shader_load_selected, 0U);
+    const auto selected_bin_shader_load = process_pm4_draw_stream(
+        predicated_shader_load_selected, initial_registers, memory);
+    check(!selected_bin_shader_load && selected_bin_shader_load.draws.empty() &&
+              selected_bin_shader_load.error.find("requires an address") != std::string::npos,
+          "PM4 bin-mask low/high state selects predicated shader packets transactionally");
 }
 
 void test_xenos_scissor_register_resolution() {

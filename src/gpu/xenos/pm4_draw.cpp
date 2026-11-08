@@ -16,6 +16,13 @@ constexpr std::uint8_t kDrawIndx = 0x22U;
 constexpr std::uint8_t kDrawIndx2 = 0x36U;
 constexpr std::uint8_t kImLoad = 0x27U;
 constexpr std::uint8_t kImLoadImmediate = 0x2bU;
+constexpr std::uint8_t kSetBinMask = 0x50U;
+constexpr std::uint8_t kSetBinSelect = 0x51U;
+constexpr std::uint8_t kSetBinMaskLow = 0x60U;
+constexpr std::uint8_t kSetBinMaskHigh = 0x61U;
+constexpr std::uint8_t kSetBinSelectLow = 0x62U;
+constexpr std::uint8_t kSetBinSelectHigh = 0x63U;
+constexpr std::uint8_t kXeSwap = 0x64U;
 constexpr std::uint32_t kDmaSizeWordMask = 0x00ffffffU;
 constexpr std::size_t kMaximumDrawSnapshotBytes = 32U * 1024U * 1024U;
 
@@ -302,6 +309,8 @@ Pm4DrawStreamResult process_pm4_draw_stream(
         std::size_t prepared_register_snapshot_bytes = 0U;
         std::shared_ptr<const ShaderMicrocode> active_vertex_shader;
         std::shared_ptr<const ShaderMicrocode> active_pixel_shader;
+        std::uint64_t bin_mask = 0U;
+        std::uint64_t bin_select = 0U;
         for (const auto& packet : decoded.packets) {
             const auto byte_offset = packet.header_word_offset * 4U;
             const auto packet_byte_size =
@@ -312,13 +321,52 @@ Pm4DrawStreamResult process_pm4_draw_stream(
             local_packet.payload_word_offset = 1U;
             const std::array<Packet, 1> packet_list{local_packet};
 
-            if (packet.type == PacketType::type3_command &&
-                (packet.opcode == kImLoad || packet.opcode == kImLoadImmediate)) {
-                if (packet.predicated) {
-                    return {{}, {}, "Predicated PM4 shader loads require bin-selection state",
-                            packet.header_word_offset};
+            if (packet.type == PacketType::type3_command) {
+                if (packet.predicated &&
+                    ((bin_select & bin_mask) == 0U || packet.opcode == kXeSwap)) {
+                    continue;
                 }
 
+                if (packet.opcode == kSetBinMask || packet.opcode == kSetBinSelect) {
+                    if (packet.payload_word_count != 2U) {
+                        return {{}, {}, "PM4 bin-mask/select command requires two payload dwords",
+                                packet.header_word_offset};
+                    }
+                    const auto high = read_u32_be(packet_stream, 4U);
+                    const auto low = read_u32_be(packet_stream, 8U);
+                    const auto value = (static_cast<std::uint64_t>(high) << 32U) | low;
+                    if (packet.opcode == kSetBinMask) {
+                        bin_mask = value;
+                    } else {
+                        bin_select = value;
+                    }
+                    continue;
+                }
+
+                if (packet.opcode == kSetBinMaskLow || packet.opcode == kSetBinMaskHigh ||
+                    packet.opcode == kSetBinSelectLow ||
+                    packet.opcode == kSetBinSelectHigh) {
+                    if (packet.payload_word_count != 1U) {
+                        return {{}, {}, "PM4 bin-mask/select half command requires one payload dword",
+                                packet.header_word_offset};
+                    }
+                    const auto value = static_cast<std::uint64_t>(
+                        read_u32_be(packet_stream, 4U));
+                    const bool high = packet.opcode == kSetBinMaskHigh ||
+                                      packet.opcode == kSetBinSelectHigh;
+                    const auto shift = high ? 32U : 0U;
+                    const auto part_mask = std::uint64_t{0xffffffffU} << shift;
+                    auto& target = packet.opcode == kSetBinMaskLow ||
+                                           packet.opcode == kSetBinMaskHigh
+                                       ? bin_mask
+                                       : bin_select;
+                    target = (target & ~part_mask) | (value << shift);
+                    continue;
+                }
+            }
+
+            if (packet.type == PacketType::type3_command &&
+                (packet.opcode == kImLoad || packet.opcode == kImLoadImmediate)) {
                 std::uint32_t shader_type = 0U;
                 std::uint32_t source_address = 0U;
                 std::uint32_t start_dword = 0U;

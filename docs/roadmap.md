@@ -2,7 +2,7 @@
 
 The roadmap tracks evidence rather than estimated completion percentages.
 
-Latest GPU increment: PM4 `IM_LOAD` and `IM_LOAD_IMMEDIATE` now capture bounded vertex/pixel microcode into immutable draw snapshots. Synthetic tests connect captured vertex code to the explicit-prefix CPU EXEC reference runner and reject partial records/truncated packets. This does not execute external titles or render loaded game shaders; details are in [Xenos shader work](hardware/xenos_shader.md).
+Latest GPU increment: PM4 `IM_LOAD` and `IM_LOAD_IMMEDIATE` capture bounded vertex/pixel microcode into immutable draw snapshots. The stream processor also tracks bin mask/selection state and applies it to predicated type-3 packet dispatch. Synthetic tests connect captured vertex code to the explicit-prefix CPU EXEC reference runner and reject malformed shader loads. This does not execute external titles or render loaded game shaders; details are in [Xenos shader work](hardware/xenos_shader.md).
 
 | Phase | Status | Evidence / acceptance still needed |
 |---|---|---|
