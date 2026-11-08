@@ -28,6 +28,32 @@ ShaderExecInstruction decode_shader_exec_instruction(
     };
 }
 
+ShaderExecPairDecodeResult decode_shader_exec_pairs(
+    std::span<const std::array<std::uint32_t, 3>> packed_pairs) {
+    constexpr std::size_t maximum_control_flow_instructions = 4096U;
+    if (packed_pairs.empty()) {
+        return {{}, "Xenos shader has no packed control-flow instructions"};
+    }
+    if (packed_pairs.size() > maximum_control_flow_instructions / 2U) {
+        return {{}, "Xenos shader control flow exceeds the 4,096-instruction limit"};
+    }
+
+    ShaderExecPairDecodeResult result;
+    try {
+        result.instructions.reserve(packed_pairs.size() * 2U);
+        for (const auto& packed : packed_pairs) {
+            const std::array<std::uint32_t, 2> first{packed[0], packed[1] & 0xffffU};
+            const std::array<std::uint32_t, 2> second{
+                (packed[1] >> 16U) | (packed[2] << 16U), packed[2] >> 16U};
+            result.instructions.push_back(decode_shader_exec_instruction(first));
+            result.instructions.push_back(decode_shader_exec_instruction(second));
+        }
+    } catch (const std::bad_alloc&) {
+        return {{}, "Not enough host memory to decode Xenos shader control flow"};
+    }
+    return result;
+}
+
 ShaderExecResult execute_shader_exec_block(
     const ShaderExecInstruction& exec,
     std::span<const std::array<std::uint32_t, 3>> ucode,

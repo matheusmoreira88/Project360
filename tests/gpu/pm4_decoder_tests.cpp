@@ -724,6 +724,31 @@ void test_shader_alu_add_mul_pair_execution() {
 
 void test_shader_exec_block_ordered_alu_and_vfetch() {
     using namespace project360::gpu::xenos;
+    const std::uint32_t first_word0 = 0x123U | (3U << 12U) | (0xabcU << 16U);
+    const std::uint32_t first_word1 = 1U << 12U;
+    const std::uint32_t second_word0 = 0x456U | (1U << 12U) | (0x789U << 16U);
+    const std::uint32_t second_word1 = 2U << 12U;
+    const std::array<std::array<std::uint32_t, 3>, 1> packed_control_flow{{
+        {first_word0, first_word1 | (second_word0 << 16U),
+         (second_word0 >> 16U) | (second_word1 << 16U)}}};
+    const auto decoded_pair = decode_shader_exec_pairs(packed_control_flow);
+    check(decoded_pair && decoded_pair.instructions.size() == 2U &&
+              decoded_pair.instructions[0].instruction_address == 0x123U &&
+              decoded_pair.instructions[0].instruction_count == 3U &&
+              decoded_pair.instructions[0].sequence == 0xabcU &&
+              decoded_pair.instructions[0].opcode == 1U &&
+              decoded_pair.instructions[1].instruction_address == 0x456U &&
+              decoded_pair.instructions[1].instruction_count == 1U &&
+              decoded_pair.instructions[1].sequence == 0x789U &&
+              decoded_pair.instructions[1].opcode == 2U,
+          "Xenos packed three-dword control flow unpacks both EXEC headers by literal fields");
+    const auto empty_control_flow = decode_shader_exec_pairs({});
+    std::vector<std::array<std::uint32_t, 3>> oversized_control_flow(2049U);
+    const auto oversized_result = decode_shader_exec_pairs(oversized_control_flow);
+    check(!empty_control_flow && !oversized_result &&
+              empty_control_flow.instructions.empty() && oversized_result.instructions.empty(),
+          "Xenos packed control-flow decoder rejects empty and oversized inputs without partial output");
+
     project360::memory::GuestMemory memory(128U);
     const std::array<std::byte, 32> vertex_data{
         std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0},

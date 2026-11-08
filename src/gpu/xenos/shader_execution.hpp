@@ -28,6 +28,13 @@ struct ShaderExecInstruction {
     bool condition{};
 };
 
+struct ShaderExecPairDecodeResult {
+    std::vector<ShaderExecInstruction> instructions;
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct ShaderExecResult {
     ShaderAluTemporaryRegisterBank registers{};
     std::uint8_t instructions_executed{};
@@ -62,6 +69,12 @@ struct ShaderExecSequenceResult {
 // values remain raw so unsupported control flow can be rejected by execution.
 [[nodiscard]] ShaderExecInstruction decode_shader_exec_instruction(
     const std::array<std::uint32_t, 2>& words) noexcept;
+
+// Unpacks the paired 64-bit control-flow instructions stored in each Xenos
+// three-dword control-flow record. The opcode stays raw; execution validates
+// support and addresses separately.
+[[nodiscard]] ShaderExecPairDecodeResult decode_shader_exec_pairs(
+    std::span<const std::array<std::uint32_t, 3>> packed_pairs);
 
 // Executes one EXEC/EXEC_END or bool-constant COND_EXEC/COND_EXEC_END block in
 // declared sequence order. Conditional blocks require absolute addressing and
