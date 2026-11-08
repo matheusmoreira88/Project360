@@ -1,0 +1,523 @@
+#include "cpu/interpreter.hpp"
+
+#include "cpu/decoder.hpp"
+
+#include <array>
+#include <bit>
+#include <cstdint>
+#include <limits>
+#include <utility>
+
+namespace project360::cpu {
+namespace {
+
+constexpr std::uint32_t kXerSummaryOverflow = 0x80000000U;
+constexpr std::uint32_t kXerOverflow = 0x40000000U;
+constexpr std::uint32_t kXerCarry = 0x20000000U;
+
+StepResult fault(std::string message) { return {StepStatus::fault, std::move(message)}; }
+
+struct AddResult {
+    std::uint64_t value{};
+    bool carry{};
+    bool overflow{};
+};
+
+AddResult add_values(std::uint64_t left, std::uint64_t right, bool carry_in) {
+    const auto partial = left + right;
+    const bool carry_from_partial = partial < left;
+    const auto result = partial + static_cast<std::uint64_t>(carry_in);
+    const bool carry_from_input = result < partial;
+    const auto lower_sum = (left & 0x7fffffffffffffffULL) +
+                           (right & 0x7fffffffffffffffULL) + static_cast<std::uint64_t>(carry_in);
+    const bool carry_into_sign = (lower_sum >> 63U) != 0U;
+    const bool carry_out = carry_from_partial || carry_from_input;
+    const bool overflow = carry_into_sign != carry_out;
+    return {result, carry_from_partial || carry_from_input, overflow};
+}
+
+void set_xer_overflow(CpuState& state, bool overflow) {
+    state.xer = (state.xer & ~kXerOverflow) | (overflow ? kXerOverflow : 0U);
+    if (overflow) state.xer |= kXerSummaryOverflow;
+}
+
+void set_xer_carry(CpuState& state, bool carry) {
+    state.xer = (state.xer & ~kXerCarry) | (carry ? kXerCarry : 0U);
+}
+
+bool signed_multiply_overflow(std::int64_t left, std::int64_t right) {
+    constexpr auto minimum = std::numeric_limits<std::int64_t>::min();
+    constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
+    if (left == 0 || right == 0) return false;
+    if (left == -1) return right == minimum;
+    if (right == -1) return left == minimum;
+    if (left > 0) {
+        return right > 0 ? left > maximum / right : right < minimum / left;
+    }
+    return right > 0 ? left < minimum / right : right < maximum / left;
+}
+
+void set_cr_field(CpuState& state, std::uint8_t bf, std::uint32_t field) {
+    const auto shift = static_cast<unsigned>(28U - 4U * bf);
+    const auto mask = 0xfU << shift;
+    state.cr = (state.cr & ~mask) | ((field & 0xfU) << shift);
+}
+
+std::uint32_t compare_field(bool less, bool greater, bool summary_overflow) {
+    std::uint32_t field = 0;
+    if (less) field = 0x8U;
+    else if (greater) field = 0x4U;
+    else field = 0x2U;
+    if (summary_overflow) field |= 1U;
+    return field;
+}
+
+std::uint32_t rotate_mask(std::uint8_t begin, std::uint8_t end) {
+    std::uint32_t mask = 0;
+    for (unsigned bit = 0; bit < 32U; ++bit) {
+        const bool selected = begin <= end ? (bit >= begin && bit <= end)
+                                          : (bit >= begin || bit <= end);
+        if (selected) mask |= 1U << (31U - bit);
+    }
+    return mask;
+}
+
+bool evaluate_branch_condition(CpuState& state, std::uint8_t bo, std::uint8_t bi) {
+    const bool ignore_condition = (bo & 0x10U) != 0U;
+    const bool expected_condition = (bo & 0x08U) != 0U;
+    const bool condition_bit = ((state.cr >> (31U - bi)) & 1U) != 0U;
+    const bool condition_ok = ignore_condition || condition_bit == expected_condition;
+
+    const bool ignore_count = (bo & 0x04U) != 0U;
+    const bool expect_zero_count = (bo & 0x02U) != 0U;
+    if (!ignore_count) --state.ctr;
+    const bool count_ok = ignore_count || ((state.ctr != 0U) != expect_zero_count);
+    return condition_ok && count_ok;
+}
+
+void set_cr0(CpuState& state, std::uint64_t value) {
+    const auto signed_value = std::bit_cast<std::int64_t>(value);
+    set_cr_field(state, 0, compare_field(signed_value < 0, signed_value > 0,
+                                         (state.xer & 0x80000000U) != 0U));
+}
+
+} // namespace
+
+StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const {
+    if ((state.pc & 3U) != 0U) return fault("unaligned instruction address");
+    std::uint32_t word = 0;
+    if (!memory.read_u32_be(state.pc, word)) return fault("instruction fetch out of range");
+    const auto decoded = decode(word);
+    if (!decoded) return fault("PC 0x" + std::to_string(state.pc) + ": " + decoded.error);
+
+    const auto ins = decoded.instruction;
+    const auto old_pc = state.pc;
+    auto next_pc = old_pc + 4U;
+    const auto base = ins.ra == 0 ? 0U : state.gpr[ins.ra];
+    switch (ins.opcode) {
+    case Opcode::addi:
+        state.gpr[ins.rt] = base + static_cast<std::uint64_t>(ins.immediate);
+        break;
+    case Opcode::mulli: {
+        const auto multiplier = static_cast<std::uint64_t>(ins.immediate);
+        state.gpr[ins.rt] = state.gpr[ins.ra] * multiplier;
+        break;
+    }
+    case Opcode::addis:
+        state.gpr[ins.rt] = base + (static_cast<std::uint64_t>(ins.immediate) << 16U);
+        break;
+    case Opcode::ori:
+        state.gpr[ins.rt] = state.gpr[ins.ra] | static_cast<std::uint64_t>(ins.immediate);
+        break;
+    case Opcode::oris:
+        state.gpr[ins.rt] = state.gpr[ins.ra] | (static_cast<std::uint64_t>(ins.immediate) << 16U);
+        break;
+    case Opcode::xori:
+        state.gpr[ins.rt] = state.gpr[ins.ra] ^ static_cast<std::uint64_t>(ins.immediate);
+        break;
+    case Opcode::xoris:
+        state.gpr[ins.rt] = state.gpr[ins.ra] ^ (static_cast<std::uint64_t>(ins.immediate) << 16U);
+        break;
+    case Opcode::andi:
+    case Opcode::andis: {
+        const auto immediate = static_cast<std::uint64_t>(ins.immediate) <<
+                               (ins.opcode == Opcode::andis ? 16U : 0U);
+        const auto value = state.gpr[ins.ra] & immediate;
+        state.gpr[ins.rt] = value;
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
+    case Opcode::and_register:
+    case Opcode::and_complement_register:
+    case Opcode::equivalent_register:
+    case Opcode::nand_register:
+    case Opcode::nor_register:
+    case Opcode::or_register:
+    case Opcode::or_complement_register:
+    case Opcode::xor_register: {
+        const auto left = state.gpr[ins.rt];
+        const auto right = state.gpr[ins.rb];
+        std::uint64_t value = 0;
+        switch (ins.opcode) {
+        case Opcode::and_register: value = left & right; break;
+        case Opcode::and_complement_register: value = left & ~right; break;
+        case Opcode::equivalent_register: value = ~(left ^ right); break;
+        case Opcode::nand_register: value = ~(left & right); break;
+        case Opcode::nor_register: value = ~(left | right); break;
+        case Opcode::or_register: value = left | right; break;
+        case Opcode::or_complement_register: value = left | ~right; break;
+        case Opcode::xor_register: value = left ^ right; break;
+        default: break;
+        }
+        state.gpr[ins.ra] = value;
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
+    case Opcode::extend_sign_byte:
+    case Opcode::extend_sign_halfword:
+    case Opcode::extend_sign_word: {
+        std::int64_t value = 0;
+        if (ins.opcode == Opcode::extend_sign_byte) {
+            const auto low = static_cast<std::uint8_t>(state.gpr[ins.rt]);
+            value = std::bit_cast<std::int8_t>(low);
+        } else if (ins.opcode == Opcode::extend_sign_halfword) {
+            const auto low = static_cast<std::uint16_t>(state.gpr[ins.rt]);
+            value = std::bit_cast<std::int16_t>(low);
+        } else {
+            const auto low = static_cast<std::uint32_t>(state.gpr[ins.rt]);
+            value = std::bit_cast<std::int32_t>(low);
+        }
+        state.gpr[ins.ra] = static_cast<std::uint64_t>(value);
+        if (ins.record) set_cr0(state, state.gpr[ins.ra]);
+        break;
+    }
+    case Opcode::rotate_left_word_mask: {
+        const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);
+        const auto rotated = std::rotl(source, static_cast<int>(ins.shift));
+        const auto value = static_cast<std::uint32_t>(rotated & rotate_mask(ins.mask_begin, ins.mask_end));
+        state.gpr[ins.ra] = value;
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
+    case Opcode::shift_left_word:
+    case Opcode::shift_right_word: {
+        const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);
+        const auto amount = static_cast<unsigned>(state.gpr[ins.rb] & 0x3fU);
+        std::uint32_t value = 0;
+        if (amount < 32U) {
+            value = ins.opcode == Opcode::shift_left_word ? source << amount : source >> amount;
+        }
+        state.gpr[ins.ra] = value;
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
+    case Opcode::shift_right_algebraic_word: {
+        const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);
+        const auto signed_source = std::bit_cast<std::int32_t>(source);
+        const auto amount = static_cast<unsigned>(state.gpr[ins.rb] & 0x3fU);
+        const bool negative = signed_source < 0;
+        const auto shifted = amount >= 32U ? (negative ? -1 : 0) : (signed_source >> amount);
+        bool carry = false;
+        if (amount >= 32U) {
+            carry = negative && source != 0U;
+        } else if (amount != 0U) {
+            const auto discarded_mask = (1U << amount) - 1U;
+            carry = negative && (source & discarded_mask) != 0U;
+        }
+        const auto value = static_cast<std::uint64_t>(static_cast<std::int64_t>(shifted));
+        state.gpr[ins.ra] = value;
+        set_xer_carry(state, carry);
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
+    case Opcode::add:
+    case Opcode::addc:
+    case Opcode::adde: {
+        const bool carry_in = ins.opcode == Opcode::adde && (state.xer & kXerCarry) != 0U;
+        const auto result = add_values(state.gpr[ins.ra], state.gpr[ins.rb], carry_in);
+        state.gpr[ins.rt] = result.value;
+        if (ins.opcode == Opcode::addc || ins.opcode == Opcode::adde) {
+            set_xer_carry(state, result.carry);
+        }
+        if (ins.overflow_enable) set_xer_overflow(state, result.overflow);
+        if (ins.record) set_cr0(state, state.gpr[ins.rt]);
+        break;
+    }
+    case Opcode::mullw: {
+        const auto left = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(state.gpr[ins.ra]));
+        const auto right = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(state.gpr[ins.rb]));
+        const auto product = static_cast<std::int64_t>(left) * static_cast<std::int64_t>(right);
+        state.gpr[ins.rt] = static_cast<std::uint64_t>(product);
+        if (ins.overflow_enable) {
+            const bool overflow = product < std::numeric_limits<std::int32_t>::min() ||
+                                  product > std::numeric_limits<std::int32_t>::max();
+            set_xer_overflow(state, overflow);
+        }
+        if (ins.record) set_cr0(state, state.gpr[ins.rt]);
+        break;
+    }
+    case Opcode::mulld: {
+        const auto left = std::bit_cast<std::int64_t>(state.gpr[ins.ra]);
+        const auto right = std::bit_cast<std::int64_t>(state.gpr[ins.rb]);
+        const auto result = state.gpr[ins.ra] * state.gpr[ins.rb];
+        state.gpr[ins.rt] = result;
+        if (ins.overflow_enable) set_xer_overflow(state, signed_multiply_overflow(left, right));
+        if (ins.record) set_cr0(state, result);
+        break;
+    }
+    case Opcode::addic: {
+        const auto result = add_values(state.gpr[ins.ra], static_cast<std::uint64_t>(ins.immediate), false);
+        state.gpr[ins.rt] = result.value;
+        set_xer_carry(state, result.carry);
+        if (ins.record) set_cr0(state, result.value);
+        break;
+    }
+    case Opcode::subf:
+    case Opcode::subfc:
+    case Opcode::subfe:
+    case Opcode::subfic: {
+        const auto minuend = ins.opcode == Opcode::subfic
+                                 ? static_cast<std::uint64_t>(ins.immediate)
+                                 : state.gpr[ins.rb];
+        const auto subtrahend = state.gpr[ins.ra];
+        const bool carry_in = ins.opcode != Opcode::subfe || (state.xer & kXerCarry) != 0U;
+        const auto result = add_values(minuend, ~subtrahend, carry_in);
+        state.gpr[ins.rt] = result.value;
+        if (ins.opcode != Opcode::subf) set_xer_carry(state, result.carry);
+        if (ins.overflow_enable) set_xer_overflow(state, result.overflow);
+        if (ins.record) set_cr0(state, result.value);
+        break;
+    }
+    case Opcode::cmp: {
+        bool less = false;
+        bool greater = false;
+        if (ins.wide) {
+            const auto left = std::bit_cast<std::int64_t>(state.gpr[ins.ra]);
+            const auto right = std::bit_cast<std::int64_t>(state.gpr[ins.rb]);
+            less = left < right;
+            greater = left > right;
+        } else {
+            const auto left = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(state.gpr[ins.ra]));
+            const auto right = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(state.gpr[ins.rb]));
+            less = left < right;
+            greater = left > right;
+        }
+        set_cr_field(state, ins.bf, compare_field(less, greater,
+                                                  (state.xer & 0x80000000U) != 0U));
+        break;
+    }
+    case Opcode::cmpl: {
+        bool less = false;
+        bool greater = false;
+        if (ins.wide) {
+            less = state.gpr[ins.ra] < state.gpr[ins.rb];
+            greater = state.gpr[ins.ra] > state.gpr[ins.rb];
+        } else {
+            const auto left = static_cast<std::uint32_t>(state.gpr[ins.ra]);
+            const auto right = static_cast<std::uint32_t>(state.gpr[ins.rb]);
+            less = left < right;
+            greater = left > right;
+        }
+        set_cr_field(state, ins.bf, compare_field(less, greater,
+                                                  (state.xer & 0x80000000U) != 0U));
+        break;
+    }
+    case Opcode::cmpi: {
+        bool less = false;
+        bool greater = false;
+        if (ins.wide) {
+            const auto left = std::bit_cast<std::int64_t>(state.gpr[ins.ra]);
+            less = left < ins.immediate;
+            greater = left > ins.immediate;
+        } else {
+            const auto left = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(state.gpr[ins.ra]));
+            const auto right = static_cast<std::int32_t>(ins.immediate);
+            less = left < right;
+            greater = left > right;
+        }
+        set_cr_field(state, ins.bf, compare_field(less, greater,
+                                                  (state.xer & 0x80000000U) != 0U));
+        break;
+    }
+    case Opcode::cmpli: {
+        bool less = false;
+        bool greater = false;
+        if (ins.wide) {
+            less = state.gpr[ins.ra] < static_cast<std::uint64_t>(ins.immediate);
+            greater = state.gpr[ins.ra] > static_cast<std::uint64_t>(ins.immediate);
+        } else {
+            const auto left = static_cast<std::uint32_t>(state.gpr[ins.ra]);
+            const auto right = static_cast<std::uint32_t>(ins.immediate);
+            less = left < right;
+            greater = left > right;
+        }
+        set_cr_field(state, ins.bf, compare_field(less, greater,
+                                                  (state.xer & 0x80000000U) != 0U));
+        break;
+    }
+    case Opcode::lbz: {
+        std::uint8_t value = 0;
+        const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
+        const auto address = base + offset;
+        if (!memory.read_u8(address, value)) return fault("lbz address fault");
+        state.gpr[ins.rt] = value;
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
+    case Opcode::lhz:
+    case Opcode::lha: {
+        std::uint16_t value = 0;
+        const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
+        const auto address = base + offset;
+        if (!memory.read_u16_be(address, value)) return fault("halfword load alignment or address fault");
+        state.gpr[ins.rt] = ins.opcode == Opcode::lha
+                                ? static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                                      std::bit_cast<std::int16_t>(value)))
+                                : static_cast<std::uint64_t>(value);
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
+    case Opcode::stb: {
+        const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
+        const auto address = base + offset;
+        if (!memory.write_u8(address, static_cast<std::uint8_t>(state.gpr[ins.rt]))) {
+            return fault("stb address fault");
+        }
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
+    case Opcode::sth: {
+        const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
+        const auto address = base + offset;
+        if (!memory.write_u16_be(address, static_cast<std::uint16_t>(state.gpr[ins.rt]))) {
+            return fault("sth alignment or address fault");
+        }
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
+    case Opcode::lwz: {
+        const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
+        const auto address = base + offset;
+        std::uint32_t value = 0;
+        if (!memory.read_u32_be(address, value)) return fault("lwz alignment or address fault");
+        state.gpr[ins.rt] = value;
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
+    case Opcode::lhbrx: {
+        const auto address = base + state.gpr[ins.rb];
+        std::uint16_t value = 0;
+        if (!memory.read_u16_be(address, value)) return fault("lhbrx alignment or address fault");
+        const auto reversed = static_cast<std::uint16_t>((value >> 8U) | (value << 8U));
+        state.gpr[ins.rt] = reversed;
+        break;
+    }
+    case Opcode::lwbrx: {
+        const auto address = base + state.gpr[ins.rb];
+        std::uint32_t value = 0;
+        if (!memory.read_u32_be(address, value)) return fault("lwbrx alignment or address fault");
+        const auto reversed = ((value & 0x000000ffU) << 24U) |
+                              ((value & 0x0000ff00U) << 8U) |
+                              ((value & 0x00ff0000U) >> 8U) |
+                              ((value & 0xff000000U) >> 24U);
+        state.gpr[ins.rt] = reversed;
+        break;
+    }
+    case Opcode::stw: {
+        const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
+        const auto address = base + offset;
+        if (!memory.write_u32_be(address, static_cast<std::uint32_t>(state.gpr[ins.rt]))) {
+            return fault("stw alignment or address fault");
+        }
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
+    case Opcode::sthbrx: {
+        const auto address = base + state.gpr[ins.rb];
+        const auto value = static_cast<std::uint16_t>(state.gpr[ins.rt]);
+        const auto reversed = static_cast<std::uint16_t>((value >> 8U) | (value << 8U));
+        if (!memory.write_u16_be(address, reversed)) {
+            return fault("sthbrx alignment or address fault");
+        }
+        break;
+    }
+    case Opcode::stwbrx: {
+        const auto address = base + state.gpr[ins.rb];
+        const auto value = static_cast<std::uint32_t>(state.gpr[ins.rt]);
+        const auto reversed = ((value & 0x000000ffU) << 24U) |
+                              ((value & 0x0000ff00U) << 8U) |
+                              ((value & 0x00ff0000U) >> 8U) |
+                              ((value & 0xff000000U) >> 24U);
+        if (!memory.write_u32_be(address, reversed)) {
+            return fault("stwbrx alignment or address fault");
+        }
+        break;
+    }
+    case Opcode::lmw: {
+        const auto address = base + static_cast<std::uint64_t>(ins.immediate);
+        const auto count = static_cast<std::size_t>(32U - ins.rt);
+        const auto byte_count = count * sizeof(std::uint32_t);
+        if ((address & 3U) != 0U || !memory.contains(address, byte_count)) {
+            return fault("lmw alignment or address fault");
+        }
+        std::array<std::uint32_t, 32> values{};
+        for (std::size_t i = 0; i < count; ++i) {
+            if (!memory.read_u32_be(address + i * sizeof(std::uint32_t), values[i])) {
+                return fault("lmw alignment or address fault");
+            }
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            state.gpr[static_cast<std::size_t>(ins.rt) + i] = values[i];
+        }
+        break;
+    }
+    case Opcode::stmw: {
+        const auto address = base + static_cast<std::uint64_t>(ins.immediate);
+        const auto count = static_cast<std::size_t>(32U - ins.rt);
+        const auto byte_count = count * sizeof(std::uint32_t);
+        if ((address & 3U) != 0U || !memory.contains(address, byte_count)) {
+            return fault("stmw alignment or address fault");
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto value = static_cast<std::uint32_t>(state.gpr[static_cast<std::size_t>(ins.rt) + i]);
+            if (!memory.write_u32_be(address + i * sizeof(std::uint32_t), value)) {
+                return fault("stmw alignment or address fault");
+            }
+        }
+        break;
+    }
+    case Opcode::branch:
+        if (ins.link) state.lr = old_pc + 4U;
+        next_pc = ins.absolute ? static_cast<std::uint64_t>(ins.immediate)
+                               : old_pc + static_cast<std::uint64_t>(ins.immediate);
+        break;
+    case Opcode::branch_conditional: {
+        if (ins.link) state.lr = old_pc + 4U;
+        if (evaluate_branch_condition(state, ins.bo, ins.bi)) {
+            next_pc = ins.absolute ? static_cast<std::uint64_t>(ins.immediate)
+                                   : old_pc + static_cast<std::uint64_t>(ins.immediate);
+        }
+        break;
+    }
+    case Opcode::branch_lr:
+    case Opcode::branch_ctr: {
+        const auto target = (ins.opcode == Opcode::branch_lr ? state.lr : state.ctr) & ~3ULL;
+        if (ins.link) state.lr = old_pc + 4U;
+        if (evaluate_branch_condition(state, ins.bo, ins.bi)) next_pc = target;
+        break;
+    }
+    }
+    state.pc = next_pc;
+    return {};
+}
+
+StepResult Interpreter::run(CpuState& state, memory::GuestMemory& memory,
+                            std::size_t instruction_limit) const {
+    for (std::size_t i = 0; i < instruction_limit; ++i) {
+        auto result = step(state, memory);
+        if (result.status == StepStatus::fault) return result;
+    }
+    return {StepStatus::instruction_limit_reached, "instruction limit reached"};
+}
+
+} // namespace project360::cpu

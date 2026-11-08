@@ -1,0 +1,17 @@
+name: Windows
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B out/ci -G "Visual Studio 17 2022" -A x64
+      - name: Build Debug
+        run: cmake --build out/ci --config Debug
+      - name: Test Debug
+        run: ctest --test-dir out/ci -C Debug --output-on-failure

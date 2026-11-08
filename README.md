@@ -1,0 +1,33 @@
+# Project360
+
+Project360 is an original Xbox 360 emulation project. This repository currently contains an early foundation and a deliberately small PowerPC interpreter; it does not load Xbox 360 executables or games.
+
+## Current implementation
+
+- C++20 project with CMake and Visual Studio x64 Debug/Release presets.
+- A minimal executable that runs an embedded PowerPC smoke program.
+- A 64-bit GPR CPU state and a bounded guest-memory buffer.
+- Big-endian instruction fetch and bounded 8-, 16- and 32-bit guest data access. Halfword and word accesses enforce natural alignment.
+- Implemented instructions: `addi`, `addis`, `mulli`, `addic`/`addic.`, `subfic`, immediate `ori`/`oris`/`xori`/`xoris`/`andi.`/`andis.`, `add`, `addc`, `adde`, `subf`, `subfc`, `subfe`, `mullw`/`mullwo`, `mulld`/`mulldo`, `extsb`, `extsh`, `extsw`, register logical operations (`and`, `andc`, `eqv`, `nand`, `nor`, `or`, `orc`, `xor`), `slw`, `srw`, `sraw`, `rlwinm`, `cmp`/`cmpl`, `cmpi`/`cmpli`, D-form and indexed loads/stores for byte, halfword and word widths, `lmw`/`stmw`, indexed byte-reversed `lhbrx`, `lwbrx`, `sthbrx`, and `stwbrx`, `b`/`ba`, `bc`/`bca` with supported BO forms, `bclr`, and `bcctr` with supported BO/BH forms. D-form and indexed update accesses reject invalid base/destination register combinations and update RA only after successful memory access. Arithmetic XO forms support OE and Rc where defined; carry instructions track XER.CA with carry-out/no-borrow semantics.
+- Unsupported or invalid instruction forms report explicit faults. Arithmetic `record` on `add` updates CR0.
+- A dependency-free test executable covering arithmetic, logical operations, shifts/rotates, memory, byte order, branches, bounds and unsupported instructions.
+
+This is not yet a complete PowerPC or Xenon implementation. Floating-point/SIMD state, exceptions, atomic operations, MMU, kernel, loader, GPU, audio, input and UI remain unsupported. The instruction and data access behavior here is a testable initial subset, not a compatibility claim for commercial titles.
+
+## Build and run on Windows
+
+Install CMake 3.24 or newer and Visual Studio 2026 with the x64 C++ toolchain, then from this directory run:
+
+```powershell
+cmake --preset windows-debug
+cmake --build --preset debug
+ctest --preset debug
+.
+out\build\windows-debug\Debug\project360.exe
+```
+
+The smoke program should report `r3=7 r4=12 r5=19`. The test target uses a small built-in harness and requires no downloaded test framework. Toolchain availability and these commands must be verified on the target machine before claiming a successful build.
+
+## Project status
+
+See [docs/roadmap.md](docs/roadmap.md), [docs/testing.md](docs/testing.md) and [docs/compatibility.md](docs/compatibility.md). No commercial game compatibility or performance result has been measured.
