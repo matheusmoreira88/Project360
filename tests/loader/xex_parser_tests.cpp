@@ -17,6 +17,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -141,6 +142,40 @@ std::vector<std::byte> make_xbox_pe32() {
     write_le32(image, section + 20U, 0x200U);
     write_le32(image, section + 36U, 0x60000020U);
     return image;
+}
+
+std::vector<std::byte> make_dbgprint_homebrew_xex() {
+    constexpr std::uint32_t image_base = 0x82000U;
+    constexpr std::uint32_t import_thunk = 0x83004U;
+    constexpr std::uint32_t entry_point = 0x83100U;
+    constexpr std::uint32_t format_address = 0x83120U;
+
+    auto pe = make_xbox_pe32();
+    write_le32(pe, 0x98U + 16U, entry_point - image_base);
+    write_le32(pe, 0x178U + 8U, 0x200U);
+    write_le32(pe, 0x178U + 16U, 0x200U);
+    pe.resize(0x400U);
+    write_be32(pe, 0x204U, 0x01000003U); // xboxkrnl.exe DbgPrint, ordinal 3.
+    write_be32(pe, 0x300U, (15U << 26U) | (3U << 21U) | 8U); // lis r3, 8.
+    write_be32(pe, 0x304U, (24U << 26U) | (3U << 21U) | (3U << 16U) |
+                                (format_address & 0xffffU)); // ori r3,r3,0x3120.
+    write_be32(pe, 0x308U, (14U << 26U) | (4U << 21U) | 1U); // li r4,1.
+    constexpr auto branch_pc = entry_point + 0x0cU;
+    constexpr auto branch_displacement =
+        static_cast<std::int32_t>(import_thunk) - static_cast<std::int32_t>(branch_pc);
+    write_be32(pe, 0x30cU,
+               (18U << 26U) |
+                   (static_cast<std::uint32_t>(branch_displacement) & 0x03fffffcU) | 1U);
+    write_be32(pe, 0x310U, (14U << 26U) | (6U << 21U) | 42U); // li r6,42 after return.
+    constexpr char debug_format[] = "Homebrew boot %u";
+    for (std::size_t index = 0U; index < sizeof(debug_format); ++index) {
+        pe[0x320U + index] = static_cast<std::byte>(debug_format[index]);
+    }
+
+    auto xex = make_xex2();
+    write_be32(xex, 0x1cU, entry_point);
+    xex.insert(xex.end(), pe.begin(), pe.end());
+    return xex;
 }
 
 std::vector<std::byte> make_basic_compressed_xex(std::span<const std::byte> xex) {
@@ -699,6 +734,45 @@ int main() {
               "executing a data import faults explicitly without advancing the guest PC");
     } else {
         check(false, "loaded XEX image is available for kernel execution integration");
+    }
+
+    {
+        auto debug_xex = make_dbgprint_homebrew_xex();
+        project360::memory::GuestMemory debug_memory(4U * 1024U * 1024U);
+        const auto debug_loaded = project360::loader::load_xex2(
+            debug_xex, debug_memory, 0U);
+        check(debug_loaded && debug_loaded.image->entry_point == 0x83100U &&
+                  debug_loaded.image->xex.import_libraries.size() == 1U &&
+                  debug_loaded.image->xex.import_libraries[0].import_ordinals ==
+                      std::vector<std::optional<std::uint16_t>>{3U},
+              "minimal synthetic homebrew XEX loads its entry point and DbgPrint import");
+
+        if (debug_loaded) {
+            project360::cpu::CpuState debug_state{};
+            const auto debug_thread =
+                project360::kernel::initialize_main_thread_context(
+                    *debug_loaded.image, debug_memory, debug_state);
+            check(debug_thread && debug_state.pc == 0x83100U && debug_state.gpr[1] != 0U &&
+                      debug_state.gpr[13] == debug_thread.context->pcr_address,
+                  "minimal homebrew XEX receives the bounded main-thread launch context");
+            if (debug_thread) {
+                const project360::kernel::GuestExecutor debug_executor(
+                    *debug_loaded.image,
+                    {debug_thread.context->tls_slot_address,
+                     debug_thread.context->tls_slot_count});
+                std::ostringstream debug_log;
+                auto* const original_log_buffer = std::clog.rdbuf(debug_log.rdbuf());
+                const auto debug_run = debug_executor.run(debug_state, debug_memory, 6U);
+                std::clog.rdbuf(original_log_buffer);
+                check(debug_run.instructions_executed == 6U &&
+                          debug_run.stop.status ==
+                              project360::cpu::StepStatus::instruction_limit_reached &&
+                          debug_state.pc == 0x83114U && debug_state.gpr[6] == 42U &&
+                          debug_log.str().find("[guest] Homebrew boot 1") !=
+                              std::string::npos,
+                      "loaded homebrew XEX initializes a thread, calls DbgPrint and resumes guest code");
+            }
+        }
     }
 
     {
