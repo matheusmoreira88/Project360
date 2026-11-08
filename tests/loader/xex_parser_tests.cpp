@@ -271,23 +271,28 @@ int main() {
 
     auto loadable_pe = make_xbox_pe32();
     write_be32(loadable_pe, 0x200U, (14U << 26U) | (3U << 21U) | 0x5000U);
-    write_be32(loadable_pe, 0x204U, (14U << 26U) | (4U << 21U) | 4U);
+    write_be32(loadable_pe, 0x204U, (14U << 26U) | (4U << 21U) | 8U);
     write_be32(loadable_pe, 0x208U, (14U << 26U) | (5U << 21U) | 0xabU);
     write_be32(loadable_pe, 0x20cU, 0x48000015U); // bl import thunk at +0x14.
-    write_be32(loadable_pe, 0x210U, 0x48000021U); // bl import thunk at +0x20.
-    write_be32(loadable_pe, 0x214U, (14U << 26U) | (6U << 21U) | 9U);
+    write_be32(loadable_pe, 0x210U, (14U << 26U) | (5U << 21U) | 0x1234U);
+    write_be32(loadable_pe, 0x214U, 0x48000011U); // bl import thunk at +0x10.
+    write_be32(loadable_pe, 0x218U, 0x48000019U); // bl import thunk at +0x18.
+    write_be32(loadable_pe, 0x21cU, (14U << 26U) | (6U << 21U) | 9U);
     write_be32(loadable_pe, 0x220U, 0x0100011cU); // thunk, library 0, ordinal 284
+    write_be32(loadable_pe, 0x224U, 0x0100011dU); // thunk, library 0, ordinal 285
     write_be32(loadable_pe, 0x230U, 0x01000140U); // thunk, library 0, ordinal 320
     auto loadable_xex = make_xex2();
     write_be32(loadable_xex, 0x444U, 0x83020U);
-    write_be32(loadable_xex, 0x400U, 0x4cU);
-    write_be32(loadable_xex, 0x41cU, 0x30U);
-    write_be16(loadable_xex, 0x442U, 2U);
-    write_be32(loadable_xex, 0x448U, 0x83030U);
+    write_be32(loadable_xex, 0x400U, 0x50U);
+    write_be32(loadable_xex, 0x41cU, 0x34U);
+    write_be16(loadable_xex, 0x442U, 3U);
+    write_be32(loadable_xex, 0x448U, 0x83024U);
+    write_be32(loadable_xex, 0x44cU, 0x83030U);
     loadable_xex.insert(loadable_xex.end(), loadable_pe.begin(), loadable_pe.end());
     project360::memory::GuestMemory guest_memory(0x5000U);
-    const std::array<std::byte, 4> kernel_destination_seed{
-        std::byte{0xde}, std::byte{0xad}, std::byte{0xbe}, std::byte{0xef}};
+    const std::array<std::byte, 8> kernel_destination_seed{
+        std::byte{0xde}, std::byte{0xad}, std::byte{0xbe}, std::byte{0xef},
+        std::byte{0x89}, std::byte{0xab}, std::byte{0xcd}, std::byte{0xef}};
     check(guest_memory.load(0x4000U, kernel_destination_seed),
           "integration fixture initializes a separate guest kernel destination");
     const auto loaded = project360::loader::load_xex2_uncompressed(loadable_xex,
@@ -296,10 +301,11 @@ int main() {
               loaded.image->entry_point == 0x83000U && loaded.image->mapped_size == 0x2000U,
           "unencrypted uncompressed XEX2 maps decoded Xbox PE image pages");
     check(loaded && loaded.image->xex.import_libraries.size() == 1U &&
-              loaded.image->xex.import_libraries[0].import_types.size() == 2U &&
+              loaded.image->xex.import_libraries[0].import_types.size() == 3U &&
               loaded.image->xex.import_libraries[0].import_types[0] == 1U &&
               loaded.image->xex.import_libraries[0].import_ordinals[0] == 284U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[1] == 320U,
+              loaded.image->xex.import_libraries[0].import_ordinals[1] == 285U &&
+              loaded.image->xex.import_libraries[0].import_ordinals[2] == 320U,
           "loader decodes function-thunk records and Xbox kernel ordinals from PE bytes");
     std::uint32_t loaded_instruction = 0;
     check(guest_memory.fetch_u32_be(0x83000U, loaded_instruction) &&
@@ -326,6 +332,15 @@ int main() {
         std::uint32_t filled_word = 0U;
         const bool fill_visible = guest_memory.read_u32_be(0x5000U, filled_word) &&
                                   filled_word == 0xababababU;
+        const auto set_pattern = executor.step(guest_cpu, guest_memory);
+        const auto call_ulong_import = executor.step(guest_cpu, guest_memory);
+        const auto invoke_ulong_import = executor.step(guest_cpu, guest_memory);
+        std::uint32_t ulong_pattern_first = 0U;
+        std::uint32_t ulong_pattern_second = 0U;
+        const bool ulong_pattern_visible =
+            guest_memory.read_u32_be(0x5000U, ulong_pattern_first) &&
+            guest_memory.read_u32_be(0x5004U, ulong_pattern_second) &&
+            ulong_pattern_first == 0x00001234U && ulong_pattern_second == 0x00001234U;
         const auto call_zero_import = executor.step(guest_cpu, guest_memory);
         const auto invoke_zero_import = executor.step(guest_cpu, guest_memory);
         std::uint32_t cleared_word = 1U;
@@ -335,14 +350,19 @@ int main() {
                   set_fill.status == project360::cpu::StepStatus::executed &&
                   call_import.status == project360::cpu::StepStatus::executed &&
                   invoke_import.status == project360::cpu::StepStatus::executed &&
+                  set_pattern.status == project360::cpu::StepStatus::executed &&
+                  call_ulong_import.status == project360::cpu::StepStatus::executed &&
+                  invoke_ulong_import.status == project360::cpu::StepStatus::executed &&
                   call_zero_import.status == project360::cpu::StepStatus::executed &&
                   invoke_zero_import.status == project360::cpu::StepStatus::executed &&
                   resume_guest.status == project360::cpu::StepStatus::executed,
-              "loaded XEX program calls two imported kernel routines and resumes");
+              "loaded XEX program calls three imported kernel routines and resumes");
         check(fill_visible,
               "XEX RtlFillMemory thunk fills guest bytes using the Xenon argument registers");
+        check(ulong_pattern_visible,
+              "XEX RtlFillMemoryUlong thunk repeats the GPR5 word in big-endian guest memory");
         check(guest_memory.read_u32_be(0x5000U, cleared_word) && cleared_word == 0U &&
-                  guest_cpu.gpr[6] == 9U && guest_cpu.pc == 0x83018U,
+                  guest_cpu.gpr[6] == 9U && guest_cpu.pc == 0x83020U,
               "XEX RtlZeroMemory thunk clears bytes and returns through the caller LR");
     } else {
         check(false, "loaded XEX image is available for kernel execution integration");

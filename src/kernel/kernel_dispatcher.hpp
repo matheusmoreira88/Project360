@@ -27,6 +27,7 @@ enum class KernelDispatchStatus : std::uint8_t {
 class KernelDispatcher {
 public:
     static constexpr std::uint16_t rtl_fill_memory_ordinal = 284;
+    static constexpr std::uint16_t rtl_fill_memory_ulong_ordinal = 285;
     static constexpr std::uint16_t rtl_zero_memory_ordinal = 320;
 
     // Dispatches an imported xboxkrnl function using the Xenon register ABI.

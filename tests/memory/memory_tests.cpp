@@ -98,6 +98,17 @@ int main() {
     check(fill_memory.read_u8(0x400ffeU, filled) && filled == 0x5aU &&
               fill_memory.read_u8(0x401001U, filled) && filled == 0x5aU,
           "range fill writes every byte through virtual mappings");
+    check(fill_memory.fill_u32_be(0x400ffcU, 8U, 0x11223344U),
+          "word-pattern fill crosses pages backed by non-contiguous physical memory");
+    std::uint32_t filled_word = 0U;
+    check(fill_memory.read_u32_be(0x400ffcU, filled_word) &&
+              filled_word == 0x11223344U &&
+              fill_memory.read_u32_be(0x401000U, filled_word) &&
+              filled_word == 0x11223344U,
+          "word-pattern fill stores the Xenon big-endian byte sequence on both pages");
+    check(!fill_memory.fill_u32_be(0x400ffeU, 4U, 0xaabbccddU) &&
+              !fill_memory.fill_u32_be(0x400ffcU, 6U, 0xaabbccddU),
+          "word-pattern fill rejects unaligned destinations and non-word lengths");
     const std::array<project360::memory::GuestPageMapping, 2> fill_partial{{
         {0x500000U, GuestMemory::page_size, GuestPageAccess::read | GuestPageAccess::write},
         {0x501000U, 0U, GuestPageAccess::read},
@@ -106,6 +117,9 @@ int main() {
     check(!fill_memory.fill(0x500ffeU, 4U, std::byte{0x33}) &&
               fill_memory.read_u8(0x500ffeU, filled) && filled == 0U,
           "range fill validates the complete destination before modifying any byte");
+    check(!fill_memory.fill_u32_be(0x500ffcU, 8U, 0x55667788U) &&
+              fill_memory.read_u32_be(0x500ffcU, filled_word) && filled_word == 0U,
+          "word-pattern fill is transactional across a protected page boundary");
     check(fill_memory.fill(UINT64_MAX, 0U, std::byte{0x11}) &&
               !fill_memory.fill(UINT64_MAX - 1U, 4U, std::byte{0x11}),
           "zero-length fill is a no-op and wrapped guest ranges fail safely");

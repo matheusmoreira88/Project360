@@ -31,23 +31,34 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
         return KernelDispatchStatus::unsupported_library;
     }
     if (import.ordinal != rtl_fill_memory_ordinal &&
+        import.ordinal != rtl_fill_memory_ulong_ordinal &&
         import.ordinal != rtl_zero_memory_ordinal) {
         return KernelDispatchStatus::unsupported_export;
     }
 
-    // RtlFillMemory(PVOID Destination, SIZE_T Length, UCHAR Fill) and
-    // RtlZeroMemory(PVOID Destination, SIZE_T Length) are void imports. Xbox
-    // 360 XEX code uses 32-bit guest pointers/ULONG-sized lengths in GPR3/GPR4.
+    // These void imports use GPR3/GPR4, with a fill value or pattern in GPR5.
+    // Xenon pointers and SIZE_T values are 32-bit. RtlFillMemoryUlong requires
+    // a word-aligned destination and a length divisible by four.
     const auto destination = state.gpr[3];
     const auto length = state.gpr[4];
-    const auto fill_value = import.ordinal == rtl_fill_memory_ordinal
-                                ? static_cast<std::uint8_t>(state.gpr[5] & 0xffU)
-                                : 0U;
     if (destination > 0xffff'ffffULL || length > 0xffff'ffffULL) {
         return KernelDispatchStatus::invalid_guest_argument;
     }
-    if (!memory.fill(destination, static_cast<std::size_t>(length),
-                     static_cast<std::byte>(fill_value))) {
+    bool memory_updated = false;
+    if (import.ordinal == rtl_fill_memory_ulong_ordinal) {
+        if ((destination & 3U) != 0U || (length & 3U) != 0U) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        memory_updated = memory.fill_u32_be(destination, static_cast<std::size_t>(length),
+                                            static_cast<std::uint32_t>(state.gpr[5]));
+    } else {
+        const auto fill_value = import.ordinal == rtl_fill_memory_ordinal
+                                    ? static_cast<std::uint8_t>(state.gpr[5] & 0xffU)
+                                    : 0U;
+        memory_updated = memory.fill(destination, static_cast<std::size_t>(length),
+                                     static_cast<std::byte>(fill_value));
+    }
+    if (!memory_updated) {
         return KernelDispatchStatus::guest_memory_fault;
     }
 

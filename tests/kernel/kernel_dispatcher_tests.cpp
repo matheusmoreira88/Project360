@@ -67,6 +67,24 @@ int main() {
     check(state.pc == 0x2234U,
           "RtlFillMemory returns through LR after filling its destination");
 
+    state.gpr[3] = data_page;
+    state.gpr[4] = 4U;
+    state.gpr[5] = 0x11223344U;
+    state.lr = 0x3237U;
+    const auto filled_ulong = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_fill_memory_ulong_ordinal}, state, memory);
+    check(filled_ulong == KernelDispatchStatus::handled &&
+              memory.read_u32_be(data_page, word) && word == 0x11223344U &&
+              state.pc == 0x3234U,
+          "xboxkrnl ordinal 285 repeats the big-endian GPR5 word pattern");
+    state.gpr[3] = data_page + 1U;
+    state.pc = 0x800180U;
+    const auto misaligned = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_fill_memory_ulong_ordinal}, state, memory);
+    check(misaligned == KernelDispatchStatus::invalid_guest_argument &&
+              state.pc == 0x800180U,
+          "RtlFillMemoryUlong rejects unaligned guest ranges without returning");
+
     check(memory.load(GuestMemory::page_size - 2U, initial),
           "test fixture seeds both pages before checking failure atomicity");
     check(memory.map_page(data_page + GuestMemory::page_size, GuestMemory::page_size,
