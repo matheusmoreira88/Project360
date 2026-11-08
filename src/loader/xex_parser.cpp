@@ -686,6 +686,20 @@ constexpr std::uint32_t kXexImagePageSize4KiB = 0x10000000U;
     if (image_base != pe.image_base) {
         return {{}, "XEX image base differs from PE preferred base; relocations are unsupported"};
     }
+    if (xex.tls_info) {
+        const auto& tls = *xex.tls_info;
+        const auto tls_allocation_size = static_cast<std::uint64_t>(tls.slot_count) * 4U +
+                                         tls.data_size;
+        if (tls.raw_data_size > tls.data_size || tls_allocation_size > kMaximumImageSize) {
+            return {{}, "XEX TLS slot or template sizes exceed supported bounds"};
+        }
+        if (tls.raw_data_size != 0U &&
+            (tls.raw_data_address < image_base ||
+             !range_fits(static_cast<std::uint64_t>(tls.raw_data_address) - image_base,
+                         tls.raw_data_size, pe.image_size))) {
+            return {{}, "XEX TLS raw-data template lies outside the PE image"};
+        }
+    }
     constexpr std::uint64_t kXexPageSize4KiB = 4U * 1024U;
     constexpr std::uint64_t kXexPageSize64KiB = 64U * 1024U;
     const auto xex_page_size = (xex.image_flags & kXexImagePageSize4KiB) != 0U

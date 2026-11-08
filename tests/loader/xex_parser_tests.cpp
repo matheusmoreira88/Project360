@@ -818,6 +818,37 @@ int main() {
     check(!readonly_pages_result && !readonly_pages_memory.page_mapping_enabled(),
           "XEX loader rejects an entry point in a page descriptor marked read-only");
 
+    auto oversized_tls_xex = loadable_xex;
+    write_be32(oversized_tls_xex, 0x320U, 0xffffffffU);
+    project360::memory::GuestMemory oversized_tls_memory(0x4000U);
+    const auto oversized_tls_result = project360::loader::load_xex2(
+        oversized_tls_xex, oversized_tls_memory, 0U);
+    check(!oversized_tls_result &&
+              oversized_tls_result.error.find("TLS slot or template") != std::string::npos &&
+              !oversized_tls_memory.page_mapping_enabled(),
+          "XEX loader rejects oversized TLS allocations before changing guest mappings");
+
+    auto outside_tls_xex = loadable_xex;
+    write_be32(outside_tls_xex, 0x324U, 0x84000U);
+    project360::memory::GuestMemory outside_tls_memory(0x4000U);
+    const auto outside_tls_result = project360::loader::load_xex2(
+        outside_tls_xex, outside_tls_memory, 0U);
+    check(!outside_tls_result &&
+              outside_tls_result.error.find("TLS raw-data template") != std::string::npos &&
+              !outside_tls_memory.page_mapping_enabled(),
+          "XEX loader rejects TLS templates outside the PE image before mapping");
+
+    auto inverted_tls_xex = loadable_xex;
+    write_be32(inverted_tls_xex, 0x328U, 4U);
+    write_be32(inverted_tls_xex, 0x32cU, 8U);
+    project360::memory::GuestMemory inverted_tls_memory(0x4000U);
+    const auto inverted_tls_result = project360::loader::load_xex2(
+        inverted_tls_xex, inverted_tls_memory, 0U);
+    check(!inverted_tls_result &&
+              inverted_tls_result.error.find("TLS slot or template") != std::string::npos &&
+              !inverted_tls_memory.page_mapping_enabled(),
+          "XEX loader rejects initialized TLS bytes beyond the declared TLS data area");
+
     const auto invalid_type_pages_xex = make_page_descriptor_xex(loadable_xex, 4U);
     project360::memory::GuestMemory invalid_type_pages_memory(0x4000U);
     const auto invalid_type_pages_result = project360::loader::load_xex2(
