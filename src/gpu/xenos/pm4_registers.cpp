@@ -1,5 +1,7 @@
 #include "gpu/xenos/pm4_registers.hpp"
 
+#include "gpu/xenos/registers.hpp"
+
 #include <utility>
 #include <vector>
 
@@ -168,7 +170,9 @@ RegisterApplyResult apply_register_packets(std::span<const Packet> packets,
             }
 
             const auto stream_offset = (payload_values_offset + i) * 4U;
-            writes.push_back({register_index, read_u32_be(stream, stream_offset)});
+            writes.push_back({register_index,
+                              normalize_xenos_register_write(
+                                  register_index, read_u32_be(stream, stream_offset))});
         }
     }
 

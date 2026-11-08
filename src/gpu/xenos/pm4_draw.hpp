@@ -80,6 +80,13 @@ struct VertexIndexTransform {
     std::uint32_t maximum{0x00ffffffU};
 };
 
+struct VertexIndexTransformReadResult {
+    VertexIndexTransform transform{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 // Decodes DRAW_INDX and DRAW_INDX_2 packets into metadata only. No graphics
 // state is changed and no draw is submitted. Predicated and immediate-index
 // packets remain unsupported until their state/data semantics are implemented.
@@ -107,5 +114,9 @@ struct VertexIndexTransform {
 // then clamp to the configured unsigned minimum and maximum.
 [[nodiscard]] std::uint32_t transform_vertex_shader_index(
     std::uint32_t vertex_index, VertexIndexTransform transform) noexcept;
+
+// Reads the 24-bit VGT min, max and offset fields from a register-file snapshot.
+[[nodiscard]] VertexIndexTransformReadResult read_vertex_index_transform(
+    std::span<const std::uint32_t> registers);
 
 } // namespace project360::gpu::xenos

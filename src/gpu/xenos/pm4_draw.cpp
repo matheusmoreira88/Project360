@@ -1,5 +1,6 @@
 #include "gpu/xenos/pm4_draw.hpp"
 
+#include "gpu/xenos/registers.hpp"
 #include "memory/guest_memory.hpp"
 
 #include <algorithm>
@@ -11,9 +12,6 @@ namespace {
 
 constexpr std::uint8_t kDrawIndx = 0x22U;
 constexpr std::uint8_t kDrawIndx2 = 0x36U;
-constexpr std::size_t kVgtDmaBaseRegister = 0x21faU;
-constexpr std::size_t kVgtDmaSizeRegister = 0x21fbU;
-constexpr std::size_t kVgtDrawInitiatorRegister = 0x21fcU;
 constexpr std::uint32_t kDmaSizeWordMask = 0x00ffffffU;
 
 std::uint32_t swap_index_32(std::uint32_t value, std::uint32_t mode) {
@@ -211,20 +209,23 @@ DrawStateApplyResult apply_draw_command_state(std::span<const DrawCommand> comma
             command.index_count != static_cast<std::uint16_t>(command.initiator >> 16U)) {
             return {"Draw command fields do not match the initiator", command.header_word_offset};
         }
-        if (kVgtDrawInitiatorRegister >= registers.size() ||
+        if (register_index::vgt_draw_initiator >= registers.size() ||
             (command.source == DrawSource::dma &&
-             (kVgtDmaBaseRegister >= registers.size() ||
-              kVgtDmaSizeRegister >= registers.size()))) {
+             (register_index::vgt_dma_base >= registers.size() ||
+              register_index::vgt_dma_size >= registers.size()))) {
             return {"Draw state register exceeds the configured Xenos register span",
                     command.header_word_offset};
         }
     }
 
     for (const auto& command : commands) {
-        registers[kVgtDrawInitiatorRegister] = command.initiator;
+        registers[register_index::vgt_draw_initiator] = normalize_xenos_register_write(
+            register_index::vgt_draw_initiator, command.initiator);
         if (command.source == DrawSource::dma) {
-            registers[kVgtDmaBaseRegister] = command.dma_base;
-            registers[kVgtDmaSizeRegister] = command.dma_size;
+            registers[register_index::vgt_dma_base] = normalize_xenos_register_write(
+                register_index::vgt_dma_base, command.dma_base);
+            registers[register_index::vgt_dma_size] = normalize_xenos_register_write(
+                register_index::vgt_dma_size, command.dma_size);
         }
     }
     return {};
@@ -343,6 +344,18 @@ std::uint32_t transform_vertex_shader_index(std::uint32_t vertex_index,
     auto remapped = (vertex_index + transform.offset) & kVertexIndexMask;
     remapped = std::max(remapped, transform.minimum);
     return std::min(remapped, transform.maximum);
+}
+
+VertexIndexTransformReadResult read_vertex_index_transform(
+    std::span<const std::uint32_t> registers) {
+    constexpr auto required_size = register_index::vgt_indx_offset + 1U;
+    if (registers.size() < required_size) {
+        return {{}, "Register file does not include the Xenos vertex-index state"};
+    }
+    return {{registers[register_index::vgt_indx_offset] & 0x00ffffffU,
+             registers[register_index::vgt_min_vtx_indx] & 0x00ffffffU,
+             registers[register_index::vgt_max_vtx_indx] & 0x00ffffffU},
+            {}};
 }
 
 } // namespace project360::gpu::xenos

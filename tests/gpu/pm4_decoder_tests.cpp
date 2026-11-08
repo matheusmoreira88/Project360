@@ -1,6 +1,7 @@
 #include "gpu/xenos/pm4_decoder.hpp"
 #include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/pm4_registers.hpp"
+#include "gpu/xenos/registers.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
@@ -143,6 +144,29 @@ void test_register_packet_application() {
     check(static_cast<bool>(repeated_result) && repeated_registers[0x10U] == 0xaaaa0002U &&
               repeated_registers[0x11U] == 0x55555555U,
           "type-0 write-one mode repeatedly targets the same register");
+
+    std::vector<std::uint8_t> xenos_register_stream;
+    append_u32_be(xenos_register_stream, (2U << 16U) | 0x2100U);
+    append_u32_be(xenos_register_stream, 0xff123456U);
+    append_u32_be(xenos_register_stream, 0xffabcdefU);
+    append_u32_be(xenos_register_stream, 0xff654321U);
+    append_u32_be(xenos_register_stream, 0x21fbU);
+    append_u32_be(xenos_register_stream, 0xffffffffU);
+    append_u32_be(xenos_register_stream, 0x21fcU);
+    append_u32_be(xenos_register_stream, 0xffffffffU);
+    append_u32_be(xenos_register_stream, 0x0100U);
+    append_u32_be(xenos_register_stream, 0xffffffffU);
+    const auto xenos_decoded = decode_pm4(xenos_register_stream);
+    std::vector<std::uint32_t> xenos_registers(0x5000U, 0U);
+    const auto xenos_applied = apply_register_packets(
+        xenos_decoded.packets, xenos_register_stream, xenos_registers);
+    check(xenos_applied && xenos_registers[0x2100U] == 0x00123456U &&
+              xenos_registers[0x2101U] == 0x00abcdefU &&
+              xenos_registers[0x2102U] == 0x00654321U &&
+              xenos_registers[0x21fbU] == 0xc0ffffffU &&
+              xenos_registers[0x21fcU] == 0xffff1bffU &&
+              xenos_registers[0x0100U] == 0xffffffffU,
+          "Xenos register map masks reserved draw bits and preserves opaque registers");
 
     std::vector<std::uint8_t> invalid_stream;
     append_u32_be(invalid_stream, 2U);
@@ -476,6 +500,18 @@ void test_vertex_shader_index_transform() {
           "vertex shader index is clamped to the minimum after offsetting");
     check(transform_vertex_shader_index(150U, {3U, 10U, 100U}) == 100U,
           "vertex shader index is clamped to the maximum after offsetting");
+    std::vector<std::uint32_t> registers(register_index::vgt_indx_offset + 1U, 0U);
+    registers[register_index::vgt_max_vtx_indx] = 0xff000064U;
+    registers[register_index::vgt_min_vtx_indx] = 0xff00000aU;
+    registers[register_index::vgt_indx_offset] = 0xff000003U;
+    const auto register_transform = read_vertex_index_transform(registers);
+    check(register_transform && register_transform.transform.offset == 3U &&
+              register_transform.transform.minimum == 10U &&
+              register_transform.transform.maximum == 100U &&
+              transform_vertex_shader_index(150U, register_transform.transform) == 100U,
+          "vertex index transform reads the named low-24-bit Xenos register fields");
+    check(!read_vertex_index_transform(std::span<const std::uint32_t>(registers.data(), 8U)),
+          "vertex index transform rejects register snapshots that omit the mapped state");
 }
 
 void test_vertex_fetch_descriptors_and_memory() {
