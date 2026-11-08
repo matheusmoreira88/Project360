@@ -53,6 +53,17 @@ cmake --build --preset debug --target project360_gui
 
 See [docs/frontend.md](docs/frontend.md) for the current interface scope and build note.
 
+The optional Vulkan device backend uses pinned Vulkan-Headers and Volk sources on first configure. It needs an installed Vulkan loader and a graphics driver at runtime:
+
+```powershell
+cmake --preset windows-vulkan
+cmake --build --preset vulkan-debug
+ctest --test-dir out/build/windows-vulkan -C Debug --output-on-failure
+.\out\build\windows-vulkan\Debug\project360_vulkan_info.exe
+```
+
+This target creates a Vulkan instance and graphics device and reports their capabilities; it does not render a frame. See [docs/hardware/vulkan_backend.md](docs/hardware/vulkan_backend.md) and [docs/dependencies.md](docs/dependencies.md).
+
 ## Project status
 
 See [docs/roadmap.md](docs/roadmap.md), [docs/testing.md](docs/testing.md), [docs/compatibility.md](docs/compatibility.md) and [docs/performance.md](docs/performance.md). No commercial game compatibility or game-performance result has been measured; the performance document contains only an initial kernel microbenchmark.

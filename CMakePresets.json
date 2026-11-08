@@ -28,12 +28,23 @@
         "PROJECT360_BUILD_GUI": "OFF",
         "PROJECT360_BUILD_BENCHMARKS": "ON"
       }
+    },
+    {
+      "name": "windows-vulkan",
+      "displayName": "Windows Debug and Release with Vulkan backend",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "PROJECT360_BUILD_VULKAN": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "windows-debug", "configuration": "Debug" },
     { "name": "release", "configurePreset": "windows-debug", "configuration": "Release" },
-    { "name": "benchmarks-release", "configurePreset": "windows-benchmarks", "configuration": "Release" }
+    { "name": "benchmarks-release", "configurePreset": "windows-benchmarks", "configuration": "Release" },
+    { "name": "vulkan-debug", "configurePreset": "windows-vulkan", "configuration": "Debug" },
+    { "name": "vulkan-release", "configurePreset": "windows-vulkan", "configuration": "Release" }
   ],
   "testPresets": [
     { "name": "debug", "configurePreset": "windows-debug", "configuration": "Debug", "output": { "outputOnFailure": true } }

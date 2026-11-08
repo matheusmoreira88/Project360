@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Project360 VERSION 0.1.0 LANGUAGES CXX)
+project(Project360 VERSION 0.1.0 LANGUAGES C CXX)
 
 option(PROJECT360_BUILD_TESTS "Build Project360 tests" ON)
 option(PROJECT360_BUILD_GUI "Build the Qt Widgets frontend when Qt 6 is available" ON)
 option(PROJECT360_BUILD_BENCHMARKS "Build reproducible Project360 benchmarks" OFF)
+option(PROJECT360_BUILD_VULKAN "Build the optional Vulkan backend and device diagnostics" OFF)
 
 add_library(project360_core
     src/common/log.cpp
@@ -44,6 +45,47 @@ endif()
 
 add_executable(project360 src/app/main.cpp)
 target_link_libraries(project360 PRIVATE project360_core)
+
+if(PROJECT360_BUILD_VULKAN)
+    include(FetchContent)
+
+    # Official Vulkan API headers and Volk's dynamic loader are fetched only for
+    # the optional graphics target. Pin commits so a fresh configure is stable.
+    FetchContent_Declare(VulkanHeaders
+        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+        GIT_TAG 8864cdc896bbc2a9b6eb36b3218fc9ef57908d77
+    )
+    FetchContent_MakeAvailable(VulkanHeaders)
+
+    set(VOLK_INSTALL OFF CACHE BOOL "" FORCE)
+    set(VOLK_PULL_IN_VULKAN ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(volk
+        GIT_REPOSITORY https://github.com/zeux/volk.git
+        GIT_TAG 3ca312a4f38baa63d8006b6905abbeeb89c8087d
+    )
+    FetchContent_MakeAvailable(volk)
+
+    add_library(project360_vulkan
+        src/gpu/vulkan/vulkan_context.cpp
+    )
+    target_include_directories(project360_vulkan PUBLIC src)
+    target_link_libraries(project360_vulkan PRIVATE volk)
+    target_compile_features(project360_vulkan PUBLIC cxx_std_20)
+    if(MSVC)
+        target_compile_options(project360_vulkan PRIVATE /W4 /permissive- /EHsc)
+    else()
+        target_compile_options(project360_vulkan PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    endif()
+
+    add_executable(project360_vulkan_info tools/vulkan_info.cpp)
+    target_link_libraries(project360_vulkan_info PRIVATE project360_vulkan)
+    target_compile_features(project360_vulkan_info PRIVATE cxx_std_20)
+    if(MSVC)
+        target_compile_options(project360_vulkan_info PRIVATE /W4 /permissive- /EHsc)
+    else()
+        target_compile_options(project360_vulkan_info PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    endif()
+endif()
 
 if(PROJECT360_BUILD_BENCHMARKS)
     add_executable(project360_kernel_memory_bench tools/kernel_memory_bench.cpp)
@@ -95,6 +137,19 @@ if(PROJECT360_BUILD_TESTS)
     add_executable(project360_gpu_tests tests/gpu/pm4_decoder_tests.cpp)
     target_link_libraries(project360_gpu_tests PRIVATE project360_core)
     add_test(NAME project360_gpu_tests COMMAND project360_gpu_tests)
+
+    if(PROJECT360_BUILD_VULKAN)
+        add_executable(project360_vulkan_tests tests/gpu/vulkan_context_tests.cpp)
+        target_link_libraries(project360_vulkan_tests PRIVATE project360_vulkan)
+        target_compile_features(project360_vulkan_tests PRIVATE cxx_std_20)
+        if(MSVC)
+            target_compile_options(project360_vulkan_tests PRIVATE /W4 /permissive- /EHsc)
+        else()
+            target_compile_options(project360_vulkan_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+        endif()
+        add_test(NAME project360_vulkan_tests COMMAND project360_vulkan_tests)
+        set_tests_properties(project360_vulkan_tests PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
 
     add_executable(project360_memory_tests tests/memory/memory_tests.cpp)
     target_link_libraries(project360_memory_tests PRIVATE project360_core)
