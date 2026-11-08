@@ -4,7 +4,9 @@
 #include "memory/guest_memory.hpp"
 
 #include <cstddef>
+#include <new>
 #include <string>
+#include <utility>
 
 namespace project360::gpu::xenos {
 
@@ -101,6 +103,59 @@ ShaderExecResult execute_shader_exec_block(
 
     return {registers, exec.instruction_count, exec.opcode == 2U || exec.opcode == 4U, {},
             previous_scalar, vertex_outputs};
+}
+
+ShaderVertexBatchResult execute_shader_exec_vertex_batch(
+    const ShaderExecInstruction& exec,
+    std::span<const std::array<std::uint32_t, 3>> ucode,
+    std::span<const VertexFetchDescriptor> fetch_constants,
+    const memory::GuestMemory& memory,
+    std::span<const std::uint32_t> draw_vertex_indices,
+    const ShaderAluTemporaryRegisterBank& initial_registers,
+    const std::array<float, 4>& missing_component_values,
+    std::span<const std::array<float, 4>> float_constants,
+    std::span<const bool> boolean_constants) {
+    constexpr std::size_t maximum_vertex_count = 65'536U;
+    constexpr std::uint32_t maximum_xenos_vertex_index = 0x00ffffffU;
+    if (exec.opcode != 2U && exec.opcode != 4U) {
+        return {{}, "Xenos vertex batch requires a shader-ending EXEC_END block"};
+    }
+    if (draw_vertex_indices.empty()) {
+        return {{}, "Xenos vertex batch has no draw indexes"};
+    }
+    if (draw_vertex_indices.size() > maximum_vertex_count) {
+        return {{}, "Xenos vertex batch exceeds the 65,536-vertex limit"};
+    }
+
+    ShaderVertexBatchResult result;
+    try {
+        result.vertices.reserve(draw_vertex_indices.size());
+        for (std::size_t vertex_number = 0U; vertex_number < draw_vertex_indices.size();
+             ++vertex_number) {
+            const auto vertex_index = draw_vertex_indices[vertex_number];
+            if (vertex_index > maximum_xenos_vertex_index) {
+                return {{}, "Xenos vertex batch index exceeds the remapped 24-bit range"};
+            }
+
+            auto vertex_registers = initial_registers;
+            vertex_registers[0U][0U] = static_cast<float>(vertex_index);
+            const auto vertex = execute_shader_exec_block(
+                exec, ucode, fetch_constants, memory, vertex_registers,
+                missing_component_values, float_constants, 0.0F, boolean_constants);
+            if (!vertex) {
+                return {{}, "Xenos vertex batch item " + std::to_string(vertex_number) +
+                                " (index " + std::to_string(vertex_index) + "): " + vertex.error};
+            }
+            if (!vertex.ended_shader) {
+                return {{}, "Xenos vertex batch item " + std::to_string(vertex_number) +
+                                " did not reach shader end"};
+            }
+            result.vertices.push_back(vertex.vertex_outputs);
+        }
+    } catch (const std::bad_alloc&) {
+        return {{}, "Not enough host memory for Xenos vertex batch output"};
+    }
+    return result;
 }
 
 } // namespace project360::gpu::xenos
