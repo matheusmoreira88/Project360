@@ -749,6 +749,64 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
               scalar_result.registers[6] == std::array<float, 4>{21.0F, 21.0F, 21.0F, 21.0F},
           "Xenos EXEC carries scalar previous-result state between ordered ALU slots");
 
+    std::array<bool, 4> boolean_constants{false, false, false, true};
+    const auto conditional_words = std::array<std::uint32_t, 2>{
+        scalar_sequence << 16U | (2U << 12U), (3U << 12U) | (1U << 11U) | (1U << 8U) | 3U};
+    const auto conditional_exec = decode_shader_exec_instruction(conditional_words);
+    const auto conditional_result =
+        execute_shader_exec_block(conditional_exec, scalar_ucode, fetch_constants, memory,
+                                  scalar_registers, {}, {}, 0.0F, boolean_constants);
+    check(conditional_exec.boolean_constant_address == 3U && conditional_exec.condition &&
+              conditional_result && conditional_result.instructions_executed == 2U &&
+              conditional_result.registers[5] == scalar_result.registers[5],
+          "Xenos COND_EXEC evaluates the selected bool constant and runs a matching block");
+
+    auto skipped_conditional_words = conditional_words;
+    skipped_conditional_words[1] &= ~(1U << 8U);
+    const auto skipped_conditional = decode_shader_exec_instruction(skipped_conditional_words);
+    const auto skipped_result =
+        execute_shader_exec_block(skipped_conditional, scalar_ucode, fetch_constants, memory,
+                                  scalar_registers, {}, {}, 0.0F, boolean_constants);
+    check(skipped_result && skipped_result.instructions_executed == 0U &&
+              !skipped_result.ended_shader && skipped_result.registers == scalar_registers,
+          "Xenos COND_EXEC skips a mismatched block without changing registers");
+
+    auto false_condition_words = conditional_words;
+    false_condition_words[1] &= ~0x1ffU;
+    const auto false_condition_exec = decode_shader_exec_instruction(false_condition_words);
+    const auto false_condition_result = execute_shader_exec_block(
+        false_condition_exec, scalar_ucode, fetch_constants, memory, scalar_registers, {}, {}, 0.0F,
+        boolean_constants);
+    check(false_condition_result && !false_condition_exec.condition &&
+              false_condition_result.instructions_executed == 2U,
+          "Xenos COND_EXEC executes when a false bool constant matches the condition");
+
+    auto conditional_end_words = conditional_words;
+    conditional_end_words[1] = (conditional_end_words[1] & ~(0xfU << 12U)) | (4U << 12U);
+    const auto conditional_end = decode_shader_exec_instruction(conditional_end_words);
+    const auto conditional_end_result =
+        execute_shader_exec_block(conditional_end, scalar_ucode, fetch_constants, memory,
+                                  scalar_registers, {}, {}, 0.0F, boolean_constants);
+    conditional_end_words[1] &= ~(1U << 8U);
+    const auto skipped_conditional_end = decode_shader_exec_instruction(conditional_end_words);
+    const auto skipped_end_result =
+        execute_shader_exec_block(skipped_conditional_end, scalar_ucode, fetch_constants, memory,
+                                  scalar_registers, {}, {}, 0.0F, boolean_constants);
+    check(conditional_end_result && conditional_end_result.ended_shader && skipped_end_result &&
+              !skipped_end_result.ended_shader && skipped_end_result.instructions_executed == 0U,
+          "Xenos COND_EXEC_END terminates only when its bool condition matches");
+
+    const auto missing_boolean = execute_shader_exec_block(
+        conditional_exec, scalar_ucode, fetch_constants, memory, scalar_registers, {}, {}, 0.0F);
+    auto relative_conditional_words = conditional_words;
+    relative_conditional_words[1] &= ~(1U << 11U);
+    const auto relative_conditional = decode_shader_exec_instruction(relative_conditional_words);
+    const auto rejected_relative_conditional =
+        execute_shader_exec_block(relative_conditional, scalar_ucode, fetch_constants, memory,
+                                  scalar_registers, {}, {}, 0.0F, boolean_constants);
+    check(!missing_boolean && !rejected_relative_conditional,
+          "Xenos conditional EXEC rejects missing bool constants and relative addresses");
+
     auto invalid_ucode = ucode;
     invalid_ucode[2][2] = (invalid_ucode[2][2] & ~(0x1fU << 24U)) | (11U << 24U);
     const auto rejected = execute_shader_exec_block(
