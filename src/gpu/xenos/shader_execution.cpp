@@ -29,7 +29,8 @@ ShaderExecResult execute_shader_exec_block(
     std::span<const VertexFetchDescriptor> fetch_constants,
     const memory::GuestMemory& memory,
     const ShaderAluTemporaryRegisterBank& initial_registers,
-    const std::array<float, 4>& missing_component_values) {
+    const std::array<float, 4>& missing_component_values,
+    std::span<const std::array<float, 4>> float_constants) {
     if (exec.opcode != 1U && exec.opcode != 2U) {
         return {{}, 0U, false, "Only unconditional Xenos EXEC/EXEC_END blocks are supported"};
     }
@@ -48,7 +49,8 @@ ShaderExecResult execute_shader_exec_block(
         const auto operation_kind = (exec.sequence >> (slot * 2U)) & 1U;
         if (operation_kind == 0U) {
             const auto instruction = decode_shader_alu_instruction(words);
-            const auto executed = execute_shader_alu_add_mul_pair(instruction, registers);
+            const auto executed =
+                execute_shader_alu_add_mul_pair(instruction, registers, float_constants);
             if (!executed) {
                 return {{}, 0U, false,
                         "Xenos EXEC ALU slot " + std::to_string(slot) + ": " + executed.error};

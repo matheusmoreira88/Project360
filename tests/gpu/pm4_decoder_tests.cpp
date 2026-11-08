@@ -81,7 +81,7 @@ void test_shader_alu_word_decode() {
     };
     const auto instruction = decode_shader_alu_instruction(words);
     check(instruction.vector_destination == 0x12U &&
-              instruction.vector_destination_relative && instruction.absolute_constants &&
+              instruction.vector_destination_relative && instruction.constant_absolute_value &&
               instruction.scalar_destination == 0x2fU &&
               instruction.scalar_destination_relative && instruction.export_result &&
               instruction.vector_write_mask == 0x0bU && instruction.scalar_write_mask == 0x0eU &&
@@ -211,6 +211,57 @@ void test_shader_alu_temporary_source_resolution() {
           "Xenos source resolver rejects constants and loop-relative registers without partial values");
 }
 
+void test_shader_alu_absolute_float_constant_sources() {
+    using namespace project360::gpu::xenos;
+    ShaderAluTemporaryRegisterBank registers{};
+    ShaderAluFloatConstantBank constants{};
+    constants[5] = {-1.0F, 2.0F, -3.0F, 4.0F};
+
+    // src1 uses constant c5; abs_constants and src1 negate are both set.
+    const auto instruction = decode_shader_alu_instruction(
+        {0x00000080U, 0x01000000U, (1U << 30U) | (2U << 8U) | 5U});
+    const auto source = resolve_shader_alu_source(
+        instruction, ShaderAluSource::source_1, registers, constants);
+    check(source && source.value == std::array<float, 4>{-1.0F, -2.0F, -3.0F, -4.0F},
+          "absolute Xenos float constants apply swizzle, abs_constants and operand negate");
+
+    const auto relative_instruction = decode_shader_alu_instruction(
+        {0U, 0x80000000U, (1U << 30U) | (2U << 8U) | 5U});
+    const auto relative = resolve_shader_alu_source(
+        relative_instruction, ShaderAluSource::source_1, registers, constants);
+    const auto address_relative_instruction = decode_shader_alu_instruction(
+        {0U, 0xa0000000U, (1U << 30U) | (2U << 8U) | 5U});
+    const auto address_relative = resolve_shader_alu_source(
+        address_relative_instruction, ShaderAluSource::source_1, registers, constants);
+    const auto missing = resolve_shader_alu_source(
+        instruction, ShaderAluSource::source_1, registers, {});
+    constants[6] = {10.0F, 20.0F, 30.0F, 40.0F};
+    const auto second_constant_instruction = decode_shader_alu_instruction(
+        {0U, 0U, (6U << 8U) | 5U});
+    const auto second_constant = resolve_shader_alu_source(
+        second_constant_instruction, ShaderAluSource::source_2, registers, constants);
+    check(!relative && !address_relative && !missing &&
+              relative.value == std::array<float, 4>{} &&
+              address_relative.value == std::array<float, 4>{} &&
+              missing.value == std::array<float, 4>{} && second_constant &&
+              second_constant.value == constants[6],
+          "Xenos source resolver rejects unavailable relative constants and selects src2 constants");
+
+    constants[5] = {1.0F, 2.0F, 3.0F, 4.0F};
+    ShaderAluInstruction scalar_constant_instruction{};
+    scalar_constant_instruction.vector_destination = 4U;
+    scalar_constant_instruction.scalar_destination = 5U;
+    scalar_constant_instruction.scalar_write_mask = 0x0fU;
+    scalar_constant_instruction.scalar_opcode = 0U;
+    scalar_constant_instruction.source_registers = {5U, 2U, 1U};
+    scalar_constant_instruction.source_is_temporary = {false, true, true};
+    const auto scalar_constant = execute_shader_alu_add_mul_pair(
+        scalar_constant_instruction, registers, constants);
+    check(scalar_constant && scalar_constant.previous_scalar == 5.0F &&
+              scalar_constant.registers[5] == std::array<float, 4>{5.0F, 5.0F, 5.0F, 5.0F},
+          "Xenos scalar ADDS resolves its absolute float constant from src3");
+}
+
 void test_shader_vector_alu_from_encoded_temporaries() {
     using namespace project360::gpu::xenos;
     ShaderAluTemporaryRegisterBank registers{};
@@ -316,9 +367,9 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
 
     const std::array<std::array<std::uint32_t, 3>, 3> ucode{
         std::array<std::uint32_t, 3>{
-            3U | (0x0fU << 16U), 0U,
+            3U | (1U << 7U) | (0x0fU << 16U), 0U,
             (1U << 31U) | (3U << 16U) | (1U << 30U) | (2U << 8U) |
-                (1U << 29U) | 1U},
+                5U},
         std::array<std::uint32_t, 3>{
             (3U << 5U) | (4U << 12U) | (1U << 19U) | (2U << 20U) | (1U << 25U) |
                 (2U << 27U) | (2U << 30U),
@@ -337,10 +388,11 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
     const auto exec = decode_shader_exec_instruction(
         {sequence << 16U | (3U << 12U), 2U << 12U});
     ShaderAluTemporaryRegisterBank initial_registers{};
-    initial_registers[2][2] = 1.0F;
+    ShaderAluFloatConstantBank float_constants{};
+    float_constants[5] = {0.0F, 0.0F, -1.0F, 0.0F};
     const auto result = descriptor
                             ? execute_shader_exec_block(exec, ucode, fetch_constants, memory,
-                                                        initial_registers, {})
+                                                        initial_registers, {}, float_constants)
                             : ShaderExecResult{{}, 0U, false, "Invalid descriptor fixture"};
     check(result && result.instructions_executed == 3U && result.ended_shader &&
               result.registers[3] == std::array<float, 4>{0.0F, 0.0F, 1.0F, 0.0F} &&
@@ -351,13 +403,13 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
     auto invalid_ucode = ucode;
     invalid_ucode[2][2] |= 2U << 24U;
     const auto rejected = execute_shader_exec_block(
-        exec, invalid_ucode, fetch_constants, memory, initial_registers, {});
+        exec, invalid_ucode, fetch_constants, memory, initial_registers, {}, float_constants);
     const auto out_of_range = execute_shader_exec_block(
         decode_shader_exec_instruction({(2U << 12U), 2U << 12U}), ucode,
-        fetch_constants, memory, initial_registers, {});
+        fetch_constants, memory, initial_registers, {}, float_constants);
     const auto unsupported_control_flow = execute_shader_exec_block(
         decode_shader_exec_instruction({sequence << 16U | (3U << 12U), 0U}), ucode,
-        fetch_constants, memory, initial_registers, {});
+        fetch_constants, memory, initial_registers, {}, float_constants);
     check(!rejected && rejected.instructions_executed == 0U &&
               rejected.registers == ShaderAluTemporaryRegisterBank{} && !out_of_range &&
               !unsupported_control_flow,
@@ -1231,6 +1283,7 @@ int main() {
     test_shader_vector_alu_comparisons();
     test_shader_vector_alu_legacy_multiplication();
     test_shader_alu_temporary_source_resolution();
+    test_shader_alu_absolute_float_constant_sources();
     test_shader_vector_alu_from_encoded_temporaries();
     test_shader_alu_add_mul_pair_execution();
     test_shader_exec_block_ordered_alu_and_vfetch();

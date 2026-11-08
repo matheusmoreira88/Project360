@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 
 namespace project360::gpu::xenos {
@@ -14,7 +15,7 @@ struct ShaderAluInstruction {
     std::uint8_t scalar_destination{};
     bool vector_destination_relative{};
     bool scalar_destination_relative{};
-    bool absolute_constants{};
+    bool constant_absolute_value{};
     bool export_result{};
     std::uint8_t vector_write_mask{};
     std::uint8_t scalar_write_mask{};
@@ -48,6 +49,7 @@ struct ShaderVectorAluResult {
 enum class ShaderAluSource : std::uint8_t { source_1, source_2, source_3 };
 
 using ShaderAluTemporaryRegisterBank = std::array<std::array<float, 4>, 64>;
+using ShaderAluFloatConstantBank = std::array<std::array<float, 4>, 256>;
 
 struct ShaderAluSourceResult {
     std::array<float, 4> value{};
@@ -70,12 +72,19 @@ struct ShaderAluExecutionResult {
 [[nodiscard]] ShaderAluInstruction decode_shader_alu_instruction(
     const std::array<std::uint32_t, 3>& words) noexcept;
 
-// Resolves one absolute temporary-register source, including its relative
-// component swizzle and abs/negate modifiers. Constant and loop-relative
-// sources are rejected until their state is modeled.
+// Resolves one temporary-register source, including its relative component
+// swizzle and abs/negate modifiers. Constant sources are rejected here; use
+// resolve_shader_alu_source when float constants are available.
 [[nodiscard]] ShaderAluSourceResult resolve_shader_alu_temporary_source(
     const ShaderAluInstruction& instruction, ShaderAluSource source,
     const ShaderAluTemporaryRegisterBank& temporary_registers);
+
+// Resolves an ALU operand from temporary registers or absolute float constants.
+// a0/aL-relative constants and loop-relative temporaries fail explicitly.
+[[nodiscard]] ShaderAluSourceResult resolve_shader_alu_source(
+    const ShaderAluInstruction& instruction, ShaderAluSource source,
+    const ShaderAluTemporaryRegisterBank& temporary_registers,
+    std::span<const std::array<float, 4>> float_constants);
 
 // Evaluates only the vector half of a decoded instruction. Source vectors must
 // already have their encoded source selection, swizzle and negate semantics
@@ -91,13 +100,15 @@ struct ShaderAluExecutionResult {
 [[nodiscard]] ShaderVectorAluResult evaluate_shader_vector_alu_from_temporaries(
     const ShaderAluInstruction& instruction,
     const ShaderAluTemporaryRegisterBank& temporary_registers,
-    const std::array<float, 4>& previous_destination);
+    const std::array<float, 4>& previous_destination,
+    std::span<const std::array<float, 4>> float_constants = {});
 
 // Executes the vector ADD/MUL and scalar ADDS/MULS pair for one instruction.
 // Both results read the original register bank; writes are committed together.
 // Unsupported addressing, exports, clamp and operation pairs fail atomically.
 [[nodiscard]] ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     const ShaderAluInstruction& instruction,
-    const ShaderAluTemporaryRegisterBank& initial_registers);
+    const ShaderAluTemporaryRegisterBank& initial_registers,
+    std::span<const std::array<float, 4>> float_constants = {});
 
 } // namespace project360::gpu::xenos

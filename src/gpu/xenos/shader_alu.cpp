@@ -26,7 +26,7 @@ ShaderAluInstruction decode_shader_alu_instruction(
     ShaderAluInstruction instruction{};
     instruction.vector_destination = static_cast<std::uint8_t>(word0 & 0x3fU);
     instruction.vector_destination_relative = ((word0 >> 6U) & 1U) != 0U;
-    instruction.absolute_constants = ((word0 >> 7U) & 1U) != 0U;
+    instruction.constant_absolute_value = ((word0 >> 7U) & 1U) != 0U;
     instruction.scalar_destination = static_cast<std::uint8_t>((word0 >> 8U) & 0x3fU);
     instruction.scalar_destination_relative = ((word0 >> 14U) & 1U) != 0U;
     instruction.export_result = ((word0 >> 15U) & 1U) != 0U;
@@ -66,9 +66,10 @@ ShaderAluInstruction decode_shader_alu_instruction(
     return instruction;
 }
 
-ShaderAluSourceResult resolve_shader_alu_temporary_source(
+ShaderAluSourceResult resolve_shader_alu_source(
     const ShaderAluInstruction& instruction, ShaderAluSource source,
-    const ShaderAluTemporaryRegisterBank& temporary_registers) {
+    const ShaderAluTemporaryRegisterBank& temporary_registers,
+    std::span<const std::array<float, 4>> float_constants) {
     std::size_t source_slot = 0;
     switch (source) {
     case ShaderAluSource::source_1:
@@ -84,22 +85,48 @@ ShaderAluSourceResult resolve_shader_alu_temporary_source(
         return {{}, "Invalid Xenos ALU source selector"};
     }
 
-    if (!instruction.source_is_temporary[source_slot]) {
-        return {{}, "Xenos ALU constant sources are not implemented"};
+    const auto encoded_register = instruction.source_registers[source_slot];
+    const bool is_temporary = instruction.source_is_temporary[source_slot];
+    std::size_t register_index = encoded_register;
+    if (is_temporary) {
+        if ((encoded_register & 0x40U) != 0U) {
+            return {{}, "Loop-relative Xenos temporary sources are not implemented"};
+        }
+        register_index = static_cast<std::size_t>(encoded_register & 0x3fU);
+    } else {
+        bool constant_is_relative = false;
+        if (source_slot == 2U) {
+            constant_is_relative = instruction.constant_0_relative;
+        } else if (source_slot == 1U) {
+            constant_is_relative = instruction.source_is_temporary[2U]
+                                       ? instruction.constant_0_relative
+                                       : instruction.constant_1_relative;
+        } else {
+            constant_is_relative =
+                instruction.source_is_temporary[2U] &&
+                        instruction.source_is_temporary[1U]
+                    ? instruction.constant_0_relative
+                    : instruction.constant_1_relative;
+        }
+        if (constant_is_relative) {
+            return {{}, instruction.constant_address_register_relative
+                            ? "Address-register-relative Xenos float constants are not implemented"
+                            : "Loop-relative Xenos float constants are not implemented"};
+        }
+        if (register_index >= float_constants.size()) {
+            return {{}, "Xenos float-constant index is outside the supplied constant bank"};
+        }
     }
 
-    const auto encoded_register = instruction.source_registers[source_slot];
-    if ((encoded_register & 0x40U) != 0U) {
-        return {{}, "Loop-relative Xenos temporary sources are not implemented"};
-    }
-    const auto register_index = static_cast<std::size_t>(encoded_register & 0x3fU);
     const auto swizzle = instruction.source_swizzles[source_slot];
     ShaderAluSourceResult result{};
     for (std::size_t lane = 0; lane < result.value.size(); ++lane) {
         const auto component = (swizzle >> (2U * lane)) & 0x03U;
         const auto source_component = (component + lane) & 0x03U;
-        auto value = temporary_registers[register_index][source_component];
-        if ((encoded_register & 0x80U) != 0U) {
+        auto value = is_temporary ? temporary_registers[register_index][source_component]
+                                  : float_constants[register_index][source_component];
+        if (is_temporary ? ((encoded_register & 0x80U) != 0U)
+                         : instruction.constant_absolute_value) {
             value = std::abs(value);
         }
         if (instruction.source_negate[source_slot]) {
@@ -108,6 +135,12 @@ ShaderAluSourceResult resolve_shader_alu_temporary_source(
         result.value[lane] = value;
     }
     return result;
+}
+
+ShaderAluSourceResult resolve_shader_alu_temporary_source(
+    const ShaderAluInstruction& instruction, ShaderAluSource source,
+    const ShaderAluTemporaryRegisterBank& temporary_registers) {
+    return resolve_shader_alu_source(instruction, source, temporary_registers, {});
 }
 
 ShaderVectorAluResult evaluate_shader_vector_alu(
@@ -165,14 +198,15 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
 ShaderVectorAluResult evaluate_shader_vector_alu_from_temporaries(
     const ShaderAluInstruction& instruction,
     const ShaderAluTemporaryRegisterBank& temporary_registers,
-    const std::array<float, 4>& previous_destination) {
-    const auto source_1 = resolve_shader_alu_temporary_source(
-        instruction, ShaderAluSource::source_1, temporary_registers);
+    const std::array<float, 4>& previous_destination,
+    std::span<const std::array<float, 4>> float_constants) {
+    const auto source_1 = resolve_shader_alu_source(
+        instruction, ShaderAluSource::source_1, temporary_registers, float_constants);
     if (!source_1) {
         return {{}, source_1.error};
     }
-    const auto source_2 = resolve_shader_alu_temporary_source(
-        instruction, ShaderAluSource::source_2, temporary_registers);
+    const auto source_2 = resolve_shader_alu_source(
+        instruction, ShaderAluSource::source_2, temporary_registers, float_constants);
     if (!source_2) {
         return {{}, source_2.error};
     }
@@ -182,7 +216,8 @@ ShaderVectorAluResult evaluate_shader_vector_alu_from_temporaries(
 
 ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     const ShaderAluInstruction& instruction,
-    const ShaderAluTemporaryRegisterBank& initial_registers) {
+    const ShaderAluTemporaryRegisterBank& initial_registers,
+    std::span<const std::array<float, 4>> float_constants) {
     if (instruction.predicated) {
         return {{}, 0.0F, "Predicated Xenos ALU execution is not implemented"};
     }
@@ -200,18 +235,18 @@ ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
         return {{}, 0.0F, "Unsupported Xenos vector/scalar ALU opcode pair"};
     }
 
-    const auto source_1 = resolve_shader_alu_temporary_source(
-        instruction, ShaderAluSource::source_1, initial_registers);
+    const auto source_1 = resolve_shader_alu_source(
+        instruction, ShaderAluSource::source_1, initial_registers, float_constants);
     if (!source_1) {
         return {{}, 0.0F, source_1.error};
     }
-    const auto source_2 = resolve_shader_alu_temporary_source(
-        instruction, ShaderAluSource::source_2, initial_registers);
+    const auto source_2 = resolve_shader_alu_source(
+        instruction, ShaderAluSource::source_2, initial_registers, float_constants);
     if (!source_2) {
         return {{}, 0.0F, source_2.error};
     }
-    const auto scalar_source = resolve_shader_alu_temporary_source(
-        instruction, ShaderAluSource::source_3, initial_registers);
+    const auto scalar_source = resolve_shader_alu_source(
+        instruction, ShaderAluSource::source_3, initial_registers, float_constants);
     if (!scalar_source) {
         return {{}, 0.0F, scalar_source.error};
     }

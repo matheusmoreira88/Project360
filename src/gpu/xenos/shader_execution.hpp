@@ -47,6 +47,7 @@ struct ShaderExecResult {
     std::span<const VertexFetchDescriptor> fetch_constants,
     const memory::GuestMemory& memory,
     const ShaderAluTemporaryRegisterBank& initial_registers,
-    const std::array<float, 4>& missing_component_values);
+    const std::array<float, 4>& missing_component_values,
+    std::span<const std::array<float, 4>> float_constants = {});
 
 } // namespace project360::gpu::xenos
