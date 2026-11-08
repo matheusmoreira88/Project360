@@ -16,8 +16,8 @@ struct RegisterApplyResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
-// Applies only type-0/type-1 register packets. The entire write set and each
-// referenced payload range are validated before the register file is changed.
+// Applies type-0/type-1 register packets and the PM4 type-3 constant-upload
+// commands. The complete write set is validated before the register file changes.
 [[nodiscard]] RegisterApplyResult apply_register_packets(
     std::span<const Packet> packets, std::span<const std::uint8_t> stream,
     std::span<std::uint32_t> registers);

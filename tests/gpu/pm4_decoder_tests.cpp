@@ -109,7 +109,7 @@ void test_register_packet_application() {
     append_u32_be(stream, 0x33333333U);
     append_u32_be(stream, 0x44444444U);
     append_u32_be(stream, 0x80000000U);
-    append_u32_be(stream, 0xc0000000U | (0U << 16U) | (0x2dU << 8U));
+    append_u32_be(stream, 0xc0000000U | (0x10U << 8U));
     append_u32_be(stream, 0x55555555U);
 
     const auto decoded = decode_pm4(stream);
@@ -163,12 +163,65 @@ void test_register_packet_application() {
           "register application rejects decoded packet metadata from a different stream");
 }
 
+void test_type3_constant_uploads() {
+    using namespace project360::gpu::xenos;
+    std::vector<std::uint8_t> stream;
+    const auto add_set_constant = [&](std::uint32_t type, std::uint32_t index,
+                                      std::uint32_t value) {
+        append_u32_be(stream, 0xc0000000U | (1U << 16U) | (0x2dU << 8U));
+        append_u32_be(stream, (type << 16U) | index);
+        append_u32_be(stream, value);
+    };
+    add_set_constant(0U, 3U, 0xa0000000U);
+    add_set_constant(1U, 5U, 0xa1000000U);
+    add_set_constant(2U, 6U, 0xa2000000U);
+    add_set_constant(3U, 1U, 0xa3000000U);
+    add_set_constant(4U, 7U, 0xa4000000U);
+    append_u32_be(stream, 0xc0000000U | (2U << 16U) | (0x55U << 8U));
+    append_u32_be(stream, 0x3456U);
+    append_u32_be(stream, 0xb0000000U);
+    append_u32_be(stream, 0xb0000001U);
+    append_u32_be(stream, 0xc0000000U | (1U << 16U) | (0x56U << 8U));
+    append_u32_be(stream, 0x4321U);
+    append_u32_be(stream, 0xc0000000U);
+
+    const auto decoded = decode_pm4(stream);
+    std::vector<std::uint32_t> registers(0x5000U, 0U);
+    if (!decoded) {
+        check(false, "constant upload test stream parses");
+        return;
+    }
+    const auto applied = apply_register_packets(decoded.packets, stream, registers);
+    check(static_cast<bool>(applied), "supported type-3 constant uploads apply");
+    check(registers[0x4003U] == 0xa0000000U && registers[0x4805U] == 0xa1000000U &&
+              registers[0x4906U] == 0xa2000000U && registers[0x4909U] == 0xa3000000U &&
+              registers[0x2007U] == 0xa4000000U,
+          "SET_CONSTANT maps ALU, fetch, boolean, loop and direct register banks");
+    check(registers[0x3456U] == 0xb0000000U && registers[0x3457U] == 0xb0000001U &&
+              registers[0x4321U] == 0xc0000000U,
+          "SET_CONSTANT2 and SET_SHADER_CONSTANTS write direct register indexes");
+
+    std::vector<std::uint8_t> invalid_stream;
+    append_u32_be(invalid_stream, 0x00000004U);
+    append_u32_be(invalid_stream, 0x11111111U);
+    append_u32_be(invalid_stream, 0xc0000000U | (1U << 16U) | (0x2dU << 8U));
+    append_u32_be(invalid_stream, (6U << 16U) | 2U); // Unsupported constant bank.
+    append_u32_be(invalid_stream, 0x22222222U);
+    const auto invalid_decoded = decode_pm4(invalid_stream);
+    std::vector<std::uint32_t> unchanged(0x5000U, 0xccccccccU);
+    const auto invalid_result = apply_register_packets(invalid_decoded.packets,
+                                                       invalid_stream, unchanged);
+    check(!invalid_result && unchanged[4U] == 0xccccccccU,
+          "unsupported SET_CONSTANT bank rejects prior writes transactionally");
+}
+
 } // namespace
 
 int main() {
     test_packet_framing_and_metadata();
     test_noops_and_malformed_streams();
     test_register_packet_application();
+    test_type3_constant_uploads();
     if (failures != 0) {
         std::cerr << failures << " GPU packet test(s) failed\n";
         return 1;
