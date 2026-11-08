@@ -825,8 +825,15 @@ int main() {
     std::uint32_t pcr_self = 0U;
     std::uint32_t pcr_stack_base = 0U;
     std::uint32_t pcr_stack_limit = 0U;
+    std::uint32_t pcr_current_thread = 0U;
+    std::uint32_t kthread_stack_base = 0U;
+    std::uint32_t kthread_stack_limit = 0U;
+    std::uint32_t kthread_tls = 0U;
+    std::uint32_t kthread_id = 0U;
+    std::uint32_t kthread_start = 0U;
     std::uint32_t pcr_dpc_active = 1U;
     std::uint8_t pcr_cpu = 0xffU;
+    std::uint8_t kthread_type = 0U;
     check(thread_init && template_read &&
               thread_memory.read_u8(thread_init.context->tls_address, copied_template_byte) &&
               template_byte == 0xa5U && copied_template_byte == template_byte &&
@@ -838,13 +845,33 @@ int main() {
                                         pcr_stack_base) &&
               thread_memory.read_u32_be(thread_init.context->pcr_address + 0x74U,
                                         pcr_stack_limit) &&
+              thread_memory.read_u32_be(thread_init.context->pcr_address + 0x100U,
+                                        pcr_current_thread) &&
               thread_memory.read_u8(thread_init.context->pcr_address + 0x10cU, pcr_cpu) &&
               thread_memory.read_u32_be(thread_init.context->pcr_address + 0x150U,
                                         pcr_dpc_active) &&
+              thread_memory.read_u8(thread_init.context->thread_object_address,
+                                    kthread_type) &&
+              thread_memory.read_u32_be(thread_init.context->thread_object_address + 0x5cU,
+                                        kthread_stack_base) &&
+              thread_memory.read_u32_be(thread_init.context->thread_object_address + 0x60U,
+                                        kthread_stack_limit) &&
+              thread_memory.read_u32_be(thread_init.context->thread_object_address + 0x68U,
+                                        kthread_tls) &&
+              thread_memory.read_u32_be(thread_init.context->thread_object_address + 0x14cU,
+                                        kthread_id) &&
+              thread_memory.read_u32_be(thread_init.context->thread_object_address + 0x150U,
+                                        kthread_start) &&
               pcr_tls == thread_init.context->tls_address &&
               pcr_self == thread_init.context->pcr_address &&
+              pcr_current_thread == thread_init.context->thread_object_address &&
               pcr_stack_base == thread_init.context->stack_base &&
               pcr_stack_limit == thread_init.context->stack_limit &&
+              kthread_type == 6U &&
+              kthread_stack_base == thread_init.context->stack_base &&
+              kthread_stack_limit == thread_init.context->stack_limit &&
+              kthread_tls == thread_init.context->tls_address && kthread_id == 1U &&
+              kthread_start == thread_loaded.image->entry_point &&
               pcr_cpu == 0U && pcr_dpc_active == 0U &&
               launch_state.pc == thread_loaded.image->entry_point &&
               launch_state.gpr[13] == thread_init.context->pcr_address &&

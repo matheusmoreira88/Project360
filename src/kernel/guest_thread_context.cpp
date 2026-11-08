@@ -11,6 +11,7 @@ constexpr std::uint64_t kAddressLimit = 0x100000000ULL;
 constexpr std::uint64_t kDefaultTlsSlotCount = 1024U;
 constexpr std::uint64_t kMinimumStackSize = 16U * 1024U;
 constexpr std::uint64_t kPcrSize = 0x2d8U;
+constexpr std::uint64_t kKthreadSize = 0xab0U;
 constexpr std::uint64_t kGuardPageCount = 1U;
 
 GuestThreadInitResult failure(const char* message) { return {{}, message}; }
@@ -100,8 +101,10 @@ GuestThreadInitResult initialize_main_thread_context(const loader::LoadedXexImag
     const auto tls_pages = align_up(tls_bytes, page_size) / page_size;
     const auto stack_pages = stack_bytes / page_size;
     const auto pcr_pages = align_up(kPcrSize, page_size) / page_size;
-    const auto total_virtual_pages = tls_pages + pcr_pages + kGuardPageCount + stack_pages;
-    const auto physical_pages = tls_pages + pcr_pages + stack_pages;
+    const auto kthread_pages = align_up(kKthreadSize, page_size) / page_size;
+    const auto total_virtual_pages =
+        tls_pages + pcr_pages + kthread_pages + kGuardPageCount + stack_pages;
+    const auto physical_pages = tls_pages + pcr_pages + kthread_pages + stack_pages;
     if (tls_bytes == 0U || tls_raw_data_size > tls_data_size ||
         total_virtual_pages > std::numeric_limits<std::size_t>::max() ||
         physical_pages > std::numeric_limits<std::size_t>::max()) {
@@ -125,10 +128,13 @@ GuestThreadInitResult initialize_main_thread_context(const loader::LoadedXexImag
 
     const auto tls_address = virtual_base;
     const auto pcr_address = tls_address + tls_pages * page_size;
-    const auto stack_limit = pcr_address + pcr_pages * page_size + kGuardPageCount * page_size;
+    const auto thread_object_address = pcr_address + pcr_pages * page_size;
+    const auto stack_limit = thread_object_address + kthread_pages * page_size +
+                             kGuardPageCount * page_size;
     const auto stack_base = stack_limit + stack_bytes;
     if (stack_base > kAddressLimit - 1U || pcr_address > UINT32_MAX ||
-        tls_address > UINT32_MAX || stack_base > UINT32_MAX || stack_limit > UINT32_MAX) {
+        thread_object_address > UINT32_MAX || tls_address > UINT32_MAX ||
+        stack_base > UINT32_MAX || stack_limit > UINT32_MAX) {
         return failure("XEX main-thread addresses exceed the 32-bit guest address space");
     }
 
@@ -145,6 +151,7 @@ GuestThreadInitResult initialize_main_thread_context(const loader::LoadedXexImag
         };
         append_region(tls_address, tls_pages);
         append_region(pcr_address, pcr_pages);
+        append_region(thread_object_address, kthread_pages);
         append_region(stack_limit, stack_pages);
     } catch (const std::bad_alloc&) {
         return failure("host memory could not prepare main-thread page mappings");
@@ -158,6 +165,8 @@ GuestThreadInitResult initialize_main_thread_context(const loader::LoadedXexImag
     };
     if (!memory.fill(tls_address, static_cast<std::size_t>(tls_pages * page_size), std::byte{0}) ||
         !memory.fill(pcr_address, static_cast<std::size_t>(pcr_pages * page_size), std::byte{0}) ||
+        !memory.fill(thread_object_address,
+                     static_cast<std::size_t>(kthread_pages * page_size), std::byte{0}) ||
         !memory.fill(stack_limit, static_cast<std::size_t>(stack_bytes), std::byte{0})) {
         rollback();
         return failure("guest memory could not initialize main-thread regions");
@@ -170,21 +179,74 @@ GuestThreadInitResult initialize_main_thread_context(const loader::LoadedXexImag
     }
 
     // X_KPCR fields: TLS pointer 0x00, self pointer 0x30, stack bounds
-    // 0x70/0x74, current CPU 0x10C and DPC-active flag 0x150.
+    // 0x70/0x74, current KTHREAD 0x100, current CPU 0x10C and DPC-active 0x150.
     if (!memory.write_u32_be(pcr_address, static_cast<std::uint32_t>(tls_address)) ||
         !memory.write_u32_be(pcr_address + 0x30U, static_cast<std::uint32_t>(pcr_address)) ||
         !memory.write_u32_be(pcr_address + 0x70U, static_cast<std::uint32_t>(stack_base)) ||
         !memory.write_u32_be(pcr_address + 0x74U, static_cast<std::uint32_t>(stack_limit)) ||
+        !memory.write_u32_be(pcr_address + 0x100U,
+                             static_cast<std::uint32_t>(thread_object_address)) ||
         !memory.write_u8(pcr_address + 0x10cU, 0U) ||
         !memory.write_u32_be(pcr_address + 0x150U, 0U)) {
         rollback();
         return failure("guest memory could not initialize the main-thread PCR");
     }
 
+    // Populate the known X_KTHREAD fields consumed by the public Xenia
+    // bootstrap. Unmodeled fields remain zero; this is not scheduler state.
+    if (!memory.write_u8(thread_object_address, 6U) ||
+        !memory.write_u32_be(thread_object_address + 0x10U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x10U)) ||
+        !memory.write_u32_be(thread_object_address + 0x14U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x10U)) ||
+        !memory.write_u32_be(thread_object_address + 0x40U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x20U)) ||
+        !memory.write_u32_be(thread_object_address + 0x44U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x20U)) ||
+        !memory.write_u32_be(thread_object_address + 0x48U,
+                             static_cast<std::uint32_t>(thread_object_address)) ||
+        !memory.write_u32_be(thread_object_address + 0x4cU,
+                             static_cast<std::uint32_t>(thread_object_address + 0x18U)) ||
+        !memory.write_u16_be(thread_object_address + 0x54U, 0x102U) ||
+        !memory.write_u16_be(thread_object_address + 0x56U, 1U) ||
+        !memory.write_u32_be(thread_object_address + 0x5cU,
+                             static_cast<std::uint32_t>(stack_base)) ||
+        !memory.write_u32_be(thread_object_address + 0x60U,
+                             static_cast<std::uint32_t>(stack_limit)) ||
+        !memory.write_u32_be(thread_object_address + 0x68U,
+                             static_cast<std::uint32_t>(tls_address)) ||
+        !memory.write_u32_be(thread_object_address + 0x74U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x74U)) ||
+        !memory.write_u32_be(thread_object_address + 0x78U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x74U)) ||
+        !memory.write_u32_be(thread_object_address + 0x7cU,
+                             static_cast<std::uint32_t>(thread_object_address + 0x7cU)) ||
+        !memory.write_u32_be(thread_object_address + 0x80U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x7cU)) ||
+        !memory.write_u8(thread_object_address + 0x8bU, 1U) ||
+        !memory.write_u32_be(thread_object_address + 0x9cU, 0xfdffd7ffU) ||
+        !memory.write_u32_be(thread_object_address + 0xd0U,
+                             static_cast<std::uint32_t>(stack_base)) ||
+        !memory.write_u32_be(thread_object_address + 0x144U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x144U)) ||
+        !memory.write_u32_be(thread_object_address + 0x148U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x144U)) ||
+        !memory.write_u32_be(thread_object_address + 0x14cU, 1U) ||
+        !memory.write_u32_be(thread_object_address + 0x150U, image.entry_point) ||
+        !memory.write_u32_be(thread_object_address + 0x154U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x154U)) ||
+        !memory.write_u32_be(thread_object_address + 0x158U,
+                             static_cast<std::uint32_t>(thread_object_address + 0x154U)) ||
+        !memory.write_u32_be(thread_object_address + 0x17cU, 1U)) {
+        rollback();
+        return failure("guest memory could not initialize the main-thread KTHREAD block");
+    }
+
     state.pc = image.entry_point;
     state.gpr[1] = stack_base & ~std::uint64_t{0xfU};
     state.gpr[13] = pcr_address;
     return {GuestMainThreadContext{static_cast<std::uint32_t>(pcr_address),
+                                   static_cast<std::uint32_t>(thread_object_address),
                                    static_cast<std::uint32_t>(tls_address),
                                    static_cast<std::uint32_t>(tls_address + tls_data_size),
                                    static_cast<std::uint32_t>(slot_count),

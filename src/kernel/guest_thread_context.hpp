@@ -12,6 +12,7 @@ namespace project360::kernel {
 
 struct GuestMainThreadContext {
     std::uint32_t pcr_address{};
+    std::uint32_t thread_object_address{};
     std::uint32_t tls_address{};
     std::uint32_t tls_slot_address{};
     std::uint32_t tls_slot_count{};
@@ -27,8 +28,8 @@ struct GuestThreadInitResult {
 };
 
 // Creates the bounded single-thread launch state used to enter a loaded XEX.
-// It initializes stack, static TLS and the documented KPCR fields, but does not
-// create a kernel thread object or scheduler state.
+// The KTHREAD block contains only fields initialized by the current bootstrap
+// model; this does not create scheduler, handle-table, or lifecycle state.
 [[nodiscard]] GuestThreadInitResult initialize_main_thread_context(
     const loader::LoadedXexImage& image, memory::GuestMemory& memory,
     cpu::CpuState& state, std::uint32_t stack_size = 64U * 1024U);
