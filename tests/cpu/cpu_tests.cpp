@@ -1375,8 +1375,8 @@ void test_integer_multiply_instructions() {
     check(result.status == cpu::StepStatus::instruction_limit_reached,
           result.status == cpu::StepStatus::fault ? result.message.c_str()
                                                    : "mullw and mulld program executes");
-    check(state.gpr[4] == 0xffffffff00000000ULL,
-          "mullw returns the full signed product of its low-word operands");
+    check(state.gpr[4] == 0U,
+          "mullw returns the defined low word and records its signed value");
     check(state.gpr[7] == 42,
           "mullw with OE clears OV when the signed word product fits");
     check(state.gpr[10] == 0xfffffffffffffffeULL,

@@ -486,13 +486,19 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto left = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(state.gpr[ins.ra]));
         const auto right = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(state.gpr[ins.rb]));
         const auto product = static_cast<std::int64_t>(left) * static_cast<std::int64_t>(right);
-        state.gpr[ins.rt] = static_cast<std::uint64_t>(product);
+        const auto low_word = static_cast<std::uint32_t>(product);
+        // PowerPC64 defines only RT[32:63] for mullw. Clear RT[0:31] as
+        // a deterministic policy for the architecturally undefined upper half.
+        state.gpr[ins.rt] = low_word;
         if (ins.overflow_enable) {
             const bool overflow = product < std::numeric_limits<std::int32_t>::min() ||
                                   product > std::numeric_limits<std::int32_t>::max();
             set_xer_overflow(state, overflow);
         }
-        if (ins.record) set_cr0(state, state.gpr[ins.rt]);
+        if (ins.record) {
+            const auto signed_result = std::bit_cast<std::int32_t>(low_word);
+            set_cr0(state, static_cast<std::uint64_t>(static_cast<std::int64_t>(signed_result)));
+        }
         break;
     }
     case Opcode::mulld: {
