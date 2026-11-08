@@ -456,6 +456,42 @@ void test_shader_alu_add_mul_pair_execution() {
               multiply_previous.registers[5] == std::array<float, 4>{16.0F, 16.0F, 16.0F, 16.0F},
           "Xenos ADDS_PREV and MULS_PREV consume src3.w and the incoming ps value");
 
+    auto lit_registers = registers;
+    lit_registers[3][3] = 3.0F;
+    lit_registers[3][0] = 1.0F;
+    const auto lit_product = execute_shader_alu_add_mul_pair(encode_pair(0U, 4U, 4U, 5U, 0U, 0x0fU),
+                                                             lit_registers, {}, 2.0F);
+    const auto lit_sentinel =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 4U, 4U, 5U, 0U, 0x0fU), lit_registers, {},
+                                        -std::numeric_limits<float>::max());
+    const auto lit_nonfinite_previous =
+        execute_shader_alu_add_mul_pair(encode_pair(0U, 4U, 4U, 5U, 0U, 0x0fU), lit_registers, {},
+                                        std::numeric_limits<float>::infinity());
+    auto lit_invalid_exponent_registers = lit_registers;
+    lit_invalid_exponent_registers[3][0] = std::numeric_limits<float>::quiet_NaN();
+    const auto lit_invalid_exponent = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 4U, 4U, 5U, 0U, 0x0fU), lit_invalid_exponent_registers, {}, 2.0F);
+    auto lit_zero_exponent_registers = lit_registers;
+    lit_zero_exponent_registers[3][0] = -0.0F;
+    const auto lit_zero_exponent = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 4U, 4U, 5U, 0U, 0x0fU), lit_zero_exponent_registers, {}, 2.0F);
+    auto lit_zero_mantissa_registers = lit_registers;
+    lit_zero_mantissa_registers[3][3] = -0.0F;
+    const auto lit_zero_mantissa = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 4U, 4U, 5U, 0U, 0x0fU), lit_zero_mantissa_registers, {}, 2.0F);
+    check(lit_product && lit_product.previous_scalar == 6.0F &&
+              lit_product.registers[5] == std::array<float, 4>{6.0F, 6.0F, 6.0F, 6.0F} &&
+              lit_sentinel && lit_sentinel.previous_scalar == -std::numeric_limits<float>::max() &&
+              lit_nonfinite_previous &&
+              lit_nonfinite_previous.previous_scalar == -std::numeric_limits<float>::max() &&
+              lit_invalid_exponent &&
+              lit_invalid_exponent.previous_scalar == -std::numeric_limits<float>::max() &&
+              lit_zero_exponent &&
+              lit_zero_exponent.previous_scalar == -std::numeric_limits<float>::max() &&
+              lit_zero_mantissa && lit_zero_mantissa.previous_scalar == 0.0F &&
+              !std::signbit(lit_zero_mantissa.previous_scalar),
+          "Xenos MULS_PREV2 multiplies valid LIT inputs and applies sentinel guards");
+
     const auto maximum_scalar =
         execute_shader_alu_add_mul_pair(encode_pair(0U, 5U, 4U, 5U, 0U, 0x0fU), registers);
     const auto minimum_scalar =
@@ -578,7 +614,7 @@ void test_shader_alu_add_mul_pair_execution() {
               !std::signbit(special_multiply.previous_scalar),
           "Xenos scalar MULS flushes a subnormal operand to positive zero");
 
-    const auto unsupported_pair = encode_pair(0U, 4U, 4U, 5U, 0x0fU, 0x0fU);
+    const auto unsupported_pair = encode_pair(0U, 14U, 4U, 5U, 0x0fU, 0x0fU);
     const auto unsupported = execute_shader_alu_add_mul_pair(unsupported_pair, registers);
     const auto conflicting_pair = encode_pair(0U, 0U, 4U, 4U, 0x03U, 0x01U);
     const auto conflicting = execute_shader_alu_add_mul_pair(conflicting_pair, registers);

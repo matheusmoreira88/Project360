@@ -2,6 +2,7 @@
 
 #include <bit>
 #include <cmath>
+#include <limits>
 
 namespace project360::gpu::xenos {
 namespace {
@@ -372,6 +373,15 @@ execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
         break;
     case 3U: // MULS_PREV: a * ps
         scalar_result = multiply_xenos_legacy(scalar_source.value[3], initial_previous_scalar);
+        break;
+    case 4U: // MULS_PREV2: LIT-style multiply with sentinel handling
+        if (initial_previous_scalar == -std::numeric_limits<float>::max() ||
+            !std::isfinite(initial_previous_scalar) || !std::isfinite(scalar_source.value[0]) ||
+            scalar_source.value[0] <= 0.0F) {
+            scalar_result = -std::numeric_limits<float>::max();
+        } else {
+            scalar_result = multiply_xenos_legacy(scalar_source.value[3], initial_previous_scalar);
+        }
         break;
     case 5U: // MAXS: a >= b ? a : b
         scalar_result = select_xenos_operand(scalar_source.value[3], scalar_source.value[0],
