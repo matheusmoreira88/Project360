@@ -23,11 +23,14 @@ constexpr std::uint32_t kExecutionInfoKey = 0x00040006U;
 constexpr std::uint32_t kEntryPointKey = 0x00010100U;
 constexpr std::uint32_t kImageBaseAddressKey = 0x00010201U;
 constexpr std::uint32_t kFileFormatInfoKey = 0x000003ffU;
+constexpr std::uint32_t kImportLibrariesKey = 0x000103ffU;
 constexpr std::size_t kFixedHeaderSize = 0x18U;
 constexpr std::size_t kOptionalHeaderEntrySize = 8U;
 constexpr std::size_t kExecutionInfoSize = 0x18U;
 constexpr std::size_t kSecurityInfoMinimumSize = 0x184U;
 constexpr std::uint32_t kMaximumHeaderSize = 16U * 1024U * 1024U;
+constexpr std::uint32_t kMaximumImportLibraryNames = 256U;
+constexpr std::size_t kMaximumImportLibraries = 256U;
 
 bool read_be32(std::span<const std::byte> bytes, std::size_t offset, std::uint32_t& value) {
     if (offset > bytes.size() || bytes.size() - offset < 4U) return false;
@@ -63,6 +66,143 @@ bool read_le32(std::span<const std::byte> bytes, std::size_t offset, std::uint32
 
 bool range_fits(std::uint64_t offset, std::uint64_t length, std::uint64_t limit) {
     return offset <= limit && length <= limit - offset;
+}
+
+bool parse_import_libraries(std::span<const std::byte> file, std::uint32_t offset,
+                            std::uint32_t header_size,
+                            std::vector<XexImportLibrary>& libraries, std::string& error) {
+    std::uint32_t block_size = 0;
+    std::uint32_t string_table_size = 0;
+    std::uint32_t string_count = 0;
+    if (!range_fits(offset, 12U, header_size) || !read_be32(file, offset, block_size) ||
+        !read_be32(file, static_cast<std::size_t>(offset) + 4U, string_table_size) ||
+        !read_be32(file, static_cast<std::size_t>(offset) + 8U, string_count) ||
+        block_size < 12U || !range_fits(offset, block_size, header_size) ||
+        string_table_size > block_size - 12U || string_count > string_table_size ||
+        string_count > kMaximumImportLibraryNames) {
+        error = "XEX import-library header or string table has invalid bounds";
+        return false;
+    }
+
+    const auto table_begin = static_cast<std::size_t>(offset) + 12U;
+    const auto table_size = static_cast<std::size_t>(string_table_size);
+    std::vector<std::string> names;
+    names.reserve(string_count);
+    std::size_t cursor = 0;
+    while (names.size() < string_count) {
+        if (cursor >= table_size) {
+            error = "XEX import-library string table has fewer names than declared";
+            return false;
+        }
+        const auto begin = cursor;
+        while (cursor < table_size && file[table_begin + cursor] != std::byte{0} &&
+               file[table_begin + cursor] != std::byte{0xcd}) {
+            ++cursor;
+        }
+        if (cursor == table_size || cursor == begin) {
+            error = "XEX import-library name is empty or not terminated";
+            return false;
+        }
+        std::string name;
+        name.reserve(cursor - begin);
+        for (auto index = begin; index < cursor; ++index) {
+            const auto value = std::to_integer<unsigned char>(file[table_begin + index]);
+            if (value < 0x20U || value > 0x7eU) {
+                error = "XEX import-library name contains non-ASCII bytes";
+                return false;
+            }
+            name.push_back(static_cast<char>(value));
+        }
+        names.push_back(std::move(name));
+        ++cursor;
+        const auto aligned = (cursor + 3U) & ~std::size_t{3U};
+        if (aligned > table_size) {
+            error = "XEX import-library string padding exceeds its table";
+            return false;
+        }
+        while (cursor < aligned) {
+            const auto padding = file[table_begin + cursor];
+            if (padding != std::byte{0} && padding != std::byte{0xcd}) {
+                error = "XEX import-library string padding contains unexpected data";
+                return false;
+            }
+            ++cursor;
+        }
+    }
+    while (cursor < table_size) {
+        const auto padding = file[table_begin + cursor];
+        if (padding != std::byte{0} && padding != std::byte{0xcd}) {
+            error = "XEX import-library string table has trailing data";
+            return false;
+        }
+        ++cursor;
+    }
+
+    const auto block_end = static_cast<std::size_t>(offset) + block_size;
+    cursor = table_begin + table_size;
+    while (cursor < block_end) {
+        if (block_end - cursor < 4U) {
+            error = "XEX import-library descriptor is truncated";
+            return false;
+        }
+        std::uint32_t library_size = 0;
+        if (!read_be32(file, cursor, library_size)) {
+            error = "XEX import-library descriptor is truncated";
+            return false;
+        }
+        if (library_size == 0U) {
+            while (cursor < block_end) {
+                if (file[cursor] != std::byte{0} && file[cursor] != std::byte{0xcd}) {
+                    error = "XEX import-library terminator has trailing data";
+                    return false;
+                }
+                ++cursor;
+            }
+            break;
+        }
+        constexpr std::size_t kLibraryFixedSize = 0x28U;
+        if (library_size < kLibraryFixedSize || (library_size & 3U) != 0U ||
+            library_size > block_end - cursor || libraries.size() >= kMaximumImportLibraries) {
+            error = "XEX import-library descriptor size is invalid";
+            return false;
+        }
+        std::uint32_t version = 0;
+        std::uint32_t minimum_version = 0;
+        std::uint16_t name_index = 0;
+        std::uint16_t import_count = 0;
+        if (!read_be32(file, cursor + 0x1cU, version) ||
+            !read_be32(file, cursor + 0x20U, minimum_version) ||
+            !read_be16(file, cursor + 0x24U, name_index) ||
+            !read_be16(file, cursor + 0x26U, import_count)) {
+            error = "XEX import-library descriptor fields are truncated";
+            return false;
+        }
+        const auto indexed_name = static_cast<std::size_t>(name_index & 0xffU);
+        const auto import_bytes = static_cast<std::uint64_t>(import_count) * 4U;
+        if (indexed_name >= names.size() ||
+            !range_fits(kLibraryFixedSize, import_bytes, library_size)) {
+            error = "XEX import-library name index or import count is invalid";
+            return false;
+        }
+        XexImportLibrary library{};
+        library.name = names[indexed_name];
+        library.version = version;
+        library.minimum_version = minimum_version;
+        library.import_record_addresses.reserve(import_count);
+        for (std::uint16_t i = 0; i < import_count; ++i) {
+            std::uint32_t record_address = 0;
+            if (!read_be32(file, cursor + kLibraryFixedSize +
+                                     static_cast<std::size_t>(i) * 4U,
+                           record_address)) {
+                error = "XEX import record address is truncated";
+                return false;
+            }
+            library.import_record_addresses.push_back(record_address);
+        }
+        libraries.push_back(std::move(library));
+        cursor += library_size;
+    }
+    return true;
 }
 
 } // namespace
@@ -131,6 +271,7 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
     metadata.optional_header_count = header_count;
     bool found_execution_info = false;
     bool found_file_format_info = false;
+    bool found_import_libraries = false;
     for (std::uint32_t i = 0; i < header_count; ++i) {
         const auto entry_offset = kFixedHeaderSize +
                                   static_cast<std::size_t>(i) * kOptionalHeaderEntrySize;
@@ -159,6 +300,16 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
             }
             metadata.encryption_type = encryption_type;
             metadata.compression_type = compression_type;
+        } else if (key == kImportLibrariesKey) {
+            if (found_import_libraries) {
+                return {{}, "duplicate XEX import-libraries header"};
+            }
+            found_import_libraries = true;
+            std::string error;
+            if (!parse_import_libraries(file, value, header_size,
+                                        metadata.import_libraries, error)) {
+                return {{}, std::move(error)};
+            }
         } else if (key == kExecutionInfoKey) {
             if (found_execution_info) return {{}, "duplicate XEX execution-info header"};
             found_execution_info = true;

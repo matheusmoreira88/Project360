@@ -54,7 +54,7 @@ std::vector<std::byte> make_xex2() {
     write_be32(bytes, 0x04U, 0x00000081U);
     write_be32(bytes, 0x08U, 0x1000U);
     write_be32(bytes, 0x10U, 0x100U);
-    write_be32(bytes, 0x14U, 4U);
+    write_be32(bytes, 0x14U, 5U);
     write_be32(bytes, 0x18U, 0x00010100U); // Entry point (immediate).
     write_be32(bytes, 0x1cU, 0x83000U);
     write_be32(bytes, 0x20U, 0x00040006U); // Execution info (24-byte payload).
@@ -63,6 +63,8 @@ std::vector<std::byte> make_xex2() {
     write_be32(bytes, 0x2cU, 0x380U);
     write_be32(bytes, 0x30U, 0x00010201U); // Image base (immediate/pointer field).
     write_be32(bytes, 0x34U, 0x82000U);
+    write_be32(bytes, 0x38U, 0x000103ffU); // Import libraries (offset payload).
+    write_be32(bytes, 0x3cU, 0x400U);
     write_be32(bytes, 0x100U, 0x184U); // Security-info size.
     write_be32(bytes, 0x104U, 0x6000U); // Image size.
     write_be32(bytes, 0x210U, 0x82000U); // Security-info load address.
@@ -71,6 +73,20 @@ std::vector<std::byte> make_xex2() {
     write_be32(bytes, 0x30cU, 0x545408A7U); // Title ID.
     write_be32(bytes, 0x380U, 8U);
     write_be32(bytes, 0x384U, 0U); // Encryption type and compression type are both zero.
+    write_be32(bytes, 0x400U, 0x48U); // Import-libraries block size.
+    write_be32(bytes, 0x404U, 16U);   // Aligned library-name table size.
+    write_be32(bytes, 0x408U, 1U);    // One library name.
+    constexpr char import_library_name[] = "xboxkrnl.exe";
+    for (std::size_t i = 0; i < sizeof(import_library_name); ++i) {
+        bytes[0x40cU + i] = static_cast<std::byte>(import_library_name[i]);
+    }
+    write_be32(bytes, 0x41cU, 0x2cU);        // Library descriptor size.
+    write_be32(bytes, 0x434U, 0x11223344U);  // Library ID.
+    write_be32(bytes, 0x438U, 0x00010002U);  // Library version.
+    write_be32(bytes, 0x43cU, 0x00010000U);  // Minimum version.
+    write_be16(bytes, 0x440U, 0U);           // String-table index.
+    write_be16(bytes, 0x442U, 1U);           // One import record address.
+    write_be32(bytes, 0x444U, 0x00083004U);  // Guest address of import record.
     return bytes;
 }
 
@@ -117,10 +133,17 @@ int main() {
               parsed.metadata->header_size == 0x1000U &&
               parsed.metadata->security_info_offset == 0x100U &&
               parsed.metadata->image_size == 0x6000U &&
-              parsed.metadata->optional_header_count == 4U &&
+              parsed.metadata->optional_header_count == 5U &&
               parsed.metadata->security_load_address == 0x82000U &&
               parsed.metadata->image_base_address == 0x82000U,
           "valid XEX2 headers expose bounded container metadata");
+    check(parsed.metadata && parsed.metadata->import_libraries.size() == 1U &&
+              parsed.metadata->import_libraries[0].name == "xboxkrnl.exe" &&
+              parsed.metadata->import_libraries[0].version == 0x00010002U &&
+              parsed.metadata->import_libraries[0].minimum_version == 0x00010000U &&
+              parsed.metadata->import_libraries[0].import_record_addresses.size() == 1U &&
+              parsed.metadata->import_libraries[0].import_record_addresses[0] == 0x83004U,
+          "XEX import metadata exposes a bounded library name, version and record address");
     check(parsed.metadata && parsed.metadata->title_id == 0x545408a7U &&
               parsed.metadata->media_id == 0x12345678U &&
               parsed.metadata->entry_point == 0x83000U &&
@@ -160,6 +183,30 @@ int main() {
     write_be32(duplicate_execution, 0x18U, 0x00040006U);
     write_be32(duplicate_execution, 0x1cU, 0x300U);
     check(!parse_xex2(duplicate_execution), "duplicate execution-info headers are rejected");
+
+    auto duplicate_imports = bytes;
+    write_be32(duplicate_imports, 20U, 6U);
+    write_be32(duplicate_imports, 0x40U, 0x000103ffU);
+    write_be32(duplicate_imports, 0x44U, 0x400U);
+    check(!parse_xex2(duplicate_imports), "duplicate XEX import-library headers are rejected");
+    auto oversized_import_string_table = bytes;
+    write_be32(oversized_import_string_table, 0x404U, 0xffffffffU);
+    check(!parse_xex2(oversized_import_string_table),
+          "oversized XEX import-library string tables are rejected");
+    auto unterminated_import_name = bytes;
+    for (std::size_t i = 0; i < 16U; ++i) {
+        unterminated_import_name[0x40cU + i] = std::byte{0x41};
+    }
+    check(!parse_xex2(unterminated_import_name),
+          "unterminated XEX import-library names are rejected");
+    auto bad_import_descriptor_size = bytes;
+    write_be32(bad_import_descriptor_size, 0x41cU, 0x20U);
+    check(!parse_xex2(bad_import_descriptor_size),
+          "undersized XEX import-library descriptors are rejected");
+    auto excessive_import_count = bytes;
+    write_be16(excessive_import_count, 0x442U, 2U);
+    check(!parse_xex2(excessive_import_count),
+          "XEX import counts cannot exceed their descriptor payload");
 
     auto no_execution = bytes;
     write_be32(no_execution, 20, 0U);

@@ -43,6 +43,17 @@ int inspect_xex(const std::filesystem::path& path) {
     std::cout << "Compression type: ";
     if (metadata.compression_type) std::cout << *metadata.compression_type << '\n';
     else std::cout << "not present\n";
+    if (metadata.import_libraries.empty()) {
+        std::cout << "Import libraries: not present\n";
+    } else {
+        std::cout << "Import libraries (metadata only):\n";
+        for (const auto& library : metadata.import_libraries) {
+            std::cout << "  " << library.name << " version=0x" << std::hex << std::uppercase
+                      << library.version << " minimum=0x" << library.minimum_version
+                      << std::dec << " records=" << library.import_record_addresses.size()
+                      << '\n';
+        }
+    }
     return 0;
 }
 

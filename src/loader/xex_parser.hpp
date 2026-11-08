@@ -15,6 +15,13 @@ class GuestMemory;
 
 namespace project360::loader {
 
+struct XexImportLibrary {
+    std::string name;
+    std::uint32_t version{};
+    std::uint32_t minimum_version{};
+    std::vector<std::uint32_t> import_record_addresses;
+};
+
 struct XexMetadata {
     std::uint32_t module_flags{};
     std::uint32_t header_size{};
@@ -28,6 +35,7 @@ struct XexMetadata {
     std::optional<std::uint32_t> image_base_address;
     std::optional<std::uint16_t> encryption_type;
     std::optional<std::uint16_t> compression_type;
+    std::vector<XexImportLibrary> import_libraries;
 };
 
 struct XexParseResult {
