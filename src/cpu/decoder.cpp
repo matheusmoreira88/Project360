@@ -54,6 +54,22 @@ DecodeResult decode(std::uint32_t word) {
         ins.mask_end = static_cast<std::uint8_t>((word >> 1U) & 0x1fU);
         ins.record = (word & 1U) != 0U;
         return {ins, {}};
+    case 30: {
+        const auto md_xo = static_cast<std::uint8_t>((word >> 2U) & 0x7U);
+        switch (md_xo) {
+        case 0: ins.opcode = Opcode::rotate_left_doubleword_clear_left; break;
+        case 1: ins.opcode = Opcode::rotate_left_doubleword_clear_right; break;
+        case 2: ins.opcode = Opcode::rotate_left_doubleword_clear; break;
+        case 3: ins.opcode = Opcode::rotate_left_doubleword_mask_insert; break;
+        default: return {{}, "reserved doubleword rotate-mask subopcode"};
+        }
+        ins.shift = static_cast<std::uint8_t>(((word >> 11U) & 0x1fU) |
+                                              ((word & 0x2U) << 4U));
+        ins.mask_begin = static_cast<std::uint8_t>((word >> 5U) & 0x3fU);
+        ins.mask_end = ins.mask_begin;
+        ins.record = (word & 1U) != 0U;
+        return {ins, {}};
+    }
     case 10:
     case 11:
         if ((word & (1U << 22U)) != 0U) return {{}, "compare immediate reserved bit is set"};

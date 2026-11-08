@@ -83,6 +83,17 @@ std::uint32_t rotate_word_form(std::uint8_t op, std::uint8_t ra, std::uint8_t rs
            (static_cast<std::uint32_t>(end) << 1U) | (record ? 1U : 0U);
 }
 
+std::uint32_t rotate_doubleword_form(std::uint8_t ra, std::uint8_t rs, std::uint8_t shift,
+                                     std::uint8_t mask, std::uint8_t xo,
+                                     bool record = false) {
+    return (30U << 26U) | (static_cast<std::uint32_t>(rs) << 21U) |
+           (static_cast<std::uint32_t>(ra) << 16U) |
+           (static_cast<std::uint32_t>(shift & 0x1fU) << 11U) |
+           (static_cast<std::uint32_t>(mask & 0x3fU) << 5U) |
+           (static_cast<std::uint32_t>(xo & 0x7U) << 2U) |
+           (static_cast<std::uint32_t>(shift & 0x20U) >> 4U) | (record ? 1U : 0U);
+}
+
 std::uint32_t compare_immediate(std::uint8_t op, std::uint8_t bf, bool wide,
                                 std::uint8_t ra, std::uint16_t immediate) {
     return (static_cast<std::uint32_t>(op) << 26U) |
@@ -448,6 +459,49 @@ void test_word_rotate_insert_and_variable_mask() {
 
     const auto bad_word = cpu::decode(rotate_word_form(22, 1, 2, 3, 4, 5));
     check(!bad_word, "unassigned primary opcode between word rotate forms remains unsupported");
+}
+
+void test_doubleword_rotate_mask_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(32);
+    put_word(mem, 0, rotate_doubleword_form(3, 1, 8, 16, 0)); // rldicl r3,r1,8,16
+    put_word(mem, 4, rotate_doubleword_form(4, 1, 8, 39, 1)); // rldicr r4,r1,8,39
+    put_word(mem, 8, rotate_doubleword_form(5, 1, 8, 0, 2)); // rldic r5,r1,8,0
+    put_word(mem, 12, rotate_doubleword_form(6, 2, 48, 8, 3, true)); // rldimi. r6,r2,48,8
+    put_word(mem, 16, rotate_doubleword_form(7, 1, 63, 0, 0)); // rldicl r7,r1,63,0
+    put_word(mem, 20, rotate_doubleword_form(8, 1, 8, 60, 2)); // wrapped rldic mask
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0x123456789abcdef0ULL;
+    state.gpr[2] = 0xab;
+    state.gpr[6] = 0x1122334455667788ULL;
+    const cpu::Interpreter interpreter{};
+
+    const std::uint64_t expected[] = {
+        0x0000789abcdef012ULL,
+        0x3456789abc000000ULL,
+        0x3456789abcdef000ULL,
+        0x11ab334455667788ULL,
+        0x091a2b3c4d5e6f78ULL,
+        0x3456789abcdef002ULL,
+    };
+    for (std::size_t index = 0; index < std::size(expected); ++index) {
+        const auto result = interpreter.step(state, mem);
+        const auto destination = static_cast<std::size_t>(index + 3U);
+        if (result.status != cpu::StepStatus::executed || state.gpr[destination] != expected[index]) {
+            std::cerr << "rotate-mask case " << index << ": got 0x" << std::hex
+                      << state.gpr[destination] << ", expected 0x" << expected[index] << std::dec << '\n';
+        }
+        check(result.status == cpu::StepStatus::executed && state.gpr[destination] == expected[index],
+              "64-bit rotate-mask instruction produces the expected result");
+        if (index == 3U) {
+            check((state.cr >> 28U) == 4U, "rldimi record form updates CR0 from the merged value");
+        }
+    }
+    check(state.pc == 24, "all doubleword rotate-mask program instructions execute");
+
+    const auto reserved = cpu::decode(rotate_doubleword_form(1, 2, 3, 4, 4));
+    check(!reserved, "reserved MD-form rotate-mask subopcodes are diagnosed");
 }
 
 void test_leading_zero_instructions() {
@@ -1289,6 +1343,7 @@ int main() {
     test_doubleword_shift_instructions();
     test_word_shift_immediate_instruction();
     test_word_rotate_insert_and_variable_mask();
+    test_doubleword_rotate_mask_instructions();
     test_leading_zero_instructions();
     test_memory_and_endianness();
     test_byte_and_halfword_memory_instructions();

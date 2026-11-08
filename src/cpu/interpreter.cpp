@@ -82,6 +82,16 @@ std::uint32_t rotate_mask(std::uint8_t begin, std::uint8_t end) {
     return mask;
 }
 
+std::uint64_t rotate_mask_doubleword(std::uint8_t begin, std::uint8_t end) {
+    std::uint64_t mask = 0;
+    for (unsigned bit = 0; bit < 64U; ++bit) {
+        const bool selected = begin <= end ? (bit >= begin && bit <= end)
+                                          : (bit >= begin || bit <= end);
+        if (selected) mask |= 1ULL << (63U - bit);
+    }
+    return mask;
+}
+
 bool evaluate_branch_condition(CpuState& state, std::uint8_t bo, std::uint8_t bi) {
     const bool ignore_condition = (bo & 0x10U) != 0U;
     const bool expected_condition = (bo & 0x08U) != 0U;
@@ -204,6 +214,30 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto value = ins.opcode == Opcode::rotate_left_word_mask_insert
                                ? static_cast<std::uint32_t>(
                                      (static_cast<std::uint32_t>(state.gpr[ins.ra]) & ~mask) | selected)
+                               : selected;
+        state.gpr[ins.ra] = value;
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
+    case Opcode::rotate_left_doubleword_clear_left:
+    case Opcode::rotate_left_doubleword_clear_right:
+    case Opcode::rotate_left_doubleword_clear:
+    case Opcode::rotate_left_doubleword_mask_insert: {
+        const auto rotated = std::rotl(state.gpr[ins.rt], static_cast<int>(ins.shift));
+        std::uint8_t begin = 0;
+        std::uint8_t end = 63;
+        if (ins.opcode == Opcode::rotate_left_doubleword_clear_left) {
+            begin = ins.mask_begin;
+        } else if (ins.opcode == Opcode::rotate_left_doubleword_clear_right) {
+            end = ins.mask_end;
+        } else {
+            begin = ins.mask_begin;
+            end = static_cast<std::uint8_t>(63U - ins.shift);
+        }
+        const auto mask = rotate_mask_doubleword(begin, end);
+        const auto selected = rotated & mask;
+        const auto value = ins.opcode == Opcode::rotate_left_doubleword_mask_insert
+                               ? (state.gpr[ins.ra] & ~mask) | selected
                                : selected;
         state.gpr[ins.ra] = value;
         if (ins.record) set_cr0(state, value);
