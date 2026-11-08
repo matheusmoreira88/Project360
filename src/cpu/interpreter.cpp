@@ -89,6 +89,7 @@ bool is_floating_point_instruction(Opcode opcode) {
     case Opcode::floating_move_from_fpscr:
     case Opcode::floating_move_condition_register_from_fpscr:
     case Opcode::floating_move_to_fpscr_field_immediate:
+    case Opcode::floating_move_to_fpscr_fields:
     case Opcode::floating_move_to_fpscr_bit_zero:
     case Opcode::floating_move_to_fpscr_bit_one:
     case Opcode::floating_negate:
@@ -1047,6 +1048,27 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         }
         state.fpscr = (state.fpscr & ~field_mask) |
                       (static_cast<std::uint32_t>(ins.immediate) << field_shift);
+        update_fpscr_exception_summaries(state);
+        if (ins.record) set_cr_field(state, 1U, (state.fpscr >> 28U) & 0xfU);
+        break;
+    }
+    case Opcode::floating_move_to_fpscr_fields: {
+        const auto source = static_cast<std::uint32_t>(state.fpr[ins.rb]);
+        if ((ins.field_mask & 0x04U) != 0U && (source & 0x00000400U) != 0U &&
+            (state.fpscr & kFpscrVe) != 0U) {
+            return fault(
+                FaultKind::unsupported_instruction, old_pc,
+                "mtfsf VXSOFT with VE=1 requires unsupported floating-point exception delivery",
+                word);
+        }
+
+        for (unsigned field = 0U; field < 8U; ++field) {
+            if ((ins.field_mask & (1U << (7U - field))) == 0U) continue;
+            const auto field_shift = 28U - 4U * field;
+            const auto field_mask = 0xfU << field_shift;
+            const auto field_value = (source >> field_shift) & 0xfU;
+            state.fpscr = (state.fpscr & ~field_mask) | (field_value << field_shift);
+        }
         update_fpscr_exception_summaries(state);
         if (ins.record) set_cr_field(state, 1U, (state.fpscr >> 28U) & 0xfU);
         break;

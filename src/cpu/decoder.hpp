@@ -143,6 +143,7 @@ enum class Opcode {
     floating_move_from_fpscr,
     floating_move_condition_register_from_fpscr,
     floating_move_to_fpscr_field_immediate,
+    floating_move_to_fpscr_fields,
     floating_move_to_fpscr_bit_zero,
     floating_move_to_fpscr_bit_one,
     floating_negate,
