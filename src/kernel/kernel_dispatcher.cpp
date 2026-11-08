@@ -11,6 +11,31 @@ namespace {
 
 constexpr std::uint32_t kStatusSuccess = 0x00000000U;
 constexpr std::uint32_t kStatusInvalidParameter = 0xc000000dU;
+constexpr std::uint32_t kErrorMessageIdNotFound = 317U;
+
+[[nodiscard]] constexpr std::uint32_t nt_status_to_dos_error(
+    std::uint32_t status) noexcept {
+    switch (status) {
+    case 0x00000000U: return 0U;    // STATUS_SUCCESS -> ERROR_SUCCESS
+    case 0x00000103U: return 997U;  // STATUS_PENDING -> ERROR_IO_PENDING
+    case 0x80000005U: return 234U;  // STATUS_BUFFER_OVERFLOW -> ERROR_MORE_DATA
+    case 0xc0000001U: return 31U;   // STATUS_UNSUCCESSFUL -> ERROR_GEN_FAILURE
+    case 0xc0000002U: return 1U;    // STATUS_NOT_IMPLEMENTED -> ERROR_INVALID_FUNCTION
+    case 0xc0000005U: return 998U;  // STATUS_ACCESS_VIOLATION -> ERROR_NOACCESS
+    case 0xc0000008U: return 6U;    // STATUS_INVALID_HANDLE -> ERROR_INVALID_HANDLE
+    case 0xc000000dU: return 87U;   // STATUS_INVALID_PARAMETER -> ERROR_INVALID_PARAMETER
+    case 0xc0000011U: return 38U;   // STATUS_END_OF_FILE -> ERROR_HANDLE_EOF
+    case 0xc0000017U: return 8U;    // STATUS_NO_MEMORY -> ERROR_NOT_ENOUGH_MEMORY
+    case 0xc0000022U: return 5U;    // STATUS_ACCESS_DENIED -> ERROR_ACCESS_DENIED
+    case 0xc0000023U: return 122U;  // STATUS_BUFFER_TOO_SMALL -> ERROR_INSUFFICIENT_BUFFER
+    case 0xc0000034U: return 2U;    // STATUS_OBJECT_NAME_NOT_FOUND -> FILE_NOT_FOUND
+    case 0xc0000035U: return 183U;  // STATUS_OBJECT_NAME_COLLISION -> ALREADY_EXISTS
+    case 0xc000003aU: return 3U;    // STATUS_OBJECT_PATH_NOT_FOUND -> PATH_NOT_FOUND
+    case 0xc0000043U: return 32U;   // STATUS_SHARING_VIOLATION -> SHARING_VIOLATION
+    case 0xc000007fU: return 112U;  // STATUS_DISK_FULL -> DISK_FULL
+    default: return kErrorMessageIdNotFound;
+    }
+}
 
 [[nodiscard]] constexpr char ascii_lower(char value) noexcept {
     return value >= 'A' && value <= 'Z'
@@ -53,6 +78,11 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
                                                 memory::GuestMemory& memory) const noexcept {
     if (!equals_ascii_case_insensitive(import.library, "xboxkrnl.exe")) {
         return KernelDispatchStatus::unsupported_library;
+    }
+    if (import.ordinal == rtl_nt_status_to_dos_error_ordinal) {
+        state.gpr[3] = nt_status_to_dos_error(static_cast<std::uint32_t>(state.gpr[3]));
+        state.pc = state.lr & ~std::uint64_t{3};
+        return KernelDispatchStatus::handled;
     }
     if (import.ordinal == rtl_ulong_byte_swap_ordinal) {
         const auto value = static_cast<std::uint32_t>(state.gpr[3]);

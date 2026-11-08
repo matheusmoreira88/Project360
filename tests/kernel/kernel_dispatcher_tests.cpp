@@ -422,6 +422,51 @@ int main() {
               state.pc == 0x800150U && state.gpr[3] == unicode_descriptor,
           "RtlUnicodeStringToInteger propagates inaccessible string memory without returning");
 
+    struct NtStatusMapping {
+        std::uint32_t nt_status;
+        std::uint32_t win32_error;
+    };
+    constexpr std::array known_status_mappings{
+        NtStatusMapping{0x00000000U, 0U},
+        NtStatusMapping{0x00000103U, 997U},
+        NtStatusMapping{0x80000005U, 234U},
+        NtStatusMapping{0xc0000001U, 31U},
+        NtStatusMapping{0xc0000002U, 1U},
+        NtStatusMapping{0xc0000005U, 998U},
+        NtStatusMapping{0xc0000008U, 6U},
+        NtStatusMapping{0xc000000dU, 87U},
+        NtStatusMapping{0xc0000011U, 38U},
+        NtStatusMapping{0xc0000017U, 8U},
+        NtStatusMapping{0xc0000022U, 5U},
+        NtStatusMapping{0xc0000023U, 122U},
+        NtStatusMapping{0xc0000034U, 2U},
+        NtStatusMapping{0xc0000035U, 183U},
+        NtStatusMapping{0xc000003aU, 3U},
+        NtStatusMapping{0xc0000043U, 32U},
+        NtStatusMapping{0xc000007fU, 112U},
+    };
+    bool known_status_mappings_match = true;
+    for (const auto& mapping : known_status_mappings) {
+        state.gpr[3] = mapping.nt_status;
+        state.lr = 0x1307U;
+        const auto translated = KernelDispatcher{}.dispatch(
+            {"xboxkrnl.exe", KernelDispatcher::rtl_nt_status_to_dos_error_ordinal},
+            state, memory);
+        known_status_mappings_match =
+            known_status_mappings_match && translated == KernelDispatchStatus::handled &&
+            state.gpr[3] == mapping.win32_error && state.pc == 0x1304U;
+    }
+    check(known_status_mappings_match,
+          "RtlNtStatusToDosError maps the documented supported NTSTATUS subset and returns through LR");
+    state.gpr[3] = 0xdeadbeefU;
+    state.lr = 0x1317U;
+    const auto unknown_status = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_nt_status_to_dos_error_ordinal}, state,
+        memory);
+    check(unknown_status == KernelDispatchStatus::handled && state.gpr[3] == 317U &&
+              state.pc == 0x1314U,
+          "RtlNtStatusToDosError returns ERROR_MR_MID_NOT_FOUND for an unmapped status");
+
     state.gpr[3] = data_page;
     state.gpr[4] = initial.size();
     state.gpr[5] = 0x1234abU;
