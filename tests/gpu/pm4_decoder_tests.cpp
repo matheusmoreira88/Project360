@@ -8,6 +8,7 @@
 #include "gpu/xenos/texture_decode.hpp"
 #include "gpu/xenos/texture_fetch.hpp"
 #include "gpu/xenos/texture_memory.hpp"
+#include "gpu/xenos/texture_sampling.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
@@ -2350,6 +2351,19 @@ void test_tiled_texture_block_addressing_and_reads() {
                           TextureRgba8{0xccU, 0xbbU, 0xaaU, 0xddU},
                   "descriptor read and endian path feeds the RGBA8 block decoder correctly");
         }
+        auto point_fetch = rgba_fetch.constant;
+        point_fetch.component_swizzle = static_cast<std::uint16_t>(
+            0U | (1U << 3U) | (2U << 6U) | (3U << 9U));
+        const auto point_sample = sample_xenos_tiled_2d_texture_point(
+            point_fetch, 32U, 0U, memory);
+        check(point_sample &&
+                  std::abs(point_sample.value.r - 0xcc / 255.0F) < 0.00001F &&
+                  std::abs(point_sample.value.g - 0xbb / 255.0F) < 0.00001F &&
+                  std::abs(point_sample.value.b - 0xaa / 255.0F) < 0.00001F &&
+                  std::abs(point_sample.value.a - 0xdd / 255.0F) < 0.00001F,
+              "point sample composes tiled read endian decode numeric modes and swizzle");
+        check(!sample_xenos_tiled_2d_texture_point(point_fetch, 64U, 0U, memory),
+              "point sample propagates descriptor coordinate bounds errors");
         check(!read_xenos_tiled_2d_texture_block(rgba_fetch.constant, 64U, 0U, memory),
               "descriptor-backed texture read rejects coordinates outside visible dimensions");
     }
@@ -2405,6 +2419,12 @@ void test_tiled_texture_block_addressing_and_reads() {
                   std::equal(descriptor_dxt_bytes.begin(), descriptor_dxt_bytes.end(),
                              descriptor_block.bytes.begin()),
               "descriptor-backed DXT1 read converts texels into 4x4 storage blocks");
+        const auto unsupported_dxt_sample = sample_xenos_tiled_2d_texture_point(
+            dxt_fetch.constant, 32U, 4U, memory);
+        check(!unsupported_dxt_sample &&
+                  unsupported_dxt_sample.error.find("Numeric fetch conversion") !=
+                      std::string::npos,
+              "point sampler reports unsupported numeric conversion for DXT blocks");
     }
 
     const auto stacked_fetch = make_fetch(6U, 0x1000U, 64U, 64U, 2U, true, true);

@@ -20,6 +20,7 @@ add_library(project360_core
     src/gpu/xenos/texture_decode.cpp
     src/gpu/xenos/texture_fetch.cpp
     src/gpu/xenos/texture_memory.cpp
+    src/gpu/xenos/texture_sampling.cpp
     src/gpu/xenos/vertex_fetch.cpp
     src/kernel/guest_executor.cpp
     src/kernel/guest_pool.cpp
