@@ -701,6 +701,56 @@ int main() {
         check(false, "loaded XEX image is available for kernel execution integration");
     }
 
+    {
+        constexpr std::uint32_t program_base = 0x1000U;
+        constexpr std::uint32_t import_thunk = 0x1100U;
+        constexpr std::uint32_t destination = 0x2000U;
+        project360::loader::LoadedXexImage guest_program{};
+        guest_program.entry_point = program_base;
+        project360::loader::XexImportLibrary kernel_imports{};
+        kernel_imports.name = "xboxkrnl.exe";
+        kernel_imports.import_record_addresses = {import_thunk};
+        kernel_imports.import_types = {1U};
+        kernel_imports.import_ordinals = {
+            project360::kernel::KernelDispatcher::rtl_fill_memory_ulong_ordinal};
+        guest_program.xex.import_libraries.push_back(std::move(kernel_imports));
+
+        project360::memory::GuestMemory program_memory(0x4000U);
+        const std::array<std::uint32_t, 6> program_words{
+            (14U << 26U) | (3U << 21U) | destination, // li r3, destination
+            (14U << 26U) | (4U << 21U) | 4U,          // li r4, 4 bytes
+            (15U << 26U) | (5U << 21U) | 0x1122U,     // lis r5, 0x1122
+            (24U << 26U) | (5U << 21U) | (5U << 16U) | 0x3344U, // ori r5,r5,0x3344
+            0x480000f1U,                              // bl 0x1100
+            (14U << 26U) | (6U << 21U) | 0x55aaU,    // li r6, 0x55aa after return
+        };
+        std::array<std::byte, program_words.size() * sizeof(std::uint32_t)> program_bytes{};
+        for (std::size_t index = 0; index < program_words.size(); ++index) {
+            const auto word = program_words[index];
+            const auto offset = index * sizeof(std::uint32_t);
+            program_bytes[offset] = static_cast<std::byte>(word >> 24U);
+            program_bytes[offset + 1U] = static_cast<std::byte>(word >> 16U);
+            program_bytes[offset + 2U] = static_cast<std::byte>(word >> 8U);
+            program_bytes[offset + 3U] = static_cast<std::byte>(word);
+        }
+        const bool program_loaded = program_memory.load(program_base, program_bytes);
+        project360::kernel::GuestExecutor guest_program_executor(guest_program);
+        project360::cpu::CpuState guest_program_state{};
+        guest_program_state.pc = guest_program.entry_point;
+        const auto guest_program_run = guest_program_executor.run(
+            guest_program_state, program_memory, program_words.size() + 1U);
+        std::uint32_t filled_word = 0U;
+        check(program_loaded &&
+                  guest_program_run.instructions_executed == program_words.size() + 1U &&
+                  guest_program_run.stop.status ==
+                      project360::cpu::StepStatus::instruction_limit_reached &&
+                  guest_program_state.pc == program_base + program_words.size() * 4U &&
+                  guest_program_state.gpr[6] == 0x55aaU &&
+                  program_memory.read_u32_be(destination, filled_word) &&
+                  filled_word == 0x11223344U,
+              "synthetic PowerPC homebrew calls a verified kernel import, writes guest memory, and resumes after return");
+    }
+
     auto wrong_import_library = loadable_xex;
     write_be32(wrong_import_library, 0x1000U + 0x2a0U, 0x0101011cU);
     project360::memory::GuestMemory wrong_library_memory(0x4000U);
