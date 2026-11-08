@@ -1,8 +1,21 @@
 #include "gpu/xenos/shader_alu.hpp"
 
+#include <bit>
 #include <cmath>
 
 namespace project360::gpu::xenos {
+namespace {
+
+float multiply_xenos_legacy(float lhs, float rhs) noexcept {
+    constexpr std::uint32_t exponent_mask = 0x7f800000U;
+    if ((std::bit_cast<std::uint32_t>(lhs) & exponent_mask) == 0U ||
+        (std::bit_cast<std::uint32_t>(rhs) & exponent_mask) == 0U) {
+        return 0.0F;
+    }
+    return lhs * rhs;
+}
+
+} // namespace
 
 ShaderAluInstruction decode_shader_alu_instruction(
     const std::array<std::uint32_t, 3>& words) noexcept {
@@ -113,7 +126,8 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
     if (instruction.vector_clamp) {
         return {{}, "Clamped Xenos vector ALU results are not implemented"};
     }
-    if (instruction.vector_opcode > 1U) {
+    if (instruction.vector_opcode > 7U || instruction.vector_opcode == 2U ||
+        instruction.vector_opcode == 3U) {
         return {{}, "Unsupported Xenos vector ALU opcode"};
     }
 
@@ -122,10 +136,27 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
         if ((instruction.vector_write_mask & (1U << lane)) == 0U) {
             continue;
         }
-        if (instruction.vector_opcode == 0U) {
+        switch (instruction.vector_opcode) {
+        case 0U:
             result.destination[lane] = source_1[lane] + source_2[lane];
-        } else {
-            result.destination[lane] = source_1[lane] * source_2[lane];
+            break;
+        case 1U:
+            result.destination[lane] = multiply_xenos_legacy(source_1[lane], source_2[lane]);
+            break;
+        case 4U:
+            result.destination[lane] = source_1[lane] == source_2[lane] ? 1.0F : 0.0F;
+            break;
+        case 5U:
+            result.destination[lane] = source_1[lane] > source_2[lane] ? 1.0F : 0.0F;
+            break;
+        case 6U:
+            result.destination[lane] = source_1[lane] >= source_2[lane] ? 1.0F : 0.0F;
+            break;
+        case 7U:
+            result.destination[lane] = source_1[lane] != source_2[lane] ? 1.0F : 0.0F;
+            break;
+        default:
+            return {{}, "Unsupported Xenos vector ALU opcode"};
         }
     }
     return result;
@@ -199,7 +230,8 @@ ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     // ADDS/MULS consume the W (`a`) and X (`b`) swizzles of src3.
     const auto scalar_result = instruction.scalar_opcode == 0U
                                    ? scalar_source.value[3] + scalar_source.value[0]
-                                   : scalar_source.value[3] * scalar_source.value[0];
+                                   : multiply_xenos_legacy(scalar_source.value[3],
+                                                           scalar_source.value[0]);
     ShaderAluExecutionResult result{initial_registers, scalar_result, {}};
     result.registers[instruction.vector_destination] = vector_result.destination;
     for (std::size_t lane = 0; lane < 4U; ++lane) {

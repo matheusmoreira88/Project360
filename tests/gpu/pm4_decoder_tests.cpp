@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -136,6 +137,52 @@ void test_shader_vector_alu_reference_subset() {
           "Xenos vector ALU subset rejects unsupported opcodes and predicates without partial output");
 }
 
+void test_shader_vector_alu_comparisons() {
+    using namespace project360::gpu::xenos;
+    const auto nan = std::numeric_limits<float>::quiet_NaN();
+    const std::array<float, 4> source_1{-1.0F, 2.0F, 3.0F, nan};
+    const std::array<float, 4> source_2{-1.0F, 3.0F, 2.0F, nan};
+    const std::array<float, 4> previous{9.0F, 9.0F, 9.0F, 9.0F};
+    const auto evaluate = [&](std::uint8_t opcode) {
+        const auto instruction = decode_shader_alu_instruction(
+            {0x000f0000U, 0U, static_cast<std::uint32_t>(opcode) << 24U});
+        return evaluate_shader_vector_alu(instruction, source_1, source_2, previous);
+    };
+
+    const auto equal = evaluate(4U);
+    const auto greater = evaluate(5U);
+    const auto greater_equal = evaluate(6U);
+    const auto not_equal = evaluate(7U);
+    check(equal && equal.destination == std::array<float, 4>{1.0F, 0.0F, 0.0F, 0.0F} &&
+              greater && greater.destination == std::array<float, 4>{0.0F, 0.0F, 1.0F, 0.0F} &&
+              greater_equal &&
+                  greater_equal.destination == std::array<float, 4>{1.0F, 0.0F, 1.0F, 0.0F} &&
+              not_equal && not_equal.destination == std::array<float, 4>{0.0F, 1.0F, 1.0F, 1.0F},
+          "Xenos SEQ/SGT/SGE/SNE return per-lane booleans with IEEE unordered comparisons");
+
+    const auto unsupported = decode_shader_alu_instruction(
+        {0x00050000U, 0U, 0x02000000U});
+    const auto rejected = evaluate_shader_vector_alu(unsupported, source_1, source_2, previous);
+    check(!rejected && rejected.destination == std::array<float, 4>{},
+          "Xenos vector MAX remains unsupported rather than using unverified NaN behavior");
+}
+
+void test_shader_vector_alu_legacy_multiplication() {
+    using namespace project360::gpu::xenos;
+    const auto instruction = decode_shader_alu_instruction(
+        {0x000f0000U, 0U, 0x01000000U});
+    const std::array<float, 4> source_1{
+        0.0F, -0.0F, std::numeric_limits<float>::denorm_min(), 2.0F};
+    const std::array<float, 4> source_2{
+        -0.0F, 3.0F, std::numeric_limits<float>::infinity(), 4.0F};
+    const auto result = evaluate_shader_vector_alu(
+        instruction, source_1, source_2, {9.0F, 9.0F, 9.0F, 9.0F});
+    check(result && result.destination == std::array<float, 4>{0.0F, 0.0F, 0.0F, 8.0F} &&
+              !std::signbit(result.destination[0]) && !std::signbit(result.destination[1]) &&
+              !std::signbit(result.destination[2]),
+          "Xenos legacy MUL flushes zero/subnormal operands to positive zero per lane");
+}
+
 void test_shader_alu_temporary_source_resolution() {
     using namespace project360::gpu::xenos;
     ShaderAluTemporaryRegisterBank registers{};
@@ -227,6 +274,15 @@ void test_shader_alu_add_mul_pair_execution() {
               multiplied.registers[1] == std::array<float, 4>{10.0F, 40.0F, 40.0F, 40.0F} &&
               multiplied.previous_scalar == 40.0F,
           "Xenos vector MUL and scalar MULS merge disjoint masks on the same destination");
+
+    auto special_registers = registers;
+    special_registers[3] = {std::numeric_limits<float>::infinity(), 6.0F, 7.0F,
+                            std::numeric_limits<float>::denorm_min()};
+    const auto special_multiply = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 2U, 4U, 5U, 0U, 0x0fU), special_registers);
+    check(special_multiply && special_multiply.previous_scalar == 0.0F &&
+              !std::signbit(special_multiply.previous_scalar),
+          "Xenos scalar MULS flushes a subnormal operand to positive zero");
 
     const auto unsupported_pair = encode_pair(0U, 1U, 4U, 5U, 0x0fU, 0x0fU);
     const auto unsupported = execute_shader_alu_add_mul_pair(unsupported_pair, registers);
@@ -1101,6 +1157,8 @@ int main() {
     test_packet_framing_and_metadata();
     test_shader_alu_word_decode();
     test_shader_vector_alu_reference_subset();
+    test_shader_vector_alu_comparisons();
+    test_shader_vector_alu_legacy_multiplication();
     test_shader_alu_temporary_source_resolution();
     test_shader_vector_alu_from_encoded_temporaries();
     test_shader_alu_add_mul_pair_execution();
