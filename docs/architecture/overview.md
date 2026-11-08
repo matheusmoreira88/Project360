@@ -10,6 +10,10 @@ The first build has three small layers:
 
 `GuestMemory` retains a bounded byte buffer as physical backing storage. Page mapping is opt-in, uses a fixed 4 KiB page size in this prototype, supports aliases, and checks read/write/execute access separately. CPU instruction fetch now requests execute permission, while data operations request read or write permission. `load()` is a host-side initialization path to populate backing bytes. This is generic virtual-to-physical translation only: it has no Xenon segment/page-table rules, MMIO, shared CPU/GPU coherence, concurrent access synchronization, demand paging, or 512 MB console memory model.
 
+## XEX2 metadata parser
+
+`loader::parse_xex2` validates the fixed XEX2 header, optional-header directory, security-info bounds and page-descriptor count. It extracts module flags, image size, Title ID, Media ID and an optional entry point without interpreting the encrypted/compressed payload. The structure and execution-info key are cross-checked against the public [Xenia XEX definitions](https://github.com/xenia-project/xenia/blob/master/src/xenia/kernel/util/xex2_info.h) and [metadata lookup](https://github.com/xenia-project/xenia/blob/master/src/xenia/kernel/user_module.cc). This does not yet establish that an executable image can be decrypted, decompressed, mapped or run.
+
 `project360_core` contains reusable emulator code, `project360` is the smoke-program executable, and `project360_tests` is a standalone CTest target. Frontends, guest loaders and platform graphics/audio APIs are intentionally not dependencies of the CPU core.
 
 ## Program exceptions and fault reporting
