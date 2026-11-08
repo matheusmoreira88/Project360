@@ -2,6 +2,7 @@
 
 #include "cpu/cpu_state.hpp"
 #include "cpu/interpreter.hpp"
+#include "kernel/guest_executor.hpp"
 #include "memory/guest_memory.hpp"
 
 #include <chrono>
@@ -139,6 +140,7 @@ int main() {
           "valid XEX2 headers expose bounded container metadata");
     check(parsed.metadata && parsed.metadata->import_libraries.size() == 1U &&
               parsed.metadata->import_libraries[0].name == "xboxkrnl.exe" &&
+              parsed.metadata->import_libraries[0].library_index == 0U &&
               parsed.metadata->import_libraries[0].version == 0x00010002U &&
               parsed.metadata->import_libraries[0].minimum_version == 0x00010000U &&
               parsed.metadata->import_libraries[0].import_record_addresses.size() == 1U &&
@@ -268,30 +270,86 @@ int main() {
           "overlapping PE virtual section ranges are rejected");
 
     auto loadable_pe = make_xbox_pe32();
-    write_be32(loadable_pe, 0x200U, (14U << 26U) | (3U << 21U) | 5U); // addi r3,r0,5
+    write_be32(loadable_pe, 0x200U, (14U << 26U) | (3U << 21U) | 0x5000U);
+    write_be32(loadable_pe, 0x204U, (14U << 26U) | (4U << 21U) | 4U);
+    write_be32(loadable_pe, 0x208U, 0x48000019U); // bl import thunk at +0x18.
+    write_be32(loadable_pe, 0x20cU, (14U << 26U) | (5U << 21U) | 7U);
+    write_be32(loadable_pe, 0x220U, 0x01000140U); // thunk, library 0, ordinal 320
     auto loadable_xex = make_xex2();
+    write_be32(loadable_xex, 0x444U, 0x83020U);
     loadable_xex.insert(loadable_xex.end(), loadable_pe.begin(), loadable_pe.end());
-    project360::memory::GuestMemory guest_memory(0x4000U);
+    project360::memory::GuestMemory guest_memory(0x5000U);
+    const std::array<std::byte, 4> kernel_destination_seed{
+        std::byte{0xde}, std::byte{0xad}, std::byte{0xbe}, std::byte{0xef}};
+    check(guest_memory.load(0x4000U, kernel_destination_seed),
+          "integration fixture initializes a separate guest kernel destination");
     const auto loaded = project360::loader::load_xex2_uncompressed(loadable_xex,
                                                                     guest_memory, 0U);
     check(loaded && loaded.image->image_base == 0x82000U &&
               loaded.image->entry_point == 0x83000U && loaded.image->mapped_size == 0x2000U,
           "unencrypted uncompressed XEX2 maps decoded Xbox PE image pages");
+    check(loaded && loaded.image->xex.import_libraries.size() == 1U &&
+              loaded.image->xex.import_libraries[0].import_types.size() == 1U &&
+              loaded.image->xex.import_libraries[0].import_types[0] == 1U &&
+              loaded.image->xex.import_libraries[0].import_ordinals[0] == 320U,
+          "loader decodes a function-thunk record and its Xbox kernel ordinal from PE bytes");
     std::uint32_t loaded_instruction = 0;
     check(guest_memory.fetch_u32_be(0x83000U, loaded_instruction) &&
-              loaded_instruction == ((14U << 26U) | (3U << 21U) | 5U),
+              loaded_instruction == ((14U << 26U) | (3U << 21U) | 0x5000U),
           "loader copies executable PE section bytes to the mapped guest address");
     std::uint8_t loaded_byte = 0;
     check(guest_memory.read_u8(0x82000U, loaded_byte) && loaded_byte == 'M' &&
               !guest_memory.fetch_u32_be(0x82000U, loaded_instruction) &&
               !guest_memory.write_u8(0x83000U, 0U),
           "loader gives headers read-only pages and applies section execute/write permissions");
+    check(guest_memory.map_page(0x5000U, 0x4000U,
+                                project360::memory::GuestPageAccess::read |
+                                    project360::memory::GuestPageAccess::write),
+          "integration fixture maps writable guest memory for the kernel import");
     project360::cpu::CpuState guest_cpu{};
     guest_cpu.pc = loaded.image ? loaded.image->entry_point : 0U;
-    const auto executed = project360::cpu::Interpreter{}.step(guest_cpu, guest_memory);
-    check(executed.status == project360::cpu::StepStatus::executed &&
-              guest_cpu.gpr[3] == 5U && guest_cpu.pc == 0x83004U,
-          "interpreter executes a homebrew instruction from a loaded XEX test image");
+    if (loaded.image) {
+        const project360::kernel::GuestExecutor executor(*loaded.image);
+        const auto set_destination = executor.step(guest_cpu, guest_memory);
+        const auto set_length = executor.step(guest_cpu, guest_memory);
+        const auto call_import = executor.step(guest_cpu, guest_memory);
+        const auto invoke_import = executor.step(guest_cpu, guest_memory);
+        std::uint32_t cleared_word = 1U;
+        const auto resume_guest = executor.step(guest_cpu, guest_memory);
+        check(set_destination.status == project360::cpu::StepStatus::executed &&
+                  set_length.status == project360::cpu::StepStatus::executed &&
+                  call_import.status == project360::cpu::StepStatus::executed &&
+                  invoke_import.status == project360::cpu::StepStatus::executed &&
+                  resume_guest.status == project360::cpu::StepStatus::executed,
+              "loaded XEX program executes PPC setup, branches to an import, and resumes");
+        check(guest_memory.read_u32_be(0x5000U, cleared_word) && cleared_word == 0U &&
+                  guest_cpu.gpr[5] == 7U && guest_cpu.pc == 0x83010U,
+              "XEX thunk dispatches xboxkrnl ordinal 320 and returns through the caller LR");
+    } else {
+        check(false, "loaded XEX image is available for kernel execution integration");
+    }
+
+    auto wrong_import_library = loadable_xex;
+    write_be32(wrong_import_library, 0x1000U + 0x220U, 0x01010140U);
+    project360::memory::GuestMemory wrong_library_memory(0x4000U);
+    const auto wrong_library_load = project360::loader::load_xex2_uncompressed(
+        wrong_import_library, wrong_library_memory, 0U);
+    check(!wrong_library_load && !wrong_library_memory.page_mapping_enabled(),
+          "an import record naming a different library index is rejected before mapping");
+    auto unsupported_import_type = loadable_xex;
+    write_be32(unsupported_import_type, 0x1000U + 0x220U, 0x02000140U);
+    project360::memory::GuestMemory unsupported_type_memory(0x4000U);
+    const auto unsupported_type_load = project360::loader::load_xex2_uncompressed(
+        unsupported_import_type, unsupported_type_memory, 0U);
+    check(!unsupported_type_load && !unsupported_type_memory.page_mapping_enabled(),
+          "unknown XEX import record types are rejected before mapping");
+    auto outside_import_address = loadable_xex;
+    write_be32(outside_import_address, 0x444U, 0x84000U);
+    project360::memory::GuestMemory outside_import_memory(0x4000U);
+    const auto outside_import_load = project360::loader::load_xex2_uncompressed(
+        outside_import_address, outside_import_memory, 0U);
+    check(!outside_import_load && !outside_import_memory.page_mapping_enabled(),
+          "an import record address outside the PE image is rejected before mapping");
 
     {
         std::ofstream output(test_path, std::ios::binary | std::ios::trunc);

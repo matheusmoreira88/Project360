@@ -9,6 +9,7 @@ add_library(project360_core
     src/common/log.cpp
     src/cpu/decoder.cpp
     src/cpu/interpreter.cpp
+    src/kernel/guest_executor.cpp
     src/kernel/kernel_dispatcher.cpp
     src/loader/xex_parser.cpp
     src/memory/guest_memory.cpp

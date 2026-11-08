@@ -68,6 +68,61 @@ bool range_fits(std::uint64_t offset, std::uint64_t length, std::uint64_t limit)
     return offset <= limit && length <= limit - offset;
 }
 
+bool decode_import_records(std::span<const std::byte> pe_bytes, const XboxPeMetadata& pe,
+                           std::uint64_t image_base, XexMetadata& xex,
+                           std::string& error) {
+    for (auto& library : xex.import_libraries) {
+        library.import_types.reserve(library.import_record_addresses.size());
+        library.import_ordinals.reserve(library.import_record_addresses.size());
+        for (const auto record_address : library.import_record_addresses) {
+            const auto address = static_cast<std::uint64_t>(record_address);
+            if ((record_address & 3U) != 0U || address < image_base ||
+                !range_fits(address - image_base, 4U, pe.image_size)) {
+                error = "XEX import record address is unaligned or outside the PE image";
+                return false;
+            }
+            const auto rva = address - image_base;
+            std::uint64_t raw_offset = 0;
+            bool found_raw_data = false;
+            if (range_fits(rva, 4U, pe.headers_size)) {
+                raw_offset = rva;
+                found_raw_data = true;
+            } else {
+                for (const auto& section : pe.sections) {
+                    if (rva < section.virtual_address) continue;
+                    const auto section_offset = rva - section.virtual_address;
+                    if (range_fits(section_offset, 4U, section.raw_size)) {
+                        raw_offset = static_cast<std::uint64_t>(section.raw_offset) +
+                                     section_offset;
+                        found_raw_data = true;
+                        break;
+                    }
+                }
+            }
+            std::uint32_t import_record = 0;
+            if (!found_raw_data || !read_be32(pe_bytes, static_cast<std::size_t>(raw_offset),
+                                              import_record)) {
+                error = "XEX import record does not point to four backed PE bytes";
+                return false;
+            }
+            const auto type = static_cast<std::uint8_t>(import_record >> 24U);
+            const auto library_index = static_cast<std::uint8_t>((import_record >> 16U) & 0xffU);
+            const auto ordinal = static_cast<std::uint16_t>(import_record & 0xffffU);
+            if (library_index != library.library_index) {
+                error = "XEX import record library index disagrees with its descriptor";
+                return false;
+            }
+            if (type > 1U) {
+                error = "XEX import record type is unsupported";
+                return false;
+            }
+            library.import_types.emplace_back(type);
+            library.import_ordinals.emplace_back(ordinal);
+        }
+    }
+    return true;
+}
+
 bool parse_import_libraries(std::span<const std::byte> file, std::uint32_t offset,
                             std::uint32_t header_size,
                             std::vector<XexImportLibrary>& libraries, std::string& error) {
@@ -186,6 +241,7 @@ bool parse_import_libraries(std::span<const std::byte> file, std::uint32_t offse
         }
         XexImportLibrary library{};
         library.name = names[indexed_name];
+        library.library_index = static_cast<std::uint8_t>(indexed_name);
         library.version = version;
         library.minimum_version = minimum_version;
         library.import_record_addresses.reserve(import_count);
@@ -524,6 +580,20 @@ XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
     if (image_base != pe.image_base) {
         return {{}, "XEX image base differs from PE preferred base; relocations are unsupported"};
     }
+    XexMetadata loaded_xex{};
+    try {
+        loaded_xex = xex;
+    } catch (const std::bad_alloc&) {
+        return {{}, "not enough host memory to retain XEX import metadata"};
+    }
+    std::string import_error;
+    try {
+        if (!decode_import_records(pe_bytes, pe, image_base, loaded_xex, import_error)) {
+            return {{}, std::move(import_error)};
+        }
+    } catch (const std::bad_alloc&) {
+        return {{}, "not enough host memory to decode XEX import records"};
+    }
     if ((image_base & (memory::GuestMemory::page_size - 1U)) != 0U || pe.image_size == 0U ||
         pe.image_size > kMaximumImageSize ||
         image_base + pe.image_size > 0x100000000ULL) {
@@ -635,7 +705,7 @@ XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
     }
 
     LoadedXexImage loaded{};
-    loaded.xex = xex;
+    loaded.xex = std::move(loaded_xex);
     loaded.pe = pe;
     loaded.image_base = static_cast<std::uint32_t>(image_base);
     loaded.entry_point = entry_point;
