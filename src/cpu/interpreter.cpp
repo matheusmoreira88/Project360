@@ -504,6 +504,62 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr0(state, result);
         break;
     }
+    case Opcode::divw:
+    case Opcode::divwu:
+    case Opcode::divd:
+    case Opcode::divdu: {
+        const bool is_word_division = ins.opcode == Opcode::divw || ins.opcode == Opcode::divwu;
+        const bool signed_division = ins.opcode == Opcode::divw || ins.opcode == Opcode::divd;
+        bool invalid = false;
+        std::uint64_t result = 0;
+        if (is_word_division) {
+            const auto dividend_bits = static_cast<std::uint32_t>(state.gpr[ins.ra]);
+            const auto divisor_bits = static_cast<std::uint32_t>(state.gpr[ins.rb]);
+            invalid = divisor_bits == 0U;
+            if (signed_division) {
+                const auto dividend = std::bit_cast<std::int32_t>(dividend_bits);
+                const auto divisor = std::bit_cast<std::int32_t>(divisor_bits);
+                invalid = invalid || (dividend == std::numeric_limits<std::int32_t>::min() &&
+                                      divisor == -1);
+                if (!invalid) {
+                    const auto quotient = static_cast<std::int32_t>(dividend / divisor);
+                    // PowerPC leaves RT[0:31] undefined for word division. This
+                    // interpreter deterministically clears those bits and writes
+                    // the architecturally defined low word.
+                    result = static_cast<std::uint32_t>(quotient);
+                }
+            } else if (!invalid) {
+                const auto quotient = dividend_bits / divisor_bits;
+                result = quotient;
+            }
+        } else if (signed_division) {
+            const auto dividend = std::bit_cast<std::int64_t>(state.gpr[ins.ra]);
+            const auto divisor = std::bit_cast<std::int64_t>(state.gpr[ins.rb]);
+            invalid = divisor == 0 ||
+                      (dividend == std::numeric_limits<std::int64_t>::min() && divisor == -1);
+            if (!invalid) result = static_cast<std::uint64_t>(dividend / divisor);
+        } else {
+            const auto divisor = state.gpr[ins.rb];
+            invalid = divisor == 0U;
+            if (!invalid) result = state.gpr[ins.ra] / divisor;
+        }
+
+        // The ISA defines the destination as undefined for divide-by-zero and
+        // signed-minimum divided by -1. Choose zero as a stable diagnostic result.
+        state.gpr[ins.rt] = result;
+        if (ins.overflow_enable) set_xer_overflow(state, invalid);
+        if (ins.record) {
+            // Word forms compare the 32-bit result as signed for CR0, including
+            // divwu, whose quotient itself is unsigned.
+            const auto cr_value = is_word_division
+                                      ? static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                                            std::bit_cast<std::int32_t>(
+                                                static_cast<std::uint32_t>(result))))
+                                      : result;
+            set_cr0(state, cr_value);
+        }
+        break;
+    }
     case Opcode::addic: {
         const auto result = add_values(state.gpr[ins.ra], static_cast<std::uint64_t>(ins.immediate), false);
         state.gpr[ins.rt] = result.value;

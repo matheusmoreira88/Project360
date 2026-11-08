@@ -1252,6 +1252,91 @@ void test_multiple_word_memory_instructions() {
           "failed stmw validates the full range before writing any word");
 }
 
+void test_integer_divide_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(64);
+    put_word(mem, 0, add_xo(3, 1, 2, 491, false, true)); // divw. r3,r1,r2
+    put_word(mem, 4, add_xo(4, 4, 5, 459)); // divwu r4,r4,r5 (RT=RA)
+    put_word(mem, 8, add_xo(6, 6, 7, 489)); // divd r6,r6,r7 (RT=RA)
+    put_word(mem, 12, add_xo(8, 9, 10, 457, false, true)); // divdu. r8,r9,r10
+    put_word(mem, 16, add_xo(11, 12, 13, 491, true, true)); // divwo. invalid signed overflow
+    put_word(mem, 20, add_xo(14, 15, 16, 459, true)); // divwuo zero divisor
+    put_word(mem, 24, add_xo(17, 18, 19, 489, true)); // divdo valid clears OV
+    put_word(mem, 28, add_xo(20, 21, 22, 457)); // divdu zero divisor, OE clear
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0xfffffffffffffff9ULL; // -7
+    state.gpr[2] = 2;
+    state.gpr[4] = 0x00000002ffffffffULL;
+    state.gpr[5] = 2;
+    state.gpr[6] = 0xfffffffffffffff9ULL; // -7
+    state.gpr[7] = 2;
+    state.gpr[9] = 0xffffffffffffffffULL;
+    state.gpr[10] = 10;
+    state.gpr[12] = 0x80000000U;
+    state.gpr[13] = 0xffffffffU;
+    state.gpr[15] = 77;
+    state.gpr[16] = 0;
+    state.gpr[18] = 84;
+    state.gpr[19] = 2;
+    state.gpr[21] = 10;
+    state.gpr[22] = 0;
+    state.xer = 0xa0000000U;
+
+    const cpu::Interpreter interpreter{};
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 0xfffffffdU &&
+              (state.cr >> 28U) == 9U,
+          "divw writes the low-word quotient and records its signed result with XER.SO");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[4] == 0x7fffffffU,
+          "divwu zero-extends the low-word quotient and supports RT=RA");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.gpr[6] == 0xfffffffffffffffdULL,
+          "divd uses signed 64-bit operands and truncates the quotient toward zero");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.gpr[8] == 0x1999999999999999ULL && (state.cr >> 28U) == 5U,
+          "divdu computes unsigned 64-bit quotient and records CR0");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[11] == 0U &&
+              state.xer == 0xe0000000U && (state.cr >> 28U) == 3U,
+          "invalid divwo. uses deterministic zero, sets OV/SO and updates CR0");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[14] == 0U &&
+              state.xer == 0xe0000000U,
+          "invalid divwuo sets OV while preserving sticky SO and CA");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[17] == 42U &&
+              state.xer == 0xa0000000U,
+          "valid divdo clears OV while preserving sticky SO and CA");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[20] == 0U &&
+              state.xer == 0xa0000000U,
+          "invalid division without OE preserves XER");
+
+    memory::GuestMemory record_mem(4);
+    put_word(record_mem, 0, add_xo(3, 1, 2, 459, false, true)); // divwu. r3,r1,r2
+    cpu::CpuState record_state{};
+    record_state.gpr[1] = 0x80000000U;
+    record_state.gpr[2] = 1U;
+    const auto record_result = cpu::Interpreter{}.step(record_state, record_mem);
+    check(record_result.status == cpu::StepStatus::executed &&
+              record_state.gpr[3] == 0x80000000U && (record_state.cr >> 28U) == 8U,
+          "divwu record compares the low-word result as signed for CR0");
+
+    put_word(record_mem, 0, add_xo(3, 1, 2, 489, true, true)); // divdo. r3,r1,r2
+    cpu::CpuState overflow_state{};
+    overflow_state.gpr[1] = 0x8000000000000000ULL;
+    overflow_state.gpr[2] = 0xffffffffffffffffULL;
+    overflow_state.xer = 0xa0000000U;
+    const auto overflow_result = cpu::Interpreter{}.step(overflow_state, record_mem);
+    check(overflow_result.status == cpu::StepStatus::executed && overflow_state.gpr[3] == 0U &&
+              overflow_state.xer == 0xe0000000U && (overflow_state.cr >> 28U) == 3U,
+          "divdo. handles signed 64-bit overflow without host division UB");
+}
+
 void test_integer_multiply_instructions() {
     using namespace project360;
     memory::GuestMemory mem(128);
@@ -2011,6 +2096,7 @@ int main() {
     test_indexed_update_memory_instructions();
     test_byte_reversed_indexed_memory_instructions();
     test_multiple_word_memory_instructions();
+    test_integer_divide_instructions();
     test_integer_multiply_instructions();
     test_sign_extension_instructions();
     test_immediate_logic_instructions();

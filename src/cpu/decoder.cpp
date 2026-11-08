@@ -433,6 +433,15 @@ DecodeResult decode(std::uint32_t word) {
             ins.overflow_enable = oe;
             return {ins, {}};
         }
+        if (xo == 491U || xo == 459U || xo == 489U || xo == 457U) {
+            ins.opcode = xo == 491U ? Opcode::divw
+                         : xo == 459U ? Opcode::divwu
+                         : xo == 489U ? Opcode::divd
+                                      : Opcode::divdu;
+            ins.record = (word & 1U) != 0U;
+            ins.overflow_enable = oe;
+            return {ins, {}};
+        }
         if (xo == 40U || xo == 8U || xo == 136U) {
             ins.opcode = xo == 40U ? Opcode::subf : (xo == 8U ? Opcode::subfc : Opcode::subfe);
             ins.record = (word & 1U) != 0U;
