@@ -243,6 +243,20 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr0(state, value);
         break;
     }
+    case Opcode::shift_right_algebraic_word_immediate: {
+        const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);
+        const auto signed_source = std::bit_cast<std::int32_t>(source);
+        const auto amount = static_cast<unsigned>(ins.shift);
+        const auto shifted = signed_source >> amount;
+        const bool negative = signed_source < 0;
+        const auto discarded_mask = amount == 0U ? 0U : (1U << amount) - 1U;
+        const bool carry = negative && (source & discarded_mask) != 0U;
+        const auto value = static_cast<std::uint64_t>(static_cast<std::int64_t>(shifted));
+        state.gpr[ins.ra] = value;
+        set_xer_carry(state, carry);
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
     case Opcode::shift_left_doubleword:
     case Opcode::shift_right_doubleword: {
         const auto source = state.gpr[ins.rt];

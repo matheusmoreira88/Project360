@@ -35,6 +35,7 @@ enum class Opcode {
     shift_left_word,
     shift_right_word,
     shift_right_algebraic_word,
+    shift_right_algebraic_word_immediate,
     shift_left_doubleword,
     shift_right_doubleword,
     shift_right_algebraic_doubleword,

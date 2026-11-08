@@ -373,6 +373,46 @@ void test_doubleword_shift_instructions() {
           "zero-count srad copies its source and clears CA");
 }
 
+void test_word_shift_immediate_instruction() {
+    using namespace project360;
+    memory::GuestMemory mem(32);
+    put_word(mem, 0, logical_x(3, 1, 4, 824)); // srawi r3,r1,4
+    put_word(mem, 4, logical_x(5, 4, 3, 824, true)); // srawi. r5,r4,3
+    put_word(mem, 8, logical_x(7, 6, 1, 824)); // srawi r7,r6,1
+    put_word(mem, 12, logical_x(9, 8, 31, 824, true)); // srawi. r9,r8,31
+    put_word(mem, 16, logical_x(11, 10, 0, 824)); // srawi r11,r10,0
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0x90003000U;
+    state.gpr[4] = 0x80000007U;
+    state.gpr[6] = 0x80000000U;
+    state.gpr[8] = 0x80000001U;
+    state.gpr[10] = 0xffffffffU;
+    state.xer = 0xc0000000U; // SO and OV; CA starts clear
+
+    const cpu::Interpreter interpreter{};
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 0xfffffffff9000300ULL &&
+              (state.xer & 0xe0000000U) == 0xc0000000U,
+          "srawi sign-extends its low-word result and clears CA when no one bits are discarded");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[5] == 0xfffffffff0000000ULL &&
+              (state.xer & 0xe0000000U) == 0xe0000000U && (state.cr >> 28U) == 9U,
+          "srawi. sets CA for discarded one bits and records the signed result in CR0");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[7] == 0xffffffffc0000000ULL &&
+              (state.xer & 0xe0000000U) == 0xc0000000U,
+          "srawi clears CA when a negative source discards only zero bits");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[9] == 0xffffffffffffffffULL &&
+              (state.xer & 0xe0000000U) == 0xe0000000U && (state.cr >> 28U) == 9U,
+          "srawi handles the maximum immediate shift and records CR0");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[11] == 0xffffffffffffffffULL &&
+              (state.xer & 0xe0000000U) == 0xc0000000U && state.pc == 20,
+          "zero-count srawi sign-extends the source and clears CA");
+}
+
 void test_leading_zero_instructions() {
     using namespace project360;
     memory::GuestMemory mem(32);
@@ -1210,6 +1250,7 @@ int main() {
     test_carry_immediate_and_subtract_arithmetic();
     test_logical_shift_and_rotate_instructions();
     test_doubleword_shift_instructions();
+    test_word_shift_immediate_instruction();
     test_leading_zero_instructions();
     test_memory_and_endianness();
     test_byte_and_halfword_memory_instructions();

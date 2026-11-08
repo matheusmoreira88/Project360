@@ -228,6 +228,12 @@ DecodeResult decode(std::uint32_t word) {
             ins.record = (word & 1U) != 0U;
             return {ins, {}};
         }
+        if (xo10 == 824U) {
+            ins.opcode = Opcode::shift_right_algebraic_word_immediate;
+            ins.shift = ins.rb;
+            ins.record = (word & 1U) != 0U;
+            return {ins, {}};
+        }
         if (xo10 == 27U || xo10 == 539U || xo10 == 794U) {
             ins.opcode = xo10 == 27U ? Opcode::shift_left_doubleword
                          : xo10 == 539U ? Opcode::shift_right_doubleword

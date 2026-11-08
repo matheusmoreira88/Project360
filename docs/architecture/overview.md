@@ -14,6 +14,8 @@ The `cmp`/`cmpl` and `cmpi`/`cmpli` implementations follow the architecture's si
 
 The register logical operations use full 64-bit GPR values and update CR0 only in record forms. `slw`/`srw` operate on the low word and zero-extend their result; `sraw` sign-extends the low-word result and updates XER.CA when a negative value loses one bits. `rlwinm` rotates the low word, uses PowerPC's MSB-numbered inclusive mask endpoints and zero-extends the masked word.
 
+`srawi` uses the instruction's five-bit immediate shift count, sign-extends the shifted low word to the 64-bit GPR, and sets XER.CA when a negative source shifts out any one bits. Rc updates CR0, and a zero shift clears CA.
+
 The PPC64 `sld`/`srd` operations use RB's low seven bits as the shift count and return zero for counts 64–127. `srad` uses arithmetic sign fill; XER.CA is set for negative sources when any one bits are shifted out, and for counts 64–127 it follows the sign bit. Rc updates CR0. Unsupported shift instructions remain explicit decode faults.
 
 `cntlzw` counts leading zero bits in the source register's low word, while `cntlzd` counts across the full doubleword. Both return 32 or 64 respectively for a zero source, may update CR0 when Rc is set, and leave XER unchanged. Their reserved RB field is checked by the decoder.
@@ -86,4 +88,5 @@ The data subset includes D-form accesses plus indexed `lbzx`, `lhzx`, `lhax`, `l
 - [IBM `srad` instruction reference](https://www.ibm.com/docs/en/aix/7.3.0?topic=set-srad-shift-right-algebraic-double-word-instruction)
 - [IBM `cntlzw` instruction reference](https://www.ibm.com/docs/en/aix/7.2.0?topic=set-cntlzw-cntlz-count-leading-zeros-word-instruction)
 - [IBM `cntlzd` instruction reference](https://www.ibm.com/docs/en/aix/7.2.0?topic=set-cntlzd-count-leading-zeros-double-word-instruction)
+- [IBM `srawi` instruction reference](https://www.ibm.com/docs/da/ssw_aix_71/assembler/idalangref_srawi_srai_instrs.html)
 - [IBM PowerPC instruction fields](https://www.ibm.com/docs/en/aix/7.3.0?topic=forms-instruction-fields)
