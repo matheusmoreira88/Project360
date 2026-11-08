@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -38,6 +39,34 @@ struct VertexFetchWordsResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct VertexFetchInstruction {
+    std::uint8_t fetch_constant_index{};
+    std::uint8_t format{};
+    std::uint8_t component_count{};
+    std::uint8_t prefetch_count{};
+    std::uint8_t source_register{};
+    std::uint8_t destination_register{};
+    std::uint16_t destination_swizzle{};
+    std::uint8_t source_swizzle{};
+    std::uint8_t stride_dwords{};
+    std::int32_t offset_dwords{};
+    std::int8_t exponent_adjust{};
+    bool source_register_relative{};
+    bool destination_register_relative{};
+    bool format_component_all{};
+    bool normalized_number_format{};
+    bool signed_repeating_fraction{};
+    bool index_rounded{};
+    bool is_float_format{};
+};
+
+struct VertexFetchInstructionDecodeResult {
+    VertexFetchInstruction instruction{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 // Decodes the two raw dwords of a Xenos vertex-fetch constant. Texture and
 // invalid fetch-constant types are deliberately rejected.
 [[nodiscard]] VertexFetchDecodeResult decode_vertex_fetch_descriptor(
@@ -49,5 +78,17 @@ struct VertexFetchWordsResult {
 [[nodiscard]] VertexFetchWordsResult read_vertex_fetch_words(
     const VertexFetchDescriptor& descriptor, const memory::GuestMemory& memory,
     std::uint32_t first_dword, std::uint32_t dword_count);
+
+// Decodes a three-dword VFETCH instruction. Mini-fetch and predicated forms
+// are rejected until their inherited-state and predicate semantics are modeled.
+[[nodiscard]] VertexFetchInstructionDecodeResult decode_vertex_fetch_instruction(
+    const std::array<std::uint32_t, 3>& dwords);
+
+// Reads one vertex's raw 32-bit components for the supported 32-bit scalar and
+// vector formats. Float bit patterns are preserved; shader numeric conversion,
+// swizzling, normalization and result-register writes are not performed.
+[[nodiscard]] VertexFetchWordsResult read_vertex_fetch_attribute(
+    const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
+    const memory::GuestMemory& memory, std::uint32_t vertex_index);
 
 } // namespace project360::gpu::xenos

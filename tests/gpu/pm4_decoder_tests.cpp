@@ -522,6 +522,106 @@ void test_vertex_fetch_descriptors_and_memory() {
           "vertex fetch rejects physical memory ranges past guest backing storage");
 }
 
+void test_vfetch_instruction_and_attribute_range() {
+    using namespace project360::gpu::xenos;
+    project360::memory::GuestMemory memory(0x1000U);
+    const std::array<std::byte, 12> bytes{
+        std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40},
+        std::byte{0x50}, std::byte{0x60}, std::byte{0x70}, std::byte{0x80},
+        std::byte{0x90}, std::byte{0xa0}, std::byte{0xb0}, std::byte{0xc0}};
+    check(memory.load(16U, bytes), "VFETCH attribute fixture loads into physical memory");
+    const auto descriptor = decode_vertex_fetch_descriptor((4U << 2U) | 3U, 3U << 2U);
+    const std::array<std::uint32_t, 3> words{
+        (3U << 5U) | (1U << 11U) | (9U << 12U) | (1U << 18U) | (1U << 19U) |
+            (2U << 20U) | (1U << 25U) | (2U << 27U) | (2U << 30U),
+        0x00000688U | (37U << 16U) | (1U << 15U) | (1U << 14U) | (1U << 13U) |
+            (1U << 12U) | (0x3fU << 24U),
+        1U}; // One-dword stride and zero signed offset.
+    const auto decoded = decode_vertex_fetch_instruction(words);
+    check(static_cast<bool>(decoded) && decoded.instruction.fetch_constant_index == 7U &&
+              decoded.instruction.component_count == 2U &&
+              decoded.instruction.format == 37U && decoded.instruction.is_float_format &&
+              decoded.instruction.stride_dwords == 1U &&
+              decoded.instruction.offset_dwords == 0 &&
+              decoded.instruction.exponent_adjust == -1 &&
+              decoded.instruction.index_rounded && decoded.instruction.prefetch_count == 3U,
+          "VFETCH decoder extracts constant selection, format, stride and signed fields");
+    auto encoded_negative_offset = words;
+    encoded_negative_offset[2] = 0x7fffff01U;
+    const auto decoded_negative_offset =
+        decode_vertex_fetch_instruction(encoded_negative_offset);
+    check(decoded_negative_offset && decoded_negative_offset.instruction.offset_dwords == -1,
+          "VFETCH sign-extends the 23-bit signed dword offset");
+    constexpr std::array<std::uint8_t, 7> formats{33U, 34U, 35U, 36U, 37U, 38U, 57U};
+    constexpr std::array<std::uint8_t, 7> component_counts{1U, 2U, 4U, 1U, 2U, 4U, 3U};
+    for (std::size_t index = 0U; index < formats.size(); ++index) {
+        auto format_words = words;
+        format_words[1] = (format_words[1] & ~(0x3fU << 16U)) |
+                          (static_cast<std::uint32_t>(formats[index]) << 16U);
+        const auto format = decode_vertex_fetch_instruction(format_words);
+        check(format && format.instruction.component_count == component_counts[index],
+              "VFETCH recognizes the supported 32-bit scalar/vector component counts");
+    }
+    if (decoded && descriptor) {
+        const auto attribute =
+            read_vertex_fetch_attribute(decoded.instruction, descriptor.descriptor, memory, 1U);
+        check(static_cast<bool>(attribute) &&
+                  attribute.words == std::vector<std::uint32_t>{0x80706050U, 0xc0b0a090U},
+              "VFETCH uses the vertex index and dword stride to read vector components");
+
+        auto offset_instruction = decoded.instruction;
+        offset_instruction.offset_dwords = 1;
+        const auto offset_attribute =
+            read_vertex_fetch_attribute(offset_instruction, descriptor.descriptor, memory, 0U);
+        check(static_cast<bool>(offset_attribute) &&
+                  offset_attribute.words == std::vector<std::uint32_t>{0x80706050U,
+                                                                        0xc0b0a090U},
+              "VFETCH applies its signed dword offset before reading the attribute");
+
+        auto negative_offset = decoded.instruction;
+        negative_offset.offset_dwords = -1;
+        const auto before_start =
+            read_vertex_fetch_attribute(negative_offset, descriptor.descriptor, memory, 0U);
+        check(!before_start && before_start.words.empty(),
+              "VFETCH rejects a negative effective offset before the descriptor range");
+        const auto past_end =
+            read_vertex_fetch_attribute(decoded.instruction, descriptor.descriptor, memory, 2U);
+        check(!past_end && past_end.words.empty(),
+              "VFETCH rejects a multiword attribute that exceeds descriptor capacity");
+    }
+
+    auto mini_words = words;
+    mini_words[1] |= 1U << 30U;
+    auto predicated_words = words;
+    predicated_words[1] |= 1U << 31U;
+    auto reserved_words = words;
+    reserved_words[1] |= 1U << 22U;
+    auto invalid_selector_words = words;
+    invalid_selector_words[0] = (invalid_selector_words[0] & ~(3U << 25U)) | (3U << 25U);
+    auto wrong_opcode_words = words;
+    wrong_opcode_words[0] |= 1U;
+    auto missing_marker_words = words;
+    missing_marker_words[0] &= ~(1U << 19U);
+    check(!decode_vertex_fetch_instruction(mini_words) &&
+              !decode_vertex_fetch_instruction(predicated_words) &&
+              !decode_vertex_fetch_instruction(reserved_words) &&
+              !decode_vertex_fetch_instruction(invalid_selector_words) &&
+              !decode_vertex_fetch_instruction(wrong_opcode_words) &&
+              !decode_vertex_fetch_instruction(missing_marker_words),
+          "VFETCH unsupported, malformed and reserved encodings fail explicitly");
+
+    auto packed_words = words;
+    packed_words[1] = (packed_words[1] & ~(0x3fU << 16U)) | (6U << 16U);
+    const auto packed = decode_vertex_fetch_instruction(packed_words);
+    const auto unsupported_format = descriptor
+                                        ? read_vertex_fetch_attribute(packed.instruction,
+                                                                     descriptor.descriptor, memory,
+                                                                     0U)
+                                        : VertexFetchWordsResult{{}, "Invalid fixture"};
+    check(packed && !unsupported_format && unsupported_format.words.empty(),
+          "packed VFETCH formats remain unsupported instead of being misinterpreted as dwords");
+}
+
 void test_wait_for_idle_is_synchronous_barrier() {
     using namespace project360::gpu::xenos;
     std::vector<std::uint8_t> stream;
@@ -556,6 +656,7 @@ int main() {
     test_primitive_assembly();
     test_vertex_shader_index_transform();
     test_vertex_fetch_descriptors_and_memory();
+    test_vfetch_instruction_and_attribute_range();
     test_wait_for_idle_is_synchronous_barrier();
     if (failures != 0) {
         std::cerr << failures << " GPU packet test(s) failed\n";

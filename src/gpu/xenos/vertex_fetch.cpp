@@ -96,4 +96,110 @@ VertexFetchWordsResult read_vertex_fetch_words(const VertexFetchDescriptor& desc
     return result;
 }
 
+VertexFetchInstructionDecodeResult decode_vertex_fetch_instruction(
+    const std::array<std::uint32_t, 3>& dwords) {
+    const auto word0 = dwords[0];
+    const auto word1 = dwords[1];
+    const auto word2 = dwords[2];
+    if ((word0 & 0x1fU) != 0U || ((word0 >> 19U) & 1U) == 0U) {
+        return {{}, "VFETCH opcode or required marker bit is invalid"};
+    }
+    if ((word1 & 0x00c00000U) != 0U) {
+        return {{}, "VFETCH instruction has nonzero reserved format bits"};
+    }
+    if (((word1 >> 30U) & 1U) != 0U) {
+        return {{}, "VFETCH mini form requires the previous full instruction"};
+    }
+    if (((word1 >> 31U) & 1U) != 0U) {
+        return {{}, "Predicated VFETCH requires predicate state"};
+    }
+
+    const auto constant_group = (word0 >> 20U) & 0x1fU;
+    const auto constant_selector = (word0 >> 25U) & 0x3U;
+    if (constant_selector >= 3U) {
+        return {{}, "VFETCH selects a nonexistent vertex fetch constant"};
+    }
+
+    const auto encoded_offset = (word2 >> 8U) & 0x7fffffU;
+    const auto signed_offset = (encoded_offset & 0x400000U) != 0U
+                                   ? static_cast<std::int32_t>(encoded_offset) - 0x800000
+                                   : static_cast<std::int32_t>(encoded_offset);
+
+    VertexFetchInstruction instruction{};
+    instruction.fetch_constant_index =
+        static_cast<std::uint8_t>(constant_group * 3U + constant_selector);
+    instruction.source_register = static_cast<std::uint8_t>((word0 >> 5U) & 0x3fU);
+    instruction.source_register_relative = ((word0 >> 11U) & 1U) != 0U;
+    instruction.destination_register = static_cast<std::uint8_t>((word0 >> 12U) & 0x3fU);
+    instruction.destination_register_relative = ((word0 >> 18U) & 1U) != 0U;
+    instruction.destination_swizzle = static_cast<std::uint16_t>(word1 & 0xfffU);
+    instruction.source_swizzle = static_cast<std::uint8_t>((word0 >> 30U) & 0x3U);
+    instruction.prefetch_count = static_cast<std::uint8_t>(((word0 >> 27U) & 0x7U) + 1U);
+    instruction.format_component_all = ((word1 >> 12U) & 1U) != 0U;
+    instruction.normalized_number_format = ((word1 >> 13U) & 1U) == 0U;
+    instruction.signed_repeating_fraction = ((word1 >> 14U) & 1U) != 0U;
+    instruction.index_rounded = ((word1 >> 15U) & 1U) != 0U;
+    instruction.format = static_cast<std::uint8_t>((word1 >> 16U) & 0x3fU);
+    const auto encoded_exponent_adjust = (word1 >> 24U) & 0x3fU;
+    instruction.exponent_adjust = static_cast<std::int8_t>(
+        (encoded_exponent_adjust & 0x20U) != 0U
+            ? static_cast<std::int32_t>(encoded_exponent_adjust) - 0x40
+            : static_cast<std::int32_t>(encoded_exponent_adjust));
+    instruction.stride_dwords = static_cast<std::uint8_t>(word2 & 0xffU);
+    instruction.offset_dwords = static_cast<std::int32_t>(signed_offset);
+    switch (instruction.format) {
+    case 33U:
+        instruction.component_count = 1U;
+        break;
+    case 34U:
+    case 37U:
+        instruction.component_count = 2U;
+        break;
+    case 57U:
+        instruction.component_count = 3U;
+        break;
+    case 35U:
+    case 38U:
+        instruction.component_count = 4U;
+        break;
+    case 36U:
+        instruction.component_count = 1U;
+        break;
+    default:
+        instruction.component_count = 0U;
+        break;
+    }
+    instruction.is_float_format = instruction.format >= 36U && instruction.format <= 38U;
+    instruction.is_float_format = instruction.is_float_format || instruction.format == 57U;
+    return {instruction, {}};
+}
+
+VertexFetchWordsResult read_vertex_fetch_attribute(const VertexFetchInstruction& instruction,
+                                                   const VertexFetchDescriptor& descriptor,
+                                                   const memory::GuestMemory& memory,
+                                                   std::uint32_t vertex_index) {
+    if (instruction.component_count == 0U) {
+        return {{}, "VFETCH element format is unsupported by the raw dword reader"};
+    }
+    const auto base_offset = static_cast<std::uint64_t>(vertex_index) *
+                             instruction.stride_dwords;
+    std::uint64_t first_dword = base_offset;
+    if (instruction.offset_dwords < 0) {
+        const auto magnitude = static_cast<std::uint64_t>(
+            -static_cast<std::int64_t>(instruction.offset_dwords));
+        if (first_dword < magnitude) {
+            return {{}, "VFETCH offset points before its descriptor range"};
+        }
+        first_dword -= magnitude;
+    } else {
+        first_dword += static_cast<std::uint32_t>(instruction.offset_dwords);
+    }
+    if (first_dword > descriptor.size_dwords ||
+        instruction.component_count > descriptor.size_dwords - first_dword) {
+        return {{}, "VFETCH attribute exceeds its descriptor range"};
+    }
+    return read_vertex_fetch_words(descriptor, memory, static_cast<std::uint32_t>(first_dword),
+                                   instruction.component_count);
+}
+
 } // namespace project360::gpu::xenos
