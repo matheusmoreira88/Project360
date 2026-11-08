@@ -71,6 +71,7 @@ StepResult take_floating_point_unavailable_exception(CpuState& state) {
 bool is_floating_point_instruction(Opcode opcode) {
     switch (opcode) {
     case Opcode::floating_move_register:
+    case Opcode::floating_move_from_fpscr:
     case Opcode::floating_negate:
     case Opcode::floating_absolute:
     case Opcode::floating_negative_absolute:
@@ -391,12 +392,17 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         break;
     }
     case Opcode::floating_move_register:
+    case Opcode::floating_move_from_fpscr:
     case Opcode::floating_negate:
     case Opcode::floating_absolute:
     case Opcode::floating_negative_absolute: {
         constexpr std::uint64_t kSignBit = 0x8000000000000000ULL;
         const auto source = state.fpr[ins.rb];
         switch (ins.opcode) {
+        case Opcode::floating_move_from_fpscr:
+            // FRT[0:31] is architecturally undefined; use zero deterministically.
+            state.fpr[ins.rt] = state.fpscr;
+            break;
         case Opcode::floating_move_register: state.fpr[ins.rt] = source; break;
         case Opcode::floating_negate: state.fpr[ins.rt] = source ^ kSignBit; break;
         case Opcode::floating_absolute: state.fpr[ins.rt] = source & ~kSignBit; break;

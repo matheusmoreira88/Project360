@@ -107,10 +107,15 @@ std::uint32_t fpr_compare(std::uint8_t bf, std::uint8_t fra, std::uint8_t frb,
 
 std::uint32_t fpr_select(std::uint8_t frt, std::uint8_t fra, std::uint8_t frc,
                          std::uint8_t frb, bool record = false) {
-    return (63U << 26U) | (static_cast<std::uint32_t>(frc) << 21U) |
-           (static_cast<std::uint32_t>(frb) << 16U) |
-           (static_cast<std::uint32_t>(fra) << 11U) |
-           (static_cast<std::uint32_t>(frt) << 6U) | (23U << 1U) | (record ? 1U : 0U);
+    return (63U << 26U) | (static_cast<std::uint32_t>(frt) << 21U) |
+           (static_cast<std::uint32_t>(fra) << 16U) |
+           (static_cast<std::uint32_t>(frb) << 11U) |
+           (static_cast<std::uint32_t>(frc) << 6U) | (23U << 1U) | (record ? 1U : 0U);
+}
+
+std::uint32_t mffs_form(std::uint8_t frt, bool record = false) {
+    return (63U << 26U) | (static_cast<std::uint32_t>(frt) << 21U) | (583U << 1U) |
+           (record ? 1U : 0U);
 }
 
 std::uint32_t add_xo(std::uint8_t rd, std::uint8_t ra, std::uint8_t rb, std::uint16_t xo,
@@ -1387,6 +1392,38 @@ void test_floating_point_sign_and_move_instructions() {
           "reserved unary FPR fields and unsupported arithmetic opcodes are diagnosed");
 }
 
+void test_move_from_fpscr_instruction() {
+    using namespace project360;
+    memory::GuestMemory mem(8);
+    put_word(mem, 0, mffs_form(2));       // mffs f2
+    put_word(mem, 4, mffs_form(3, true)); // mffs. f3
+
+    cpu::CpuState state{};
+    state.msr = kMsrFloatingPointAvailable;
+    state.fpscr = 0xa5a5cafeU;
+    state.cr = 0x12345678U;
+    state.fpr[2] = 0xffffffffffffffffULL;
+    state.fpr[3] = 0xffffffffffffffffULL;
+
+    const cpu::Interpreter interpreter{};
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.fpr[2] == 0x00000000a5a5cafeULL &&
+              state.cr == 0x12345678U && state.fpscr == 0xa5a5cafeU,
+          "mffs copies FPSCR into the defined low FPR half without changing FPSCR or CR");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.fpr[3] == 0x00000000a5a5cafeULL &&
+              ((state.cr >> 24U) & 0xfU) == 0xaU && state.fpscr == 0xa5a5cafeU,
+          "mffs. records FPSCR summary flags in CR1");
+
+    const auto reserved = cpu::decode(mffs_form(2) | (1U << 11U));
+    const auto literal_encoding = cpu::decode(0xfc40048eU); // mffs f2
+    check(!reserved && literal_encoding &&
+              literal_encoding.instruction.opcode == cpu::Opcode::floating_move_from_fpscr &&
+              literal_encoding.instruction.rt == 2U,
+          "mffs rejects reserved fields and decodes the literal ISA encoding");
+}
+
 void test_floating_point_select_instruction() {
     using namespace project360;
     memory::GuestMemory mem(24);
@@ -1407,6 +1444,12 @@ void test_floating_point_select_instruction() {
     state.fpr[9] = 0xfff0000000000001ULL; // signaling NaN selects FRB
     state.cr = 0x12345678U;
     state.fpscr = 0xa0000000U;
+
+    const auto literal_encoding = cpu::decode(0xfc8110eeU); // fsel f4,f1,f3,f2
+    check(literal_encoding && literal_encoding.instruction.opcode == cpu::Opcode::floating_select &&
+              literal_encoding.instruction.rt == 4U && literal_encoding.instruction.ra == 1U &&
+              literal_encoding.instruction.rb == 2U && literal_encoding.instruction.frc == 3U,
+          "fsel decoder maps the literal ISA encoding to FRT/FRA/FRB/FRC");
 
     const cpu::Interpreter interpreter{};
     auto result = interpreter.step(state, mem);
@@ -3381,6 +3424,7 @@ int main() {
     test_doubleword_memory_instructions();
     test_floating_point_load_store_transfers();
     test_floating_point_sign_and_move_instructions();
+    test_move_from_fpscr_instruction();
     test_floating_point_select_instruction();
     test_floating_point_compare_instructions();
     test_floating_point_unavailable_exception();

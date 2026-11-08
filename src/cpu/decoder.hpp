@@ -140,6 +140,7 @@ enum class Opcode {
     return_from_interrupt_doubleword,
     system_call,
     floating_move_register,
+    floating_move_from_fpscr,
     floating_negate,
     floating_absolute,
     floating_negative_absolute,

@@ -179,10 +179,7 @@ DecodeResult decode(std::uint32_t word) {
         const auto xo5 = static_cast<std::uint8_t>((word >> 1U) & 0x1fU);
         if (xo5 == 23U) {
             ins.opcode = Opcode::floating_select;
-            ins.rt = static_cast<std::uint8_t>((word >> 6U) & 0x1fU);
-            ins.ra = rb;
-            ins.rb = ra;
-            ins.frc = rt;
+            ins.frc = static_cast<std::uint8_t>((word >> 6U) & 0x1fU);
             ins.record = (word & 1U) != 0U;
             return {ins, {}};
         }
@@ -193,6 +190,14 @@ DecodeResult decode(std::uint32_t word) {
             ins.bf = static_cast<std::uint8_t>((word >> 23U) & 0x7U);
             ins.opcode = xo10 == 0U ? Opcode::floating_compare_unordered
                                     : Opcode::floating_compare_ordered;
+            return {ins, {}};
+        }
+        if (xo10 == 583U) {
+            if ((word & (0x3ffU << 11U)) != 0U) {
+                return {{}, "mffs reserved source fields are nonzero"};
+            }
+            ins.opcode = Opcode::floating_move_from_fpscr;
+            ins.record = (word & 1U) != 0U;
             return {ins, {}};
         }
         switch (xo10) {
