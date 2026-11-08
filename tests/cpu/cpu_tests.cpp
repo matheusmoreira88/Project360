@@ -266,6 +266,43 @@ void test_carry_and_overflow_arithmetic() {
           "adde reports carry out from the carry-in addition");
 }
 
+void test_addze_arithmetic() {
+    using namespace project360;
+    memory::GuestMemory mem(4);
+    const cpu::Interpreter interpreter{};
+
+    put_word(mem, 0, add_xo(1, 1, 0, 202)); // addze r1,r1
+    cpu::CpuState carry_state{};
+    carry_state.gpr[1] = 0xffffffffffffffffULL;
+    carry_state.xer = 0xe0000000U;
+    auto result = interpreter.step(carry_state, mem);
+    check(result.status == cpu::StepStatus::executed && carry_state.gpr[1] == 0U &&
+              carry_state.xer == 0xe0000000U,
+          "addze uses XER.CA, supports RT=RA, and preserves OV/SO when OE is clear");
+
+    put_word(mem, 0, add_xo(3, 4, 0, 202, true, true)); // addzeo. r3,r4
+    cpu::CpuState overflow_state{};
+    overflow_state.gpr[4] = 0x7fffffffffffffffULL;
+    overflow_state.xer = 0x20000000U;
+    result = interpreter.step(overflow_state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              overflow_state.gpr[3] == 0x8000000000000000ULL &&
+              overflow_state.xer == 0xc0000000U && (overflow_state.cr >> 28U) == 9U,
+          "addzeo. detects signed overflow, sets sticky SO and records the result in CR0");
+
+    put_word(mem, 0, add_xo(5, 6, 0, 202, true)); // addzeo r5,r6
+    cpu::CpuState no_overflow_state{};
+    no_overflow_state.gpr[6] = 41;
+    no_overflow_state.xer = 0xc0000000U;
+    result = interpreter.step(no_overflow_state, mem);
+    check(result.status == cpu::StepStatus::executed && no_overflow_state.gpr[5] == 41U &&
+              no_overflow_state.xer == 0x80000000U,
+          "non-overflowing addzeo clears OV while retaining sticky SO and updating CA");
+
+    check(!cpu::decode(add_xo(3, 1, 1, 202)),
+          "addze rejects a nonzero reserved RB field");
+}
+
 void test_carry_immediate_and_subtract_arithmetic() {
     using namespace project360;
     memory::GuestMemory mem(64);
@@ -1631,6 +1668,7 @@ void test_memory_bounds_and_alignment() {
 int main() {
     test_decode_and_execute_arithmetic();
     test_carry_and_overflow_arithmetic();
+    test_addze_arithmetic();
     test_carry_immediate_and_subtract_arithmetic();
     test_logical_shift_and_rotate_instructions();
     test_doubleword_shift_instructions();

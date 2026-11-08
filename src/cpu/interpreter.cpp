@@ -384,6 +384,15 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr0(state, result.value);
         break;
     }
+    case Opcode::addze: {
+        const bool carry_in = (state.xer & kXerCarry) != 0U;
+        const auto result = add_values(state.gpr[ins.ra], 0U, carry_in);
+        state.gpr[ins.rt] = result.value;
+        set_xer_carry(state, result.carry);
+        if (ins.overflow_enable) set_xer_overflow(state, result.overflow);
+        if (ins.record) set_cr0(state, result.value);
+        break;
+    }
     case Opcode::subf:
     case Opcode::subfc:
     case Opcode::subfe:

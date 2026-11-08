@@ -30,6 +30,7 @@ enum class Opcode {
     add,
     addc,
     adde,
+    addze,
     mullw,
     mulld,
     addic,
