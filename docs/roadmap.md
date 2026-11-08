@@ -2,7 +2,7 @@
 
 The roadmap tracks evidence rather than estimated completion percentages.
 
-Latest GPU increment: PM4 `IM_LOAD` and `IM_LOAD_IMMEDIATE` capture bounded vertex/pixel microcode into immutable draw snapshots; `LOAD_ALU_CONSTANT` loads bounded dwords from guest memory into ALU, fetch, boolean, loop or direct-register banks. The stream processor tracks bin mask/selection state and applies it to predicated type-3 packet dispatch. Synthetic tests connect captured vertex code to the explicit-prefix CPU EXEC reference runner and reject malformed loads. This does not execute external titles or render loaded game shaders; details are in [Xenos shader work](hardware/xenos_shader.md).
+Latest GPU increment: PM4 `IM_LOAD` and `IM_LOAD_IMMEDIATE` capture bounded vertex/pixel microcode into immutable draw snapshots; `LOAD_ALU_CONSTANT` loads bounded dwords from guest memory into ALU, fetch, boolean, loop or direct-register banks. The Vulkan offscreen smoke now consumes a guest-memory-loaded c7 through the retained draw snapshot, CPU shader reference path and hardware rasterization. The stream processor tracks bin mask/selection state and applies it to predicated type-3 packet dispatch. Synthetic tests connect captured vertex code to the explicit-prefix CPU EXEC reference runner and reject malformed loads. This does not execute external titles or translate game shaders; details are in [Xenos shader work](hardware/xenos_shader.md).
 
 | Phase | Status | Evidence / acceptance still needed |
 |---|---|---|

@@ -74,6 +74,11 @@ int main() {
         std::cerr << "FAIL: could not seed synthetic guest vertex/index buffers\n";
         return 1;
     }
+    const std::array<std::byte, 16> alu_constant_data{};
+    if (!shader_memory.load(0x40U, alu_constant_data)) {
+        std::cerr << "FAIL: could not seed synthetic guest ALU constant memory\n";
+        return 1;
+    }
 
     const auto encode_vfetch = [](std::uint8_t destination, std::uint32_t offset_dwords) {
         return std::array<std::uint32_t, 3>{
@@ -135,12 +140,10 @@ int main() {
     append_pm4_u32(pm4_draw_stream, 0x00ffffffU);
     append_pm4_u32(pm4_draw_stream, 0U);
     append_pm4_u32(pm4_draw_stream, 0U);
-    append_pm4_u32(pm4_draw_stream, 0xc0000000U | (4U << 16U) | (0x2dU << 8U));
-    append_pm4_u32(pm4_draw_stream, 28U); // ALU float4 constant c7 (dword offset 7*4).
-    append_pm4_u32(pm4_draw_stream, 0U);
-    append_pm4_u32(pm4_draw_stream, 0U);
-    append_pm4_u32(pm4_draw_stream, 0U);
-    append_pm4_u32(pm4_draw_stream, 0U);
+    append_pm4_u32(pm4_draw_stream, 0xc0000000U | (2U << 16U) | (0x2fU << 8U));
+    append_pm4_u32(pm4_draw_stream, 0x40U); // Guest physical float4 constant source.
+    append_pm4_u32(pm4_draw_stream, 28U); // ALU c7 starts at dword offset 7*4.
+    append_pm4_u32(pm4_draw_stream, 4U);
     append_pm4_u32(pm4_draw_stream, 0xc0000000U | (2U << 16U) | (0x2dU << 8U));
     append_pm4_u32(pm4_draw_stream, (1U << 16U) | 14U); // Fetch slot 7.
     append_pm4_u32(pm4_draw_stream, (0x80U << 2U) | 3U); // Guest base 0x200.
@@ -185,9 +188,10 @@ int main() {
     constexpr std::array<std::uint8_t, 1> required_alu_constants{7U};
     const auto alu_constant_bank = decode_shader_alu_float_constant_bank(
         draw_dispatch.draws[0].register_snapshot, required_alu_constants);
-    if (!alu_constant_bank) {
-        std::cerr << "FAIL: PM4 ALU constants did not decode: " << alu_constant_bank.error
-                  << '\n';
+    if (!alu_constant_bank ||
+        alu_constant_bank.constants[7U] != std::array<float, 4>{0.0F, 0.0F, 0.0F, 0.0F}) {
+        std::cerr << "FAIL: guest-memory PM4 ALU constants did not decode as expected"
+                  << (alu_constant_bank ? "" : ": " + alu_constant_bank.error) << '\n';
         return 1;
     }
     const auto vertex_batch = execute_pm4_draw_vertex_batch(
