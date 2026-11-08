@@ -638,6 +638,17 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr0(state, result.value);
         break;
     }
+    case Opcode::neg: {
+        const auto operand = state.gpr[ins.ra];
+        const auto result = std::uint64_t{0} - operand;
+        state.gpr[ins.rt] = result;
+        if (ins.overflow_enable) {
+            const bool overflow = operand == 0x8000000000000000ULL;
+            set_xer_overflow(state, overflow);
+        }
+        if (ins.record) set_cr0(state, result);
+        break;
+    }
     case Opcode::subf:
     case Opcode::subfc:
     case Opcode::subfe:

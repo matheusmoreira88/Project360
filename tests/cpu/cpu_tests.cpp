@@ -320,6 +320,42 @@ void test_addze_arithmetic() {
           "addze rejects a nonzero reserved RB field");
 }
 
+void test_negate_arithmetic() {
+    using namespace project360;
+    memory::GuestMemory mem(16);
+    put_word(mem, 0, add_xo(3, 1, 0, 104, false, true)); // neg. r3,r1
+    put_word(mem, 4, add_xo(2, 2, 0, 104)); // neg r2,r2
+    put_word(mem, 8, add_xo(4, 5, 0, 104, true, true)); // nego. r4,r5
+    put_word(mem, 12, add_xo(6, 7, 0, 104, true)); // nego r6,r7
+
+    cpu::CpuState state{};
+    state.gpr[1] = 5;
+    state.gpr[2] = 0xfffffffffffffff9ULL; // -7
+    state.gpr[5] = 0x8000000000000000ULL;
+    state.gpr[7] = 42;
+    state.xer = 0xa0000000U;
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.gpr[3] == 0xfffffffffffffffbULL && (state.cr >> 28U) == 9U &&
+              state.xer == 0xa0000000U,
+          "neg. computes the two's-complement result and records CR0 with sticky SO");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[2] == 7U,
+          "neg supports source/destination aliasing");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.gpr[4] == 0x8000000000000000ULL && state.xer == 0xe0000000U &&
+              (state.cr >> 28U) == 9U,
+          "nego. wraps signed minimum, sets OV/SO and records CR0");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[6] == 0xffffffffffffffd6ULL &&
+              state.xer == 0xa0000000U,
+          "non-overflowing nego clears OV and preserves sticky SO/CA");
+    check(!cpu::decode(add_xo(3, 1, 2, 104)), "neg rejects a nonzero reserved RB field");
+}
+
 void test_carry_immediate_and_subtract_arithmetic() {
     using namespace project360;
     memory::GuestMemory mem(64);
@@ -2128,6 +2164,7 @@ int main() {
     test_decode_and_execute_arithmetic();
     test_carry_and_overflow_arithmetic();
     test_addze_arithmetic();
+    test_negate_arithmetic();
     test_carry_immediate_and_subtract_arithmetic();
     test_logical_shift_and_rotate_instructions();
     test_doubleword_shift_instructions();

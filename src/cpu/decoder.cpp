@@ -458,6 +458,13 @@ DecodeResult decode(std::uint32_t word) {
             ins.overflow_enable = oe;
             return {ins, {}};
         }
+        if (xo == 104U) {
+            if (ins.rb != 0U) return {{}, "neg reserved RB field is nonzero"};
+            ins.opcode = Opcode::neg;
+            ins.record = (word & 1U) != 0U;
+            ins.overflow_enable = oe;
+            return {ins, {}};
+        }
         return {{}, "unsupported extended opcode " + std::to_string(xo)};
     }
     default: return {{}, "unsupported primary opcode " + std::to_string(primary)};
