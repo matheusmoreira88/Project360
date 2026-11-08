@@ -273,61 +273,73 @@ int main() {
     write_be32(loadable_pe, 0x200U, (14U << 26U) | (3U << 21U) | 0x5000U);
     write_be32(loadable_pe, 0x204U, (14U << 26U) | (4U << 21U) | 8U);
     write_be32(loadable_pe, 0x208U, (14U << 26U) | (5U << 21U) | 0xabU);
-    write_be32(loadable_pe, 0x20cU, 0x48000055U); // bl import thunk at +0x54.
+    write_be32(loadable_pe, 0x20cU, 0x48000095U); // bl import thunk at +0x94.
     write_be32(loadable_pe, 0x210U, (14U << 26U) | (5U << 21U) | 0x1234U);
-    write_be32(loadable_pe, 0x214U, 0x48000051U); // bl import thunk at +0x50.
-    write_be32(loadable_pe, 0x218U, 0x48000051U); // bl import thunk at +0x50.
-    write_be32(loadable_pe, 0x21cU, (14U << 26U) | (8U << 21U) | (3U << 16U));
+    write_be32(loadable_pe, 0x214U, 0x48000091U); // bl import thunk at +0x90.
+    write_be32(loadable_pe, 0x218U, 0x48000091U); // bl import thunk at +0x90.
+    write_be32(loadable_pe, 0x21cU, (14U << 26U) | (10U << 21U) | (3U << 16U));
     write_be32(loadable_pe, 0x220U, (14U << 26U) | (3U << 21U) | 0x5000U);
     write_be32(loadable_pe, 0x224U, (14U << 26U) | (4U << 21U) | 0x5004U);
     write_be32(loadable_pe, 0x228U, (14U << 26U) | (5U << 21U) | 4U);
-    write_be32(loadable_pe, 0x22cU, 0x48000045U); // bl import thunk at +0x44.
-    write_be32(loadable_pe, 0x230U, (14U << 26U) | (7U << 21U) | (3U << 16U));
+    write_be32(loadable_pe, 0x22cU, 0x48000081U); // bl import thunk at +0x80.
+    write_be32(loadable_pe, 0x230U, (14U << 26U) | (9U << 21U) | (3U << 16U));
     write_be32(loadable_pe, 0x234U, (14U << 26U) | (3U << 21U) | 0x5008U);
     write_be32(loadable_pe, 0x238U, (14U << 26U) | (4U << 21U) | 0x5000U);
     write_be32(loadable_pe, 0x23cU, (14U << 26U) | (5U << 21U) | 8U);
-    write_be32(loadable_pe, 0x240U, 0x48000035U); // bl import thunk at +0x34.
+    write_be32(loadable_pe, 0x240U, 0x48000071U); // bl import thunk at +0x70.
     write_be32(loadable_pe, 0x244U, (14U << 26U) | (3U << 21U) | 0x5000U);
     write_be32(loadable_pe, 0x248U, (14U << 26U) | (4U << 21U) | 16U);
-    write_be32(loadable_pe, 0x24cU, 0x4800002dU); // bl import thunk at +0x2c.
+    write_be32(loadable_pe, 0x24cU, 0x48000069U); // bl import thunk at +0x68.
     write_be32(loadable_pe, 0x250U, (14U << 26U) | (6U << 21U) | 9U);
-    write_be32(loadable_pe, 0x260U, 0x0100011cU); // thunk, library 0, ordinal 284
-    write_be32(loadable_pe, 0x264U, 0x0100011dU); // thunk, library 0, ordinal 285
-    write_be32(loadable_pe, 0x268U, 0x0100010dU); // thunk, library 0, ordinal 269
-    write_be32(loadable_pe, 0x270U, 0x0100010cU); // thunk, library 0, ordinal 268
-    write_be32(loadable_pe, 0x274U, 0x0100012aU); // thunk, library 0, ordinal 298
-    write_be32(loadable_pe, 0x278U, 0x01000140U); // thunk, library 0, ordinal 320
+    write_be32(loadable_pe, 0x254U, (14U << 26U) | (3U << 21U) | 0x5080U);
+    write_be32(loadable_pe, 0x258U, (14U << 26U) | (4U << 21U) | 0x5040U);
+    write_be32(loadable_pe, 0x25cU, 0x4800005dU); // bl import thunk at +0x5c.
+    write_be32(loadable_pe, 0x260U, (32U << 26U) | (7U << 21U) | 0x5080U);
+    write_be32(loadable_pe, 0x264U, (32U << 26U) | (8U << 21U) | 0x5084U);
+    write_be32(loadable_pe, 0x2a0U, 0x0100011cU); // thunk, library 0, ordinal 284
+    write_be32(loadable_pe, 0x2a4U, 0x0100011dU); // thunk, library 0, ordinal 285
+    write_be32(loadable_pe, 0x2a8U, 0x0100010dU); // thunk, library 0, ordinal 269
+    write_be32(loadable_pe, 0x2acU, 0x0100010cU); // thunk, library 0, ordinal 268
+    write_be32(loadable_pe, 0x2b0U, 0x0100012aU); // thunk, library 0, ordinal 298
+    write_be32(loadable_pe, 0x2b4U, 0x01000140U); // thunk, library 0, ordinal 320
+    write_be32(loadable_pe, 0x2b8U, 0x01000121U); // thunk, library 0, ordinal 289
     auto loadable_xex = make_xex2();
-    write_be32(loadable_xex, 0x444U, 0x83060U);
-    write_be32(loadable_xex, 0x400U, 0x5cU);
-    write_be32(loadable_xex, 0x41cU, 0x40U);
-    write_be16(loadable_xex, 0x442U, 6U);
-    write_be32(loadable_xex, 0x448U, 0x83064U);
-    write_be32(loadable_xex, 0x44cU, 0x83068U);
-    write_be32(loadable_xex, 0x450U, 0x83070U);
-    write_be32(loadable_xex, 0x454U, 0x83074U);
-    write_be32(loadable_xex, 0x458U, 0x83078U);
+    write_be32(loadable_xex, 0x444U, 0x830a0U);
+    write_be32(loadable_xex, 0x400U, 0x60U);
+    write_be32(loadable_xex, 0x41cU, 0x44U);
+    write_be16(loadable_xex, 0x442U, 7U);
+    write_be32(loadable_xex, 0x448U, 0x830a4U);
+    write_be32(loadable_xex, 0x44cU, 0x830a8U);
+    write_be32(loadable_xex, 0x450U, 0x830acU);
+    write_be32(loadable_xex, 0x454U, 0x830b0U);
+    write_be32(loadable_xex, 0x458U, 0x830b4U);
+    write_be32(loadable_xex, 0x45cU, 0x830b8U);
     loadable_xex.insert(loadable_xex.end(), loadable_pe.begin(), loadable_pe.end());
     project360::memory::GuestMemory guest_memory(0x5000U);
     const std::array<std::byte, 8> kernel_destination_seed{
         std::byte{0xde}, std::byte{0xad}, std::byte{0xbe}, std::byte{0xef},
         std::byte{0x89}, std::byte{0xab}, std::byte{0xcd}, std::byte{0xef}};
+    const std::array<std::byte, 5> ansi_source{
+        std::byte{'G'}, std::byte{'A'}, std::byte{'M'}, std::byte{'E'}, std::byte{0}};
     check(guest_memory.load(0x4000U, kernel_destination_seed),
           "integration fixture initializes a separate guest kernel destination");
+    check(guest_memory.load(0x4040U, ansi_source),
+          "integration fixture seeds the source for a guest ANSI_STRING");
     const auto loaded = project360::loader::load_xex2_uncompressed(loadable_xex,
                                                                     guest_memory, 0U);
     check(loaded && loaded.image->image_base == 0x82000U &&
               loaded.image->entry_point == 0x83000U && loaded.image->mapped_size == 0x2000U,
           "unencrypted uncompressed XEX2 maps decoded Xbox PE image pages");
     check(loaded && loaded.image->xex.import_libraries.size() == 1U &&
-              loaded.image->xex.import_libraries[0].import_types.size() == 6U &&
+              loaded.image->xex.import_libraries[0].import_types.size() == 7U &&
               loaded.image->xex.import_libraries[0].import_types[0] == 1U &&
               loaded.image->xex.import_libraries[0].import_ordinals[0] == 284U &&
               loaded.image->xex.import_libraries[0].import_ordinals[1] == 285U &&
               loaded.image->xex.import_libraries[0].import_ordinals[2] == 269U &&
               loaded.image->xex.import_libraries[0].import_ordinals[3] == 268U &&
               loaded.image->xex.import_libraries[0].import_ordinals[4] == 298U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[5] == 320U,
+              loaded.image->xex.import_libraries[0].import_ordinals[5] == 320U &&
+              loaded.image->xex.import_libraries[0].import_ordinals[6] == 289U,
           "loader decodes function-thunk records and Xbox kernel ordinals from PE bytes");
     std::uint32_t loaded_instruction = 0;
     check(guest_memory.fetch_u32_be(0x83000U, loaded_instruction) &&
@@ -387,6 +399,12 @@ int main() {
         std::uint32_t cleared_word = 1U;
         std::uint32_t cleared_copy_word = 1U;
         const auto resume_guest = executor.step(guest_cpu, guest_memory);
+        const auto set_ansi_destination = executor.step(guest_cpu, guest_memory);
+        const auto set_ansi_source = executor.step(guest_cpu, guest_memory);
+        const auto call_ansi_import = executor.step(guest_cpu, guest_memory);
+        const auto invoke_ansi_import = executor.step(guest_cpu, guest_memory);
+        const auto read_ansi_header = executor.step(guest_cpu, guest_memory);
+        const auto read_ansi_buffer = executor.step(guest_cpu, guest_memory);
         check(set_destination.status == project360::cpu::StepStatus::executed &&
                   set_length.status == project360::cpu::StepStatus::executed &&
                   set_fill.status == project360::cpu::StepStatus::executed &&
@@ -413,36 +431,44 @@ int main() {
                   set_zero_length.status == project360::cpu::StepStatus::executed &&
                   call_zero_import.status == project360::cpu::StepStatus::executed &&
                   invoke_zero_import.status == project360::cpu::StepStatus::executed &&
-                  resume_guest.status == project360::cpu::StepStatus::executed,
-              "loaded XEX program calls six imported kernel routines and resumes");
+                  resume_guest.status == project360::cpu::StepStatus::executed &&
+                  set_ansi_destination.status == project360::cpu::StepStatus::executed &&
+                  set_ansi_source.status == project360::cpu::StepStatus::executed &&
+                  call_ansi_import.status == project360::cpu::StepStatus::executed &&
+                  invoke_ansi_import.status == project360::cpu::StepStatus::executed &&
+                  read_ansi_header.status == project360::cpu::StepStatus::executed &&
+                  read_ansi_buffer.status == project360::cpu::StepStatus::executed,
+              "loaded XEX program calls seven imported kernel routines and resumes");
         check(fill_visible,
               "XEX RtlFillMemory thunk fills guest bytes using the Xenon argument registers");
         check(ulong_pattern_visible,
               "XEX RtlFillMemoryUlong thunk repeats the GPR5 word in big-endian guest memory");
-        check(guest_cpu.gpr[8] == 8U,
+        check(guest_cpu.gpr[10] == 8U,
               "XEX RtlCompareMemoryUlong thunk returns the matching byte count in GPR3");
-        check(guest_cpu.gpr[7] == 4U,
+        check(guest_cpu.gpr[9] == 4U,
               "XEX RtlCompareMemory thunk returns its matching byte count in GPR3");
         check(move_visible,
               "XEX RtlMoveMemory thunk copies the source bytes into guest destination memory");
+        check(guest_cpu.gpr[7] == 0x00040005U && guest_cpu.gpr[8] == 0x5040U,
+              "XEX RtlInitAnsiString thunk writes a big-endian header and source pointer");
         check(guest_memory.read_u32_be(0x5000U, cleared_word) && cleared_word == 0U &&
                   guest_memory.read_u32_be(0x5008U, cleared_copy_word) &&
                   cleared_copy_word == 0U && guest_cpu.gpr[6] == 9U &&
-                  guest_cpu.pc == 0x83054U,
+                  guest_cpu.pc == 0x83068U,
               "XEX RtlZeroMemory thunk clears bytes and returns through the caller LR");
     } else {
         check(false, "loaded XEX image is available for kernel execution integration");
     }
 
     auto wrong_import_library = loadable_xex;
-    write_be32(wrong_import_library, 0x1000U + 0x260U, 0x0101011cU);
+    write_be32(wrong_import_library, 0x1000U + 0x2a0U, 0x0101011cU);
     project360::memory::GuestMemory wrong_library_memory(0x4000U);
     const auto wrong_library_load = project360::loader::load_xex2_uncompressed(
         wrong_import_library, wrong_library_memory, 0U);
     check(!wrong_library_load && !wrong_library_memory.page_mapping_enabled(),
           "an import record naming a different library index is rejected before mapping");
     auto unsupported_import_type = loadable_xex;
-    write_be32(unsupported_import_type, 0x1000U + 0x260U, 0x0200011cU);
+    write_be32(unsupported_import_type, 0x1000U + 0x2a0U, 0x0200011cU);
     project360::memory::GuestMemory unsupported_type_memory(0x4000U);
     const auto unsupported_type_load = project360::loader::load_xex2_uncompressed(
         unsupported_import_type, unsupported_type_memory, 0U);

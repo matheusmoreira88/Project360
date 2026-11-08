@@ -98,6 +98,13 @@ int main() {
     check(fill_memory.read_u8(0x400ffeU, filled) && filled == 0x5aU &&
               fill_memory.read_u8(0x401001U, filled) && filled == 0x5aU,
           "range fill writes every byte through virtual mappings");
+    const std::array<std::byte, 4> guest_write_bytes{
+        std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44}};
+    check(fill_memory.write_bytes(0x400ffeU, guest_write_bytes),
+          "guest byte store crosses a non-contiguous physical page boundary");
+    check(fill_memory.read_u8(0x400ffeU, filled) && filled == 0x11U &&
+              fill_memory.read_u8(0x401001U, filled) && filled == 0x44U,
+          "transactional guest byte store reaches the full virtual destination range");
     check(fill_memory.fill_u32_be(0x400ffcU, 8U, 0x11223344U),
           "word-pattern fill crosses pages backed by non-contiguous physical memory");
     std::uint32_t filled_word = 0U;
@@ -114,6 +121,9 @@ int main() {
         {0x501000U, 0U, GuestPageAccess::read},
     }};
     check(fill_memory.map_pages(fill_partial), "partial-permission range maps for fill test");
+    check(!fill_memory.write_bytes(0x500ffeU, guest_write_bytes) &&
+              fill_memory.read_u8(0x500ffeU, filled) && filled == 0U,
+          "guest byte store validates all pages before changing a writable prefix");
     check(!fill_memory.fill(0x500ffeU, 4U, std::byte{0x33}) &&
               fill_memory.read_u8(0x500ffeU, filled) && filled == 0U,
           "range fill validates the complete destination before modifying any byte");

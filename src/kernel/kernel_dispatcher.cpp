@@ -2,6 +2,7 @@
 
 #include "memory/guest_memory.hpp"
 
+#include <array>
 #include <cstddef>
 #include <string_view>
 
@@ -29,6 +30,53 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
                                                 memory::GuestMemory& memory) const noexcept {
     if (!equals_ascii_case_insensitive(import.library, "xboxkrnl.exe")) {
         return KernelDispatchStatus::unsupported_library;
+    }
+    if (import.ordinal == rtl_init_ansi_string_ordinal) {
+        const auto destination = state.gpr[3];
+        const auto source = state.gpr[4];
+        constexpr auto guest_address_limit = std::uint64_t{0xffff'ffffU};
+        if (destination > guest_address_limit || source > guest_address_limit ||
+            destination > guest_address_limit - 7U) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+
+        std::uint32_t source_length = 0U;
+        bool terminated = source == 0U;
+        while (source != 0U && source_length < 0xffffU) {
+            if (source_length > guest_address_limit - source) {
+                return KernelDispatchStatus::invalid_guest_argument;
+            }
+            std::uint8_t character = 0U;
+            if (!memory.read_u8(source + source_length, character)) {
+                return KernelDispatchStatus::guest_memory_fault;
+            }
+            if (character == 0U) {
+                terminated = true;
+                break;
+            }
+            ++source_length;
+        }
+
+        const auto length = static_cast<std::uint16_t>(
+            terminated ? source_length : 0xfffeU);
+        const auto maximum_length = static_cast<std::uint16_t>(
+            source == 0U ? 0U : terminated ? source_length + 1U : 0xffffU);
+        const auto buffer = source == 0U ? 0U : static_cast<std::uint32_t>(source);
+        const std::array descriptor{
+            static_cast<std::byte>((length >> 8U) & 0xffU),
+            static_cast<std::byte>(length & 0xffU),
+            static_cast<std::byte>((maximum_length >> 8U) & 0xffU),
+            static_cast<std::byte>(maximum_length & 0xffU),
+            static_cast<std::byte>((buffer >> 24U) & 0xffU),
+            static_cast<std::byte>((buffer >> 16U) & 0xffU),
+            static_cast<std::byte>((buffer >> 8U) & 0xffU),
+            static_cast<std::byte>(buffer & 0xffU),
+        };
+        if (!memory.write_bytes(destination, descriptor)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        state.pc = state.lr & ~std::uint64_t{3};
+        return KernelDispatchStatus::handled;
     }
     if (import.ordinal == rtl_compare_memory_ordinal) {
         const auto source1 = state.gpr[3];

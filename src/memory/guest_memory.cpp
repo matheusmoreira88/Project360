@@ -243,6 +243,53 @@ bool GuestMemory::load(std::uint64_t address, std::span<const std::byte> data) n
     return true;
 }
 
+bool GuestMemory::write_bytes(std::uint64_t address,
+                              std::span<const std::byte> data) noexcept {
+    if (data.empty()) return true;
+    if (address > std::numeric_limits<std::uint64_t>::max() - (data.size() - 1U)) {
+        return false;
+    }
+    if (!mapping_enabled_) {
+        if (!contains(address, data.size())) return false;
+        const auto start = static_cast<std::size_t>(address);
+        std::copy(data.begin(), data.end(),
+                  bytes_.begin() + static_cast<std::ptrdiff_t>(start));
+        return true;
+    }
+
+    // Check the complete destination before storing any bytes, including when
+    // a guest range crosses virtual pages with separate physical backing.
+    auto current = address;
+    auto remaining = data.size();
+    while (remaining != 0U) {
+        std::uint64_t physical = 0U;
+        if (!translate(current, GuestPageAccess::write, physical)) return false;
+        const auto page_offset = static_cast<std::size_t>(current & (page_size - 1U));
+        const auto chunk = std::min(remaining,
+                                    static_cast<std::size_t>(page_size) - page_offset);
+        current += static_cast<std::uint64_t>(chunk);
+        remaining -= chunk;
+    }
+
+    current = address;
+    std::size_t data_offset = 0U;
+    remaining = data.size();
+    while (remaining != 0U) {
+        std::uint64_t physical = 0U;
+        (void)translate(current, GuestPageAccess::write, physical);
+        const auto page_offset = static_cast<std::size_t>(current & (page_size - 1U));
+        const auto chunk = std::min(remaining,
+                                    static_cast<std::size_t>(page_size) - page_offset);
+        const auto start = static_cast<std::size_t>(physical);
+        std::copy_n(data.begin() + static_cast<std::ptrdiff_t>(data_offset), chunk,
+                    bytes_.begin() + static_cast<std::ptrdiff_t>(start));
+        current += static_cast<std::uint64_t>(chunk);
+        data_offset += chunk;
+        remaining -= chunk;
+    }
+    return true;
+}
+
 bool GuestMemory::fill(std::uint64_t address, std::size_t length, std::byte value) noexcept {
     if (length == 0U) return true;
     if (address > std::numeric_limits<std::uint64_t>::max() - (length - 1U)) return false;

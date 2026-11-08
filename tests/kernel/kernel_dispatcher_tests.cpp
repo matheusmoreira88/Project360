@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <vector>
 
 namespace {
 
@@ -132,6 +133,81 @@ int main() {
     check(moved == KernelDispatchStatus::handled && moved_matches &&
               state.pc == 0x1044U,
           "xboxkrnl ordinal 298 copies guest bytes and returns through LR");
+
+    const std::array<std::byte, 6> ansi_text{
+        std::byte{'X'}, std::byte{'e'}, std::byte{'n'},
+        std::byte{'o'}, std::byte{'n'}, std::byte{0}};
+    check(memory.load(64U, ansi_text), "test fixture seeds a null-terminated ANSI string");
+    state.gpr[3] = data_page + 128U;
+    state.gpr[4] = data_page + 64U;
+    state.lr = 0x1057U;
+    state.pc = 0x8000b0U;
+    const auto initialized_string = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_init_ansi_string_ordinal}, state, memory);
+    std::uint16_t ansi_length = 0U;
+    std::uint16_t ansi_maximum = 0U;
+    std::uint32_t ansi_buffer = 0U;
+    check(initialized_string == KernelDispatchStatus::handled &&
+              memory.read_u16_be(data_page + 128U, ansi_length) && ansi_length == 5U &&
+              memory.read_u16_be(data_page + 130U, ansi_maximum) && ansi_maximum == 6U &&
+              memory.read_u32_be(data_page + 132U, ansi_buffer) &&
+              ansi_buffer == data_page + 64U && state.pc == 0x1054U,
+          "xboxkrnl ordinal 289 writes a big-endian ANSI_STRING descriptor");
+
+    state.gpr[3] = data_page + 160U;
+    state.gpr[4] = 0U;
+    const auto initialized_null = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_init_ansi_string_ordinal}, state, memory);
+    check(initialized_null == KernelDispatchStatus::handled &&
+              memory.read_u16_be(data_page + 160U, ansi_length) && ansi_length == 0U &&
+              memory.read_u16_be(data_page + 162U, ansi_maximum) && ansi_maximum == 0U &&
+              memory.read_u32_be(data_page + 164U, ansi_buffer) && ansi_buffer == 0U,
+          "RtlInitAnsiString initializes null source strings as empty descriptors");
+
+    const std::array<std::byte, 2> unterminated_prefix{
+        std::byte{'A'}, std::byte{'B'}};
+    check(memory.load(GuestMemory::page_size - unterminated_prefix.size(),
+                      unterminated_prefix),
+          "test fixture seeds an ANSI string ending at an unmapped page");
+    const std::array<std::byte, 8> previous_descriptor{
+        std::byte{0xde}, std::byte{0xad}, std::byte{0xbe}, std::byte{0xef},
+        std::byte{0x12}, std::byte{0x34}, std::byte{0x56}, std::byte{0x78}};
+    check(memory.load(192U, previous_descriptor),
+          "test fixture seeds a destination descriptor before source failure");
+    state.gpr[3] = data_page + 192U;
+    state.gpr[4] = data_page + GuestMemory::page_size - unterminated_prefix.size();
+    state.pc = 0x8000c0U;
+    const auto unterminated_fault = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_init_ansi_string_ordinal}, state, memory);
+    std::array<std::byte, 8> descriptor_after_fault{};
+    bool descriptor_unchanged = true;
+    for (std::size_t i = 0; i < descriptor_after_fault.size(); ++i) {
+        std::uint8_t byte = 0U;
+        descriptor_unchanged = descriptor_unchanged &&
+                               memory.read_u8(data_page + 192U + i, byte) &&
+                               byte == std::to_integer<std::uint8_t>(previous_descriptor[i]);
+    }
+    check(unterminated_fault == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x8000c0U && descriptor_unchanged,
+          "RtlInitAnsiString faults on inaccessible source without partially changing state");
+
+    GuestMemory long_string_memory(0x12000U);
+    std::vector<std::byte> long_text(0xffffU, std::byte{'A'});
+    check(long_string_memory.load(0x1000U, long_text),
+          "test fixture seeds a source longer than ANSI_STRING can represent");
+    state.gpr[3] = 0x11000U;
+    state.gpr[4] = 0x1000U;
+    const auto capped_string = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_init_ansi_string_ordinal}, state,
+        long_string_memory);
+    check(capped_string == KernelDispatchStatus::handled &&
+              long_string_memory.read_u16_be(0x11000U, ansi_length) &&
+              ansi_length == 0xfffeU &&
+              long_string_memory.read_u16_be(0x11002U, ansi_maximum) &&
+              ansi_maximum == 0xffffU &&
+              long_string_memory.read_u32_be(0x11004U, ansi_buffer) &&
+              ansi_buffer == 0x1000U,
+          "RtlInitAnsiString caps oversized counted strings to USHORT length limits");
 
     state.gpr[3] = data_page;
     state.gpr[4] = initial.size();

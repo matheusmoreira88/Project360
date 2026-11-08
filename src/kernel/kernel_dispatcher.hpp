@@ -30,6 +30,7 @@ public:
     static constexpr std::uint16_t rtl_compare_memory_ulong_ordinal = 269;
     static constexpr std::uint16_t rtl_fill_memory_ordinal = 284;
     static constexpr std::uint16_t rtl_fill_memory_ulong_ordinal = 285;
+    static constexpr std::uint16_t rtl_init_ansi_string_ordinal = 289;
     static constexpr std::uint16_t rtl_move_memory_ordinal = 298;
     static constexpr std::uint16_t rtl_zero_memory_ordinal = 320;
 
