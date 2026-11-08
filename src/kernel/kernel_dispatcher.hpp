@@ -36,6 +36,7 @@ public:
     static constexpr std::uint16_t rtl_ulong_byte_swap_ordinal = 307;
     static constexpr std::uint16_t rtl_ushort_byte_swap_ordinal = 318;
     static constexpr std::uint16_t rtl_zero_memory_ordinal = 320;
+    static constexpr std::uint16_t rtl_unicode_string_to_integer_ordinal = 309;
 
     // Dispatches an imported xboxkrnl function using the Xenon register ABI.
     // A handled void function returns to the caller through LR (blr semantics).

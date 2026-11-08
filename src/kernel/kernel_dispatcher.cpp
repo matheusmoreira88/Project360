@@ -9,6 +9,9 @@
 namespace project360::kernel {
 namespace {
 
+constexpr std::uint32_t kStatusSuccess = 0x00000000U;
+constexpr std::uint32_t kStatusInvalidParameter = 0xc000000dU;
+
 [[nodiscard]] constexpr char ascii_lower(char value) noexcept {
     return value >= 'A' && value <= 'Z'
                ? static_cast<char>(value - 'A' + 'a')
@@ -22,6 +25,26 @@ namespace {
         if (ascii_lower(left[i]) != ascii_lower(right[i])) return false;
     }
     return true;
+}
+
+[[nodiscard]] bool is_ascii_space(std::uint16_t character) noexcept {
+    return character == 0x20U || (character >= 0x09U && character <= 0x0dU);
+}
+
+[[nodiscard]] int digit_value(std::uint16_t character) noexcept {
+    if (character >= static_cast<std::uint16_t>('0') &&
+        character <= static_cast<std::uint16_t>('9')) {
+        return static_cast<int>(character - static_cast<std::uint16_t>('0'));
+    }
+    if (character >= static_cast<std::uint16_t>('a') &&
+        character <= static_cast<std::uint16_t>('f')) {
+        return 10 + static_cast<int>(character - static_cast<std::uint16_t>('a'));
+    }
+    if (character >= static_cast<std::uint16_t>('A') &&
+        character <= static_cast<std::uint16_t>('F')) {
+        return 10 + static_cast<int>(character - static_cast<std::uint16_t>('A'));
+    }
+    return -1;
 }
 
 } // namespace
@@ -140,6 +163,112 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
         }
         state.pc = state.lr & ~std::uint64_t{3};
         return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == rtl_unicode_string_to_integer_ordinal) {
+        const auto string_address = state.gpr[3];
+        const auto requested_base = static_cast<std::uint32_t>(state.gpr[4]);
+        const auto value_address = state.gpr[5];
+        constexpr auto guest_address_limit = std::uint64_t{0xffff'ffffU};
+        if (string_address > guest_address_limit - 7U ||
+            value_address > guest_address_limit - 3U) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+
+        std::uint16_t length = 0U;
+        std::uint16_t maximum_length = 0U;
+        std::uint32_t buffer = 0U;
+        if (!memory.read_u16_be(string_address, length) ||
+            !memory.read_u16_be(string_address + 2U, maximum_length) ||
+            !memory.read_u32_be(string_address + 4U, buffer)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        const auto return_status = [&](std::uint32_t status) {
+            state.gpr[3] = status;
+            state.pc = state.lr & ~std::uint64_t{3};
+            return KernelDispatchStatus::handled;
+        };
+        if ((requested_base != 0U && requested_base != 2U && requested_base != 8U &&
+             requested_base != 10U && requested_base != 16U) || length == 0U ||
+            (length & 1U) != 0U || length > maximum_length ||
+            (buffer & 1U) != 0U || (length != 0U && buffer == 0U) ||
+            (length != 0U && length - 1U > guest_address_limit - buffer)) {
+            return return_status(kStatusInvalidParameter);
+        }
+
+        const auto character_count = static_cast<std::uint32_t>(length / 2U);
+        const auto read_character = [&](std::uint32_t index,
+                                        std::uint16_t& character) noexcept {
+            return memory.read_u16_be(static_cast<std::uint64_t>(buffer) +
+                                          static_cast<std::uint64_t>(index) * 2U,
+                                      character);
+        };
+        std::uint32_t index = 0U;
+        std::uint16_t character = 0U;
+        while (index < character_count) {
+            if (!read_character(index, character)) {
+                return KernelDispatchStatus::guest_memory_fault;
+            }
+            if (!is_ascii_space(character)) break;
+            ++index;
+        }
+
+        bool negative = false;
+        if (index < character_count) {
+            if (!read_character(index, character)) {
+                return KernelDispatchStatus::guest_memory_fault;
+            }
+            if (character == static_cast<std::uint16_t>('+') ||
+                character == static_cast<std::uint16_t>('-')) {
+                negative = character == static_cast<std::uint16_t>('-');
+                ++index;
+            }
+        }
+
+        auto base = requested_base;
+        if (base == 0U) {
+            base = 10U;
+            if (index < character_count) {
+                if (!read_character(index, character)) {
+                    return KernelDispatchStatus::guest_memory_fault;
+                }
+                if (character == static_cast<std::uint16_t>('0') &&
+                    index + 1U < character_count) {
+                    std::uint16_t prefix = 0U;
+                    if (!read_character(index + 1U, prefix)) {
+                        return KernelDispatchStatus::guest_memory_fault;
+                    }
+                    if (prefix == static_cast<std::uint16_t>('x') ||
+                        prefix == static_cast<std::uint16_t>('X')) {
+                        base = 16U;
+                        index += 2U;
+                    } else if (prefix == static_cast<std::uint16_t>('o') ||
+                               prefix == static_cast<std::uint16_t>('O')) {
+                        base = 8U;
+                        index += 2U;
+                    } else if (prefix == static_cast<std::uint16_t>('b') ||
+                               prefix == static_cast<std::uint16_t>('B')) {
+                        base = 2U;
+                        index += 2U;
+                    }
+                }
+            }
+        }
+
+        std::uint32_t converted = 0U;
+        while (index < character_count) {
+            if (!read_character(index, character)) {
+                return KernelDispatchStatus::guest_memory_fault;
+            }
+            const auto digit = digit_value(character);
+            if (digit < 0 || static_cast<std::uint32_t>(digit) >= base) break;
+            converted = converted * base + static_cast<std::uint32_t>(digit);
+            ++index;
+        }
+        if (negative) converted = 0U - converted;
+        if (!memory.write_u32_be(value_address, converted)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        return return_status(kStatusSuccess);
     }
     if (import.ordinal == rtl_compare_memory_ordinal) {
         const auto source1 = state.gpr[3];
