@@ -14,6 +14,7 @@ constexpr std::uint32_t kStatusSuccess = 0x00000000U;
 constexpr std::uint32_t kStatusInvalidParameter = 0xc000000dU;
 constexpr std::uint32_t kStatusBufferOverflow = 0x80000005U;
 constexpr std::uint32_t kErrorMessageIdNotFound = 317U;
+constexpr std::uint32_t kMaximumIntegerTextLength = 0x10000U;
 
 [[nodiscard]] constexpr std::uint32_t nt_status_to_dos_error(
     std::uint32_t status) noexcept {
@@ -80,6 +81,116 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
                                                 memory::GuestMemory& memory) const noexcept {
     if (!equals_ascii_case_insensitive(import.library, "xboxkrnl.exe")) {
         return KernelDispatchStatus::unsupported_library;
+    }
+    if (import.ordinal == rtl_char_to_integer_ordinal) {
+        const auto string_address = state.gpr[3];
+        const auto requested_base = static_cast<std::uint32_t>(state.gpr[4]);
+        const auto value_address = state.gpr[5];
+        constexpr auto guest_address_limit = std::uint64_t{0xffff'ffffU};
+        const auto return_status = [&](std::uint32_t status) {
+            state.gpr[3] = status;
+            state.pc = state.lr & ~std::uint64_t{3};
+            return KernelDispatchStatus::handled;
+        };
+        if (requested_base != 0U && requested_base != 2U && requested_base != 8U &&
+            requested_base != 10U && requested_base != 16U) {
+            return return_status(kStatusInvalidParameter);
+        }
+        if (string_address > guest_address_limit ||
+            value_address > guest_address_limit - 3U) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+
+        const auto read_character = [&](std::uint32_t index,
+                                        std::uint8_t& character) noexcept {
+            if (index > kMaximumIntegerTextLength ||
+                static_cast<std::uint64_t>(index) > guest_address_limit - string_address) {
+                return false;
+            }
+            return memory.read_u8(string_address + index, character);
+        };
+        auto index = std::uint32_t{0};
+        std::uint8_t character = 0U;
+        while (true) {
+            if (!read_character(index, character)) {
+                return index > kMaximumIntegerTextLength
+                           ? KernelDispatchStatus::invalid_guest_argument
+                           : KernelDispatchStatus::guest_memory_fault;
+            }
+            if (!is_ascii_space(character) || character == 0U) break;
+            ++index;
+        }
+
+        bool negative = false;
+        if (character == static_cast<std::uint8_t>('+') ||
+            character == static_cast<std::uint8_t>('-')) {
+            negative = character == static_cast<std::uint8_t>('-');
+            ++index;
+            if (!read_character(index, character)) {
+                return index > kMaximumIntegerTextLength
+                           ? KernelDispatchStatus::invalid_guest_argument
+                           : KernelDispatchStatus::guest_memory_fault;
+            }
+        }
+
+        auto base = requested_base;
+        if (base == 0U) {
+            base = 10U;
+            if (character == static_cast<std::uint8_t>('0')) {
+                std::uint8_t prefix = 0U;
+                if (!read_character(index + 1U, prefix)) {
+                    return index + 1U > kMaximumIntegerTextLength
+                               ? KernelDispatchStatus::invalid_guest_argument
+                               : KernelDispatchStatus::guest_memory_fault;
+                }
+                if (prefix == static_cast<std::uint8_t>('x') ||
+                    prefix == static_cast<std::uint8_t>('X')) {
+                    base = 16U;
+                    index += 2U;
+                    if (!read_character(index, character)) {
+                        return index > kMaximumIntegerTextLength
+                                   ? KernelDispatchStatus::invalid_guest_argument
+                                   : KernelDispatchStatus::guest_memory_fault;
+                    }
+                } else if (prefix == static_cast<std::uint8_t>('o') ||
+                           prefix == static_cast<std::uint8_t>('O')) {
+                    base = 8U;
+                    index += 2U;
+                    if (!read_character(index, character)) {
+                        return index > kMaximumIntegerTextLength
+                                   ? KernelDispatchStatus::invalid_guest_argument
+                                   : KernelDispatchStatus::guest_memory_fault;
+                    }
+                } else if (prefix == static_cast<std::uint8_t>('b') ||
+                           prefix == static_cast<std::uint8_t>('B')) {
+                    base = 2U;
+                    index += 2U;
+                    if (!read_character(index, character)) {
+                        return index > kMaximumIntegerTextLength
+                                   ? KernelDispatchStatus::invalid_guest_argument
+                                   : KernelDispatchStatus::guest_memory_fault;
+                    }
+                }
+            }
+        }
+
+        std::uint32_t converted = 0U;
+        while (character != 0U) {
+            const auto digit = digit_value(character);
+            if (digit < 0 || static_cast<std::uint32_t>(digit) >= base) break;
+            converted = converted * base + static_cast<std::uint32_t>(digit);
+            ++index;
+            if (!read_character(index, character)) {
+                return index > kMaximumIntegerTextLength
+                           ? KernelDispatchStatus::invalid_guest_argument
+                           : KernelDispatchStatus::guest_memory_fault;
+            }
+        }
+        if (negative) converted = 0U - converted;
+        if (!memory.write_u32_be(value_address, converted)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        return return_status(kStatusSuccess);
     }
     if (import.ordinal == rtl_nt_status_to_dos_error_ordinal) {
         state.gpr[3] = nt_status_to_dos_error(static_cast<std::uint32_t>(state.gpr[3]));

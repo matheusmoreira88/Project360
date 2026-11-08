@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <iostream>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -48,6 +49,18 @@ bool unicode_buffer_equals(project360::memory::GuestMemory& memory,
     std::uint16_t terminator = 1U;
     return memory.read_u16_be(buffer + characters.size() * 2U, terminator) &&
            terminator == 0U;
+}
+
+bool write_ascii_c_string(project360::memory::GuestMemory& memory,
+                          std::uint64_t address, std::string_view text) {
+    for (std::size_t index = 0U; index <= text.size(); ++index) {
+        const auto character = index == text.size() ? '\0' : text[index];
+        if (!memory.write_u8(address + index,
+                             static_cast<std::uint8_t>(character))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -436,6 +449,104 @@ int main() {
     check(inaccessible_string == KernelDispatchStatus::guest_memory_fault &&
               state.pc == 0x800150U && state.gpr[3] == unicode_descriptor,
           "RtlUnicodeStringToInteger propagates inaccessible string memory without returning");
+
+    constexpr std::uint64_t ascii_integer_text = data_page + 0x600U;
+    constexpr std::uint64_t ascii_integer_output = data_page + 0x700U;
+    const auto call_char_to_integer = [&](std::uint64_t string, std::uint32_t base,
+                                          std::uint64_t output, std::uint64_t lr) {
+        state.gpr[3] = string;
+        state.gpr[4] = base;
+        state.gpr[5] = output;
+        state.lr = lr;
+        return KernelDispatcher{}.dispatch(
+            {"xboxkrnl.exe", KernelDispatcher::rtl_char_to_integer_ordinal}, state,
+            memory);
+    };
+    check(write_ascii_c_string(memory, ascii_integer_text, " \t-0x2A!"),
+          "test fixture seeds a NUL-terminated ASCII integer");
+    state.gpr[5] = ascii_integer_output;
+    check(memory.write_u32_be(ascii_integer_output, 0xdeadbeefU),
+          "test fixture seeds the ASCII parser output sentinel");
+    check(call_char_to_integer(ascii_integer_text, 0U, ascii_integer_output, 0x1507U) ==
+                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              state.pc == 0x1504U &&
+              memory.read_u32_be(ascii_integer_output, parsed_value) &&
+              parsed_value == 0xffff'ffd6U,
+          "RtlCharToInteger parses whitespace, sign and a base-zero hexadecimal prefix");
+
+    check(write_ascii_c_string(memory, ascii_integer_text, "17tail"),
+          "test fixture replaces the ASCII integer with explicit octal input");
+    check(call_char_to_integer(ascii_integer_text, 8U, ascii_integer_output, 0x1517U) ==
+                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              memory.read_u32_be(ascii_integer_output, parsed_value) && parsed_value == 15U,
+          "RtlCharToInteger stops parsing at the first invalid digit or character");
+
+    check(write_ascii_c_string(memory, ascii_integer_text, ""),
+          "test fixture makes the ASCII integer empty");
+    check(call_char_to_integer(ascii_integer_text, 10U, ascii_integer_output, 0x1527U) ==
+                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              memory.read_u32_be(ascii_integer_output, parsed_value) && parsed_value == 0U,
+          "RtlCharToInteger returns zero successfully for empty input");
+
+    check(write_ascii_c_string(memory, ascii_integer_text, "not numeric"),
+          "test fixture seeds ASCII input without a numeric prefix");
+    check(memory.write_u32_be(ascii_integer_output, 0xdeadbeefU),
+          "test fixture resets the ASCII parser output sentinel");
+    check(call_char_to_integer(ascii_integer_text, 10U, ascii_integer_output, 0x152fU) ==
+                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              memory.read_u32_be(ascii_integer_output, parsed_value) && parsed_value == 0U,
+          "RtlCharToInteger returns zero successfully when the string has no number");
+
+    check(write_ascii_c_string(memory, ascii_integer_text, "42") &&
+              memory.write_u32_be(ascii_integer_output, 0xdeadbeefU),
+          "test fixture seeds ASCII digits and an output sentinel for invalid-base handling");
+    state.gpr[3] = ascii_integer_text;
+    state.gpr[4] = 3U;
+    state.gpr[5] = ascii_integer_output;
+    state.lr = 0x1533U;
+    const auto invalid_ascii_base = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_char_to_integer_ordinal}, state, memory);
+    check(invalid_ascii_base == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0xc000000dU && state.pc == 0x1530U &&
+              memory.read_u32_be(ascii_integer_output, parsed_value) &&
+              parsed_value == 0xdeadbeefU,
+          "RtlCharToInteger rejects unsupported radices without overwriting the output");
+
+    check(memory.write_u8(data_page + 0xfffU, static_cast<std::uint8_t>('5')),
+          "test fixture seeds a non-terminated ASCII string at the mapped-memory boundary");
+    state.pc = 0x800170U;
+    const auto unterminated_ascii = call_char_to_integer(
+        data_page + 0xfffU, 10U, ascii_integer_output, 0x1537U);
+    check(unterminated_ascii == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x800170U && state.gpr[3] == data_page + 0xfffU,
+          "RtlCharToInteger faults explicitly when a NUL-terminated input crosses unmapped memory");
+
+    constexpr std::uint64_t long_text_base = 0x400000U;
+    constexpr std::uint64_t long_text_size = 0x10001U;
+    constexpr std::uint64_t long_text_output = long_text_base + 0x10800U;
+    GuestMemory long_text_memory(17U * static_cast<std::size_t>(GuestMemory::page_size));
+    std::array<project360::memory::GuestPageMapping, 17U> long_text_mappings{};
+    for (std::size_t page = 0U; page < long_text_mappings.size(); ++page) {
+        long_text_mappings[page] = {
+            long_text_base + page * GuestMemory::page_size,
+            page * GuestMemory::page_size,
+            GuestPageAccess::read | GuestPageAccess::write};
+    }
+    check(long_text_memory.map_pages(long_text_mappings) &&
+              long_text_memory.fill(long_text_base, long_text_size, std::byte{'1'}) &&
+              long_text_memory.write_u8(long_text_base + long_text_size, 0U),
+          "test fixture maps and seeds ASCII input beyond the bounded scan length");
+    state.gpr[3] = long_text_base;
+    state.gpr[4] = 10U;
+    state.gpr[5] = long_text_output;
+    state.lr = 0x1547U;
+    state.pc = 0x800180U;
+    const auto overlong_ascii = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_char_to_integer_ordinal}, state,
+        long_text_memory);
+    check(overlong_ascii == KernelDispatchStatus::invalid_guest_argument &&
+              state.pc == 0x800180U && state.gpr[3] == long_text_base,
+          "RtlCharToInteger rejects input beyond the explicit 65,536-byte scan cap");
 
     struct NtStatusMapping {
         std::uint32_t nt_status;
