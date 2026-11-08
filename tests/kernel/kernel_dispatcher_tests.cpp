@@ -41,33 +41,6 @@ bool write_unicode_descriptor(project360::memory::GuestMemory& memory,
     return true;
 }
 
-bool unicode_buffer_equals(project360::memory::GuestMemory& memory,
-                           std::uint64_t buffer,
-                           std::span<const std::uint16_t> characters) {
-    for (std::size_t index = 0U; index < characters.size(); ++index) {
-        std::uint16_t actual = 0U;
-        if (!memory.read_u16_be(buffer + index * 2U, actual) ||
-            actual != characters[index]) {
-            return false;
-        }
-    }
-    std::uint16_t terminator = 1U;
-    return memory.read_u16_be(buffer + characters.size() * 2U, terminator) &&
-           terminator == 0U;
-}
-
-bool write_ascii_c_string(project360::memory::GuestMemory& memory,
-                          std::uint64_t address, std::string_view text) {
-    for (std::size_t index = 0U; index <= text.size(); ++index) {
-        const auto character = index == text.size() ? '\0' : text[index];
-        if (!memory.write_u8(address + index,
-                             static_cast<std::uint8_t>(character))) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool write_ansi_string_descriptor(project360::memory::GuestMemory& memory,
                                   std::uint64_t descriptor,
                                   std::uint64_t buffer,
@@ -97,6 +70,7 @@ int main() {
     using project360::kernel::KernelImport;
     using project360::memory::GuestMemory;
     using project360::memory::GuestPageAccess;
+    std::uint32_t word = 0U;
 
     check(KernelDispatcher::ex_allocate_pool_ordinal == 9U &&
               KernelDispatcher::ex_allocate_pool_with_tag_ordinal == 10U &&
@@ -110,6 +84,17 @@ int main() {
               KernelDispatcher::ke_tls_get_value_ordinal == 340U &&
               KernelDispatcher::ke_tls_set_value_ordinal == 341U,
           "time and TLS import constants match the Xbox 360 export table ordinals");
+    check(KernelDispatcher::rtl_compare_memory_ordinal == 282U &&
+              KernelDispatcher::rtl_compare_memory_ulong_ordinal == 283U &&
+              KernelDispatcher::rtl_compare_string_ordinal == 284U &&
+              KernelDispatcher::rtl_compare_unicode_string_ordinal == 286U &&
+              KernelDispatcher::rtl_downcase_unicode_char_ordinal == 292U &&
+              KernelDispatcher::rtl_fill_memory_ulong_ordinal == 294U &&
+              KernelDispatcher::rtl_init_ansi_string_ordinal == 300U &&
+              KernelDispatcher::rtl_init_unicode_string_ordinal == 301U &&
+              KernelDispatcher::rtl_nt_status_to_dos_error_ordinal == 309U &&
+              KernelDispatcher::rtl_upcase_unicode_char_ordinal == 329U,
+          "implemented Rtl import constants match the Xbox 360 export table ordinals");
 
     constexpr std::uint64_t data_page = 0x200000U;
     GuestMemory memory(2U * static_cast<std::size_t>(GuestMemory::page_size));
@@ -132,7 +117,7 @@ int main() {
         {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ulong_ordinal}, state, memory);
     check(matching_words == KernelDispatchStatus::handled && state.gpr[3] == 8U &&
               state.pc == 0x1034U,
-          "xboxkrnl ordinal 269 returns the byte count for repeated matching ULONGs");
+          "RtlCompareMemoryUlong ordinal 283 returns the byte count for repeated matching ULONGs");
     state.gpr[3] = data_page + 1U;
     state.gpr[4] = 8U;
     state.gpr[5] = 0xaabbccddU;
@@ -159,7 +144,7 @@ int main() {
         {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state, memory);
     check(matching == KernelDispatchStatus::handled && state.gpr[3] == initial.size() &&
               state.pc == 0x1024U,
-          "xboxkrnl ordinal 268 returns the full length for identical guest bytes");
+          "RtlCompareMemory ordinal 282 returns the full length for identical guest bytes");
 
     check(memory.write_u8(data_page + initial.size() + 2U, 0x99U),
           "test fixture changes a byte after the shared prefix");
@@ -362,11 +347,6 @@ int main() {
                                0x1107U) == KernelDispatchStatus::handled &&
               state.gpr[3] == 0U && state.pc == 0x1104U,
           "RtlCompareUnicodeString compares UTF-16 text with supported case folding");
-    check(call_unicode_compare(KernelDispatcher::rtl_equal_unicode_string_ordinal,
-                               unicode_left_descriptor, unicode_right_descriptor, 1U,
-                               0x1117U) == KernelDispatchStatus::handled &&
-              state.gpr[3] == 1U && state.pc == 0x1114U,
-          "RtlEqualUnicodeString returns a BOOLEAN for case-insensitive equality");
     check(call_unicode_compare(KernelDispatcher::rtl_compare_unicode_string_ordinal,
                                unicode_left_descriptor, unicode_right_descriptor, 0U,
                                0x1127U) == KernelDispatchStatus::handled &&
@@ -381,11 +361,6 @@ int main() {
                                0x112fU) == KernelDispatchStatus::handled &&
               state.gpr[3] == 2U,
           "RtlCompareUnicodeString orders equal prefixes by byte length");
-    check(call_unicode_compare(KernelDispatcher::rtl_equal_unicode_string_ordinal,
-                               unicode_left_descriptor, unicode_right_descriptor, 1U,
-                               0x1133U) == KernelDispatchStatus::handled &&
-              state.gpr[3] == 0U,
-          "RtlEqualUnicodeString returns false for different counted lengths");
     const std::array<std::uint16_t, 1> greek_lower{0x03b1U};
     const std::array<std::uint16_t, 1> greek_upper{0x0391U};
     check(write_unicode_descriptor(memory, unicode_left_descriptor, unicode_left_buffer,
@@ -406,7 +381,7 @@ int main() {
           "test fixture seeds a well-formed string with inaccessible backing");
     state.pc = 0x8000d0U;
     const auto inaccessible_unicode = call_unicode_compare(
-        KernelDispatcher::rtl_equal_unicode_string_ordinal, unicode_left_descriptor,
+        KernelDispatcher::rtl_compare_unicode_string_ordinal, unicode_left_descriptor,
         unicode_right_descriptor, 0U, 0x1137U);
     check(inaccessible_unicode == KernelDispatchStatus::guest_memory_fault &&
               state.pc == 0x8000d0U,
@@ -415,7 +390,7 @@ int main() {
               memory.write_u16_be(unicode_left_descriptor + 2U, 2U),
           "test fixture creates an odd-byte UNICODE_STRING length");
     const auto odd_unicode_length = call_unicode_compare(
-        KernelDispatcher::rtl_equal_unicode_string_ordinal, unicode_left_descriptor,
+        KernelDispatcher::rtl_compare_unicode_string_ordinal, unicode_left_descriptor,
         unicode_right_descriptor, 0U, 0x1147U);
     check(odd_unicode_length == KernelDispatchStatus::invalid_guest_argument &&
               state.pc == 0x8000d0U,
@@ -448,24 +423,6 @@ int main() {
               state.pc == 0x800090U,
           "RtlCompareMemory rejects guest address ranges that wrap the 32-bit address space");
 
-    check(memory.load(32U, initial), "test fixture seeds a source range for RtlMoveMemory");
-    state.gpr[3] = data_page + 40U;
-    state.gpr[4] = data_page + 32U;
-    state.gpr[5] = initial.size();
-    state.lr = 0x1047U;
-    state.pc = 0x8000a0U;
-    const auto moved = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_move_memory_ordinal}, state, memory);
-    bool moved_matches = true;
-    for (std::size_t i = 0; i < initial.size(); ++i) {
-        std::uint8_t byte = 0U;
-        moved_matches = moved_matches && memory.read_u8(data_page + 40U + i, byte) &&
-                        byte == std::to_integer<std::uint8_t>(initial[i]);
-    }
-    check(moved == KernelDispatchStatus::handled && moved_matches &&
-              state.pc == 0x1044U,
-          "xboxkrnl ordinal 298 copies guest bytes and returns through LR");
-
     const std::array<std::byte, 6> ansi_text{
         std::byte{'X'}, std::byte{'e'}, std::byte{'n'},
         std::byte{'o'}, std::byte{'n'}, std::byte{0}};
@@ -484,7 +441,7 @@ int main() {
               memory.read_u16_be(data_page + 130U, ansi_maximum) && ansi_maximum == 6U &&
               memory.read_u32_be(data_page + 132U, ansi_buffer) &&
               ansi_buffer == data_page + 64U && state.pc == 0x1054U,
-          "xboxkrnl ordinal 289 writes a big-endian ANSI_STRING descriptor");
+          "RtlInitAnsiString ordinal 300 writes a big-endian ANSI_STRING descriptor");
 
     state.gpr[3] = data_page + 160U;
     state.gpr[4] = 0U;
@@ -560,7 +517,7 @@ int main() {
               memory.read_u16_be(data_page + 274U, unicode_maximum) &&
               unicode_maximum == 6U && memory.read_u32_be(data_page + 276U, unicode_buffer) &&
               unicode_buffer == data_page + 256U && state.pc == 0x1064U,
-          "xboxkrnl ordinal 290 writes the byte lengths and guest pointer of a big-endian UNICODE_STRING");
+          "RtlInitUnicodeString ordinal 301 writes the byte lengths and guest pointer of a big-endian UNICODE_STRING");
 
     state.gpr[3] = data_page + 288U;
     state.gpr[4] = 0U;
@@ -621,221 +578,6 @@ int main() {
               unicode_buffer == 0x1000U,
           "RtlInitUnicodeString caps an oversized string at the largest even representable length");
 
-    state.gpr[3] = data_page;
-    state.gpr[4] = initial.size();
-    state.gpr[14] = 0x1122334455667788ULL;
-    state.lr = 0x1237U;
-    state.pc = 0x800100U;
-    const auto handled = KernelDispatcher{}.dispatch(
-        {"XBOXKRNL.EXE", KernelDispatcher::rtl_zero_memory_ordinal}, state, memory);
-    std::uint32_t word = 1U;
-    check(handled == KernelDispatchStatus::handled,
-          "xboxkrnl ordinal 320 dispatches the implemented memory routine");
-    check(memory.read_u32_be(data_page, word) && word == 0U,
-          "RtlZeroMemory clears guest virtual memory");
-    check(state.pc == 0x1234U && state.gpr[3] == data_page &&
-              state.gpr[4] == initial.size() && state.gpr[14] == 0x1122334455667788ULL,
-          "successful void import returns through LR and preserves argument/nonvolatile GPRs");
-
-    state.gpr[3] = 0x1122334455667788ULL;
-    state.lr = 0x1247U;
-    state.pc = 0x800110U;
-    const auto swapped_ulong = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_ulong_byte_swap_ordinal}, state, memory);
-    check(swapped_ulong == KernelDispatchStatus::handled &&
-              state.gpr[3] == 0x88776655U && state.pc == 0x1244U,
-          "RtlUlongByteSwap reverses the low four bytes and returns a zero-extended ULONG");
-
-    state.gpr[3] = 0x112233445566abcdULL;
-    state.lr = 0x1257U;
-    state.pc = 0x800120U;
-    const auto swapped_ushort = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_ushort_byte_swap_ordinal}, state, memory);
-    check(swapped_ushort == KernelDispatchStatus::handled &&
-              state.gpr[3] == 0xcdabU && state.pc == 0x1254U,
-          "RtlUshortByteSwap reverses the low two bytes and returns a zero-extended USHORT");
-
-    constexpr std::uint64_t unicode_descriptor = data_page + 0x100U;
-    constexpr std::uint64_t integer_unicode_buffer = data_page + 0x200U;
-    constexpr std::uint64_t integer_output = data_page + 0x300U;
-    const std::array<std::uint16_t, 8> signed_hex{
-        0x20U, 0x09U, static_cast<std::uint16_t>('-'), static_cast<std::uint16_t>('0'),
-        static_cast<std::uint16_t>('x'), static_cast<std::uint16_t>('2'),
-        static_cast<std::uint16_t>('a'), static_cast<std::uint16_t>('!')};
-    check(write_unicode_descriptor(memory, unicode_descriptor, integer_unicode_buffer, signed_hex),
-          "test fixture seeds a big-endian counted UTF-16 number");
-    check(memory.write_u32_be(integer_output, 0xdeadbeefU),
-          "test fixture seeds the integer output with a sentinel");
-    state.gpr[3] = unicode_descriptor;
-    state.gpr[4] = 0U;
-    state.gpr[5] = integer_output;
-    state.lr = 0x1267U;
-    state.pc = 0x800130U;
-    const auto parsed_hex = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_unicode_string_to_integer_ordinal}, state,
-        memory);
-    std::uint32_t parsed_value = 0U;
-    check(parsed_hex == KernelDispatchStatus::handled && state.gpr[3] == 0U &&
-              state.pc == 0x1264U && memory.read_u32_be(integer_output, parsed_value) &&
-              parsed_value == 0xffff'ffd6U,
-          "RtlUnicodeStringToInteger parses signed prefixed hexadecimal and returns STATUS_SUCCESS");
-
-    const std::array<std::uint16_t, 3> octal_digits{
-        static_cast<std::uint16_t>('7'), static_cast<std::uint16_t>('8'),
-        static_cast<std::uint16_t>('9')};
-    check(write_unicode_descriptor(memory, unicode_descriptor, integer_unicode_buffer, octal_digits),
-          "test fixture replaces the counted string with octal input");
-    state.gpr[3] = unicode_descriptor;
-    state.gpr[4] = 8U;
-    state.gpr[5] = integer_output;
-    state.lr = 0x1277U;
-    const auto parsed_octal = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_unicode_string_to_integer_ordinal}, state,
-        memory);
-    check(parsed_octal == KernelDispatchStatus::handled && state.gpr[3] == 0U &&
-              state.pc == 0x1274U && memory.read_u32_be(integer_output, parsed_value) &&
-              parsed_value == 7U,
-          "RtlUnicodeStringToInteger stops at the first digit outside the explicit base");
-
-    state.gpr[3] = unicode_descriptor;
-    state.gpr[4] = 3U;
-    state.gpr[5] = integer_output;
-    state.lr = 0x1287U;
-    const auto invalid_base = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_unicode_string_to_integer_ordinal}, state,
-        memory);
-    check(invalid_base == KernelDispatchStatus::handled && state.gpr[3] == 0xc000000dU &&
-              state.pc == 0x1284U && memory.read_u32_be(integer_output, parsed_value) &&
-              parsed_value == 7U,
-          "RtlUnicodeStringToInteger reports invalid radix without overwriting the output");
-
-    check(memory.write_u16_be(unicode_descriptor, 0U),
-          "test fixture makes the counted string empty");
-    state.gpr[3] = unicode_descriptor;
-    state.gpr[4] = 10U;
-    state.gpr[5] = integer_output;
-    state.lr = 0x1297U;
-    const auto empty_string = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_unicode_string_to_integer_ordinal}, state,
-        memory);
-    check(empty_string == KernelDispatchStatus::handled && state.gpr[3] == 0xc000000dU &&
-              state.pc == 0x1294U,
-          "RtlUnicodeStringToInteger rejects an empty counted string");
-
-    check(memory.write_u16_be(unicode_descriptor, 2U) &&
-              memory.write_u16_be(unicode_descriptor + 2U, 2U) &&
-              memory.write_u32_be(unicode_descriptor + 4U, 0x300000U),
-          "test fixture points a valid descriptor at inaccessible guest memory");
-    state.gpr[3] = unicode_descriptor;
-    state.gpr[4] = 10U;
-    state.gpr[5] = integer_output;
-    state.lr = 0x12a7U;
-    state.pc = 0x800150U;
-    const auto inaccessible_string = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_unicode_string_to_integer_ordinal}, state,
-        memory);
-    check(inaccessible_string == KernelDispatchStatus::guest_memory_fault &&
-              state.pc == 0x800150U && state.gpr[3] == unicode_descriptor,
-          "RtlUnicodeStringToInteger propagates inaccessible string memory without returning");
-
-    constexpr std::uint64_t ascii_integer_text = data_page + 0x600U;
-    constexpr std::uint64_t ascii_integer_output = data_page + 0x700U;
-    const auto call_char_to_integer = [&](std::uint64_t string, std::uint32_t base,
-                                          std::uint64_t output, std::uint64_t lr) {
-        state.gpr[3] = string;
-        state.gpr[4] = base;
-        state.gpr[5] = output;
-        state.lr = lr;
-        return KernelDispatcher{}.dispatch(
-            {"xboxkrnl.exe", KernelDispatcher::rtl_char_to_integer_ordinal}, state,
-            memory);
-    };
-    check(write_ascii_c_string(memory, ascii_integer_text, " \t-0x2A!"),
-          "test fixture seeds a NUL-terminated ASCII integer");
-    state.gpr[5] = ascii_integer_output;
-    check(memory.write_u32_be(ascii_integer_output, 0xdeadbeefU),
-          "test fixture seeds the ASCII parser output sentinel");
-    check(call_char_to_integer(ascii_integer_text, 0U, ascii_integer_output, 0x1507U) ==
-                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
-              state.pc == 0x1504U &&
-              memory.read_u32_be(ascii_integer_output, parsed_value) &&
-              parsed_value == 0xffff'ffd6U,
-          "RtlCharToInteger parses whitespace, sign and a base-zero hexadecimal prefix");
-
-    check(write_ascii_c_string(memory, ascii_integer_text, "17tail"),
-          "test fixture replaces the ASCII integer with explicit octal input");
-    check(call_char_to_integer(ascii_integer_text, 8U, ascii_integer_output, 0x1517U) ==
-                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
-              memory.read_u32_be(ascii_integer_output, parsed_value) && parsed_value == 15U,
-          "RtlCharToInteger stops parsing at the first invalid digit or character");
-
-    check(write_ascii_c_string(memory, ascii_integer_text, ""),
-          "test fixture makes the ASCII integer empty");
-    check(call_char_to_integer(ascii_integer_text, 10U, ascii_integer_output, 0x1527U) ==
-                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
-              memory.read_u32_be(ascii_integer_output, parsed_value) && parsed_value == 0U,
-          "RtlCharToInteger returns zero successfully for empty input");
-
-    check(write_ascii_c_string(memory, ascii_integer_text, "not numeric"),
-          "test fixture seeds ASCII input without a numeric prefix");
-    check(memory.write_u32_be(ascii_integer_output, 0xdeadbeefU),
-          "test fixture resets the ASCII parser output sentinel");
-    check(call_char_to_integer(ascii_integer_text, 10U, ascii_integer_output, 0x152fU) ==
-                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
-              memory.read_u32_be(ascii_integer_output, parsed_value) && parsed_value == 0U,
-          "RtlCharToInteger returns zero successfully when the string has no number");
-
-    check(write_ascii_c_string(memory, ascii_integer_text, "42") &&
-              memory.write_u32_be(ascii_integer_output, 0xdeadbeefU),
-          "test fixture seeds ASCII digits and an output sentinel for invalid-base handling");
-    state.gpr[3] = ascii_integer_text;
-    state.gpr[4] = 3U;
-    state.gpr[5] = ascii_integer_output;
-    state.lr = 0x1533U;
-    const auto invalid_ascii_base = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_char_to_integer_ordinal}, state, memory);
-    check(invalid_ascii_base == KernelDispatchStatus::handled &&
-              state.gpr[3] == 0xc000000dU && state.pc == 0x1530U &&
-              memory.read_u32_be(ascii_integer_output, parsed_value) &&
-              parsed_value == 0xdeadbeefU,
-          "RtlCharToInteger rejects unsupported radices without overwriting the output");
-
-    check(memory.write_u8(data_page + 0xfffU, static_cast<std::uint8_t>('5')),
-          "test fixture seeds a non-terminated ASCII string at the mapped-memory boundary");
-    state.pc = 0x800170U;
-    const auto unterminated_ascii = call_char_to_integer(
-        data_page + 0xfffU, 10U, ascii_integer_output, 0x1537U);
-    check(unterminated_ascii == KernelDispatchStatus::guest_memory_fault &&
-              state.pc == 0x800170U && state.gpr[3] == data_page + 0xfffU,
-          "RtlCharToInteger faults explicitly when a NUL-terminated input crosses unmapped memory");
-
-    constexpr std::uint64_t long_text_base = 0x400000U;
-    constexpr std::uint64_t long_text_size = 0x10001U;
-    constexpr std::uint64_t long_text_output = long_text_base + 0x10800U;
-    GuestMemory long_text_memory(17U * static_cast<std::size_t>(GuestMemory::page_size));
-    std::array<project360::memory::GuestPageMapping, 17U> long_text_mappings{};
-    for (std::size_t page = 0U; page < long_text_mappings.size(); ++page) {
-        long_text_mappings[page] = {
-            long_text_base + page * GuestMemory::page_size,
-            page * GuestMemory::page_size,
-            GuestPageAccess::read | GuestPageAccess::write};
-    }
-    check(long_text_memory.map_pages(long_text_mappings) &&
-              long_text_memory.fill(long_text_base, long_text_size, std::byte{'1'}) &&
-              long_text_memory.write_u8(long_text_base + long_text_size, 0U),
-          "test fixture maps and seeds ASCII input beyond the bounded scan length");
-    state.gpr[3] = long_text_base;
-    state.gpr[4] = 10U;
-    state.gpr[5] = long_text_output;
-    state.lr = 0x1547U;
-    state.pc = 0x800180U;
-    const auto overlong_ascii = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_char_to_integer_ordinal}, state,
-        long_text_memory);
-    check(overlong_ascii == KernelDispatchStatus::invalid_guest_argument &&
-              state.pc == 0x800180U && state.gpr[3] == long_text_base,
-          "RtlCharToInteger rejects input beyond the explicit 65,536-byte scan cap");
-
     struct NtStatusMapping {
         std::uint32_t nt_status;
         std::uint32_t win32_error;
@@ -880,132 +622,6 @@ int main() {
     check(unknown_status == KernelDispatchStatus::handled && state.gpr[3] == 317U &&
               state.pc == 0x1314U,
           "RtlNtStatusToDosError returns ERROR_MR_MID_NOT_FOUND for an unmapped status");
-
-    constexpr std::uint64_t integer_string_descriptor = data_page + 0x400U;
-    constexpr std::uint64_t integer_string_buffer = data_page + 0x500U;
-    const auto call_integer_to_unicode = [&](std::uint32_t value, std::uint32_t base,
-                                             std::uint64_t lr) {
-        state.gpr[3] = value;
-        state.gpr[4] = base;
-        state.gpr[5] = integer_string_descriptor;
-        state.lr = lr;
-        return KernelDispatcher{}.dispatch(
-            {"xboxkrnl.exe", KernelDispatcher::rtl_integer_to_unicode_string_ordinal},
-            state, memory);
-    };
-    const auto seed_integer_descriptor = [&](std::uint16_t maximum_length) {
-        return memory.write_u16_be(integer_string_descriptor, 0U) &&
-               memory.write_u16_be(integer_string_descriptor + 2U, maximum_length) &&
-               memory.write_u32_be(integer_string_descriptor + 4U,
-                                   static_cast<std::uint32_t>(integer_string_buffer));
-    };
-    std::uint16_t integer_string_length = 0U;
-    check(seed_integer_descriptor(68U),
-          "test fixture creates a writable 68-byte Unicode output buffer");
-    const std::array<std::uint16_t, 2> uppercase_hex{
-        static_cast<std::uint16_t>('F'), static_cast<std::uint16_t>('F')};
-    check(call_integer_to_unicode(255U, 16U, 0x1407U) ==
-                  KernelDispatchStatus::handled &&
-              state.gpr[3] == 0U && state.pc == 0x1404U &&
-              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
-              integer_string_length == 4U &&
-              unicode_buffer_equals(memory, integer_string_buffer, uppercase_hex),
-          "RtlIntegerToUnicodeString formats uppercase hexadecimal and appends a UTF-16 terminator");
-
-    const std::array<std::uint16_t, 3> binary_five{
-        static_cast<std::uint16_t>('1'), static_cast<std::uint16_t>('0'),
-        static_cast<std::uint16_t>('1')};
-    check(call_integer_to_unicode(5U, 2U, 0x1417U) ==
-                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
-              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
-              integer_string_length == 6U &&
-              unicode_buffer_equals(memory, integer_string_buffer, binary_five),
-          "RtlIntegerToUnicodeString supports binary conversion");
-
-    std::array<std::uint16_t, 32U> binary_word_max{};
-    binary_word_max.fill(static_cast<std::uint16_t>('1'));
-    check(call_integer_to_unicode(0xffff'ffffU, 2U, 0x141fU) ==
-                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
-              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
-              integer_string_length == 64U &&
-              unicode_buffer_equals(memory, integer_string_buffer, binary_word_max),
-          "RtlIntegerToUnicodeString converts ULONG_MAX using its full 32-digit buffer");
-
-    const std::array<std::uint16_t, 3> decimal_255{
-        static_cast<std::uint16_t>('2'), static_cast<std::uint16_t>('5'),
-        static_cast<std::uint16_t>('5')};
-    check(call_integer_to_unicode(255U, 0U, 0x1427U) ==
-                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
-              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
-              integer_string_length == 6U &&
-              unicode_buffer_equals(memory, integer_string_buffer, decimal_255),
-          "RtlIntegerToUnicodeString treats base zero as decimal");
-
-    check(seed_integer_descriptor(4U) &&
-              memory.fill(integer_string_buffer, 6U, std::byte{0x7f}),
-          "test fixture seeds an undersized Unicode output buffer");
-    state.gpr[3] = 255U;
-    state.gpr[4] = 16U;
-    state.gpr[5] = integer_string_descriptor;
-    state.lr = 0x1437U;
-    const auto short_integer_buffer = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_integer_to_unicode_string_ordinal}, state,
-        memory);
-    std::uint8_t untouched_output_byte = 0U;
-    check(short_integer_buffer == KernelDispatchStatus::handled &&
-              state.gpr[3] == 0x80000005U && state.pc == 0x1434U &&
-              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
-              integer_string_length == 4U && memory.read_u8(integer_string_buffer,
-                                                    untouched_output_byte) &&
-              untouched_output_byte == 0x7fU,
-          "RtlIntegerToUnicodeString reports required length without partially writing a short buffer");
-
-    check(memory.write_u16_be(integer_string_descriptor, 2U) &&
-              memory.write_u16_be(integer_string_descriptor + 2U, 8U),
-          "test fixture seeds descriptor values before invalid-base conversion");
-    state.gpr[3] = 42U;
-    state.gpr[4] = 3U;
-    state.gpr[5] = integer_string_descriptor;
-    state.lr = 0x1447U;
-    const auto invalid_integer_base = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_integer_to_unicode_string_ordinal},
-        state, memory);
-    check(invalid_integer_base == KernelDispatchStatus::handled &&
-              state.gpr[3] == 0xc000000dU && state.pc == 0x1444U &&
-              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
-              integer_string_length == 2U,
-          "RtlIntegerToUnicodeString rejects unsupported bases without changing the descriptor");
-
-    check(memory.write_u16_be(integer_string_descriptor, 0U) &&
-              memory.write_u16_be(integer_string_descriptor + 2U, 68U) &&
-              memory.write_u32_be(integer_string_descriptor + 4U, 0x300000U),
-          "test fixture points a sufficiently sized output descriptor at unmapped memory");
-    state.gpr[3] = 255U;
-    state.gpr[4] = 16U;
-    state.gpr[5] = integer_string_descriptor;
-    state.lr = 0x1457U;
-    state.pc = 0x800160U;
-    const auto inaccessible_integer_buffer = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_integer_to_unicode_string_ordinal},
-        state, memory);
-    check(inaccessible_integer_buffer == KernelDispatchStatus::guest_memory_fault &&
-              state.pc == 0x800160U && state.gpr[3] == 255U &&
-              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
-              integer_string_length == 0U,
-          "RtlIntegerToUnicodeString faults on inaccessible output without returning or changing Length");
-
-    state.gpr[3] = data_page;
-    state.gpr[4] = initial.size();
-    state.gpr[5] = 0x1234abU;
-    state.lr = 0x2237U;
-    const auto filled = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_fill_memory_ordinal}, state, memory);
-    std::uint32_t filled_word = 0U;
-    check(filled == KernelDispatchStatus::handled &&
-              memory.read_u32_be(data_page, filled_word) && filled_word == 0xababababU,
-          "xboxkrnl ordinal 284 fills guest memory with the low byte of GPR5");
-    check(state.pc == 0x2234U,
-          "RtlFillMemory returns through LR after filling its destination");
 
     GuestMemory pool_memory(16U * static_cast<std::size_t>(GuestMemory::page_size));
     check(pool_memory.map_page(0x80000000U, 0U,
@@ -1127,7 +743,7 @@ int main() {
     check(filled_ulong == KernelDispatchStatus::handled &&
               memory.read_u32_be(data_page, word) && word == 0x11223344U &&
               state.pc == 0x3234U,
-          "xboxkrnl ordinal 285 repeats the big-endian GPR5 word pattern");
+          "RtlFillMemoryUlong ordinal 294 repeats the big-endian GPR5 word pattern");
     state.gpr[3] = data_page + 1U;
     state.pc = 0x800180U;
     const auto misaligned = KernelDispatcher{}.dispatch(
@@ -1136,42 +752,27 @@ int main() {
               state.pc == 0x800180U,
           "RtlFillMemoryUlong rejects unaligned guest ranges without returning");
 
-    check(memory.load(GuestMemory::page_size - 2U, initial),
-          "test fixture seeds both pages before checking failure atomicity");
-    check(memory.map_page(data_page + GuestMemory::page_size, GuestMemory::page_size,
-                          GuestPageAccess::read),
-          "second destination page is read-only");
-    state.gpr[3] = data_page + GuestMemory::page_size - 2U;
-    state.gpr[4] = 4U;
-    state.gpr[5] = 0x5aU;
+    state.gpr[3] = 0xdeadbeefU;
     state.pc = 0x800200U;
-    const auto fault = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_fill_memory_ordinal}, state, memory);
-    std::uint8_t first_byte = 0;
-    check(fault == KernelDispatchStatus::guest_memory_fault && state.pc == 0x800200U,
-          "memory faults propagate without returning to the guest caller");
-    check(memory.read_u8(data_page + GuestMemory::page_size - 2U, first_byte) &&
-              first_byte == 0xaaU,
-          "failed service does not modify writable bytes before a protected page");
-    check(memory.read_u8(data_page + GuestMemory::page_size - 1U, first_byte) &&
-              first_byte == 0xbbU,
-          "failed RtlFillMemory preserves its entire destination range");
-
-    state.gpr[3] = 0x1'0000'0000ULL;
-    state.gpr[4] = 1U;
-    const auto invalid = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::rtl_zero_memory_ordinal}, state, memory);
-    check(invalid == KernelDispatchStatus::invalid_guest_argument && state.pc == 0x800200U,
-          "out-of-width guest pointers are rejected without changing control flow");
-
-    state.gpr[3] = data_page;
-    state.gpr[4] = 1U;
     const auto unsupported = KernelDispatcher{}.dispatch(
         {"xboxkrnl.exe", 0xffffU}, state, memory);
-    check(unsupported == KernelDispatchStatus::unsupported_export && state.pc == 0x800200U,
+    check(unsupported == KernelDispatchStatus::unsupported_export &&
+              state.gpr[3] == 0xdeadbeefU && state.pc == 0x800200U,
           "unknown kernel ordinals report unsupported and keep CPU state intact");
+    constexpr std::array<std::uint16_t, 7> unverified_historical_ordinals{
+        267U, 280U, 293U, 298U, 307U, 318U, 320U};
+    bool historical_ordinals_rejected = true;
+    for (const auto ordinal : unverified_historical_ordinals) {
+        historical_ordinals_rejected =
+            historical_ordinals_rejected &&
+            KernelDispatcher{}.dispatch({"xboxkrnl.exe", ordinal}, state, memory) ==
+                KernelDispatchStatus::unsupported_export &&
+            state.gpr[3] == 0xdeadbeefU && state.pc == 0x800200U;
+    }
+    check(historical_ordinals_rejected,
+          "historical helper ordinals are rejected instead of calling unrelated exports");
     const auto wrong_library = KernelDispatcher{}.dispatch(
-        {"xam.xex", KernelDispatcher::rtl_zero_memory_ordinal}, state, memory);
+        {"xam.xex", 320U}, state, memory);
     check(wrong_library == KernelDispatchStatus::unsupported_library,
           "an ordinal from another import library is not misrouted to xboxkrnl");
 

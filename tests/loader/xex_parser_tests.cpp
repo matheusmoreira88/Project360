@@ -3,10 +3,12 @@
 #include "cpu/cpu_state.hpp"
 #include "cpu/interpreter.hpp"
 #include "kernel/guest_executor.hpp"
+#include "kernel/kernel_dispatcher.hpp"
 #include "kernel/guest_thread_context.hpp"
 #include "memory/guest_memory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -409,17 +412,17 @@ int main() {
     write_be32(loadable_pe, 0x28cU, 0x48000039U); // bl import thunk at +0x38.
     write_be32(loadable_pe, 0x290U, (14U << 26U) | (10U << 21U) | (3U << 16U));
     write_be32(loadable_pe, 0x294U, 0x48000038U); // b to the integer-parser call sequence.
-    write_be32(loadable_pe, 0x2a0U, 0x0100011cU); // thunk, library 0, ordinal 284
-    write_be32(loadable_pe, 0x2a4U, 0x0100011dU); // thunk, library 0, ordinal 285
-    write_be32(loadable_pe, 0x2a8U, 0x0100010dU); // thunk, library 0, ordinal 269
-    write_be32(loadable_pe, 0x2acU, 0x0100010cU); // thunk, library 0, ordinal 268
-    write_be32(loadable_pe, 0x2b0U, 0x0100012aU); // thunk, library 0, ordinal 298
-    write_be32(loadable_pe, 0x2b4U, 0x01000140U); // thunk, library 0, ordinal 320
-    write_be32(loadable_pe, 0x2b8U, 0x01000121U); // thunk, library 0, ordinal 289
-    write_be32(loadable_pe, 0x2bcU, 0x01000122U); // thunk, library 0, ordinal 290
-    write_be32(loadable_pe, 0x2c0U, 0x01000133U); // thunk, library 0, ordinal 307
-    write_be32(loadable_pe, 0x2c4U, 0x0100013eU); // thunk, library 0, ordinal 318
-    write_be32(loadable_pe, 0x2c8U, 0x01000135U); // thunk, library 0, ordinal 309
+    write_be32(loadable_pe, 0x2a0U, 0x0100011cU); // RtlCompareString, ordinal 284.
+    write_be32(loadable_pe, 0x2a4U, 0x01000126U); // RtlFillMemoryUlong, ordinal 294.
+    write_be32(loadable_pe, 0x2a8U, 0x0100011bU); // RtlCompareMemoryUlong, ordinal 283.
+    write_be32(loadable_pe, 0x2acU, 0x0100011aU); // RtlCompareMemory, ordinal 282.
+    write_be32(loadable_pe, 0x2b0U, 0x0100011eU); // RtlCompareUnicodeString, ordinal 286.
+    write_be32(loadable_pe, 0x2b4U, 0x01000135U); // RtlNtStatusToDosError, ordinal 309.
+    write_be32(loadable_pe, 0x2b8U, 0x0100012cU); // RtlInitAnsiString, ordinal 300.
+    write_be32(loadable_pe, 0x2bcU, 0x0100012dU); // RtlInitUnicodeString, ordinal 301.
+    write_be32(loadable_pe, 0x2c0U, 0x01000124U); // RtlDowncaseUnicodeChar, ordinal 292.
+    write_be32(loadable_pe, 0x2c4U, 0x01000149U); // RtlUpcaseUnicodeChar, ordinal 329.
+    write_be32(loadable_pe, 0x2c8U, 0x01000082U); // KeQueryInterruptTime, ordinal 130.
     write_be32(loadable_pe, 0x2ccU, (14U << 26U) | (3U << 21U) | 0x50b0U);
     write_be32(loadable_pe, 0x2d0U, (14U << 26U) | (4U << 21U));
     write_be32(loadable_pe, 0x2d4U, (14U << 26U) | (5U << 21U) | 0x50b8U);
@@ -431,7 +434,7 @@ int main() {
     write_be32(loadable_pe, 0x2ecU, (14U << 26U) | (5U << 21U) | 0x50d0U);
     write_be32(loadable_pe, 0x2f0U, 0x4800000dU); // bl import thunk at +0x0c.
     write_be32(loadable_pe, 0x2f4U, (14U << 26U) | (12U << 21U) | (3U << 16U));
-    write_be32(loadable_pe, 0x2fcU, 0x01000125U); // thunk, library 0, ordinal 293.
+    write_be32(loadable_pe, 0x2fcU, 0x01000083U); // KeQueryPerformanceFrequency, ordinal 131.
     loadable_pe.resize(0x340U);
     write_le32(loadable_pe, 0x178U + 8U, 0x140U);
     write_le32(loadable_pe, 0x178U + 16U, 0x140U);
@@ -445,7 +448,7 @@ int main() {
     write_be32(loadable_pe, 0x31cU, (14U << 26U) | (5U << 21U));
     write_be32(loadable_pe, 0x320U, 0x48000011U); // bl import thunk at +0x10.
     write_be32(loadable_pe, 0x324U, (14U << 26U) | (7U << 21U) | (3U << 16U));
-    write_be32(loadable_pe, 0x330U, 0x0100010eU); // thunk, library 0, ordinal 270.
+    write_be32(loadable_pe, 0x330U, 0x01000084U); // KeQuerySystemTime, ordinal 132.
     auto loadable_xex = make_xex2();
     write_be32(loadable_xex, 0x444U, 0x830a0U);
     write_be32(loadable_xex, 0x400U, 0x78U);
@@ -518,20 +521,11 @@ int main() {
     check(loaded && loaded.image->xex.import_libraries.size() == 1U &&
               loaded.image->xex.import_libraries[0].import_types.size() == 13U &&
               loaded.image->xex.import_libraries[0].import_types[0] == 1U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[0] == 284U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[1] == 285U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[2] == 269U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[3] == 268U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[4] == 298U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[5] == 320U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[6] == 289U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[7] == 290U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[8] == 307U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[9] == 318U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[10] == 309U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[11] == 293U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[12] == 270U,
-          "loader decodes function-thunk records and Xbox kernel ordinals from PE bytes");
+              loaded.image->xex.import_libraries[0].import_ordinals ==
+                  std::vector<std::optional<std::uint16_t>>{
+                      284U, 294U, 283U, 282U, 286U, 309U, 300U,
+                      301U, 292U, 329U, 130U, 131U, 132U},
+          "loader decodes supported Xbox 360 export ordinals from PE import records");
     if (loaded) {
         auto pool_image = *loaded.image;
         auto& pool_imports = pool_image.xex.import_libraries[0];
@@ -581,159 +575,97 @@ int main() {
     check(guest_memory.map_page(0x5000U, 0x4000U,
                                 project360::memory::GuestPageAccess::read |
                                     project360::memory::GuestPageAccess::write),
-          "integration fixture maps writable guest memory for the kernel import");
-    project360::cpu::CpuState guest_cpu{};
-    guest_cpu.pc = loaded.image ? loaded.image->entry_point : 0U;
+          "integration fixture maps a writable guest page for imported services");
     if (loaded.image) {
         const project360::kernel::GuestExecutor executor(*loaded.image);
-        const auto set_destination = executor.step(guest_cpu, guest_memory);
-        const auto set_length = executor.step(guest_cpu, guest_memory);
-        const auto set_fill = executor.step(guest_cpu, guest_memory);
-        const auto call_import = executor.step(guest_cpu, guest_memory);
-        const auto invoke_import = executor.step(guest_cpu, guest_memory);
-        std::uint32_t filled_word = 0U;
-        const bool fill_visible = guest_memory.read_u32_be(0x5000U, filled_word) &&
-                                  filled_word == 0xababababU;
-        const auto set_pattern = executor.step(guest_cpu, guest_memory);
-        const auto call_ulong_import = executor.step(guest_cpu, guest_memory);
-        const auto invoke_ulong_import = executor.step(guest_cpu, guest_memory);
-        std::uint32_t ulong_pattern_first = 0U;
-        std::uint32_t ulong_pattern_second = 0U;
-        const bool ulong_pattern_visible =
-            guest_memory.read_u32_be(0x5000U, ulong_pattern_first) &&
-            guest_memory.read_u32_be(0x5004U, ulong_pattern_second) &&
-            ulong_pattern_first == 0x00001234U && ulong_pattern_second == 0x00001234U;
-        const auto call_compare_ulong_import = executor.step(guest_cpu, guest_memory);
-        const auto invoke_compare_ulong_import = executor.step(guest_cpu, guest_memory);
-        const auto save_compare_ulong_result = executor.step(guest_cpu, guest_memory);
-        const auto compare_destination = executor.step(guest_cpu, guest_memory);
-        const auto compare_source = executor.step(guest_cpu, guest_memory);
-        const auto compare_length = executor.step(guest_cpu, guest_memory);
-        const auto call_compare_import = executor.step(guest_cpu, guest_memory);
-        const auto invoke_compare_import = executor.step(guest_cpu, guest_memory);
-        const auto save_compare_result = executor.step(guest_cpu, guest_memory);
-        const auto set_move_destination = executor.step(guest_cpu, guest_memory);
-        const auto set_move_source = executor.step(guest_cpu, guest_memory);
-        const auto set_move_length = executor.step(guest_cpu, guest_memory);
-        const auto call_move_import = executor.step(guest_cpu, guest_memory);
-        const auto invoke_move_import = executor.step(guest_cpu, guest_memory);
-        std::uint32_t moved_word = 0U;
-        const bool move_visible = guest_memory.read_u32_be(0x5008U, moved_word) &&
-                                  moved_word == 0x00001234U;
-        const auto set_zero_destination = executor.step(guest_cpu, guest_memory);
-        const auto set_zero_length = executor.step(guest_cpu, guest_memory);
-        const auto call_zero_import = executor.step(guest_cpu, guest_memory);
-        const auto invoke_zero_import = executor.step(guest_cpu, guest_memory);
-        std::uint32_t cleared_word = 1U;
-        std::uint32_t cleared_copy_word = 1U;
-        const auto resume_guest = executor.step(guest_cpu, guest_memory);
-        const auto set_ansi_destination = executor.step(guest_cpu, guest_memory);
-        const auto set_ansi_source = executor.step(guest_cpu, guest_memory);
-        const auto call_ansi_import = executor.step(guest_cpu, guest_memory);
-        const auto invoke_ansi_import = executor.step(guest_cpu, guest_memory);
-        const auto read_ansi_header = executor.step(guest_cpu, guest_memory);
-        const auto read_ansi_buffer = executor.step(guest_cpu, guest_memory);
-        const auto set_unicode_destination = executor.step(guest_cpu, guest_memory);
-        const auto set_unicode_source = executor.step(guest_cpu, guest_memory);
-        const auto call_unicode_import = executor.step(guest_cpu, guest_memory);
-        const auto invoke_unicode_import = executor.step(guest_cpu, guest_memory);
-        const auto read_unicode_header = executor.step(guest_cpu, guest_memory);
-        const auto read_unicode_buffer = executor.step(guest_cpu, guest_memory);
-        const auto compare_ulong_result = guest_cpu.gpr[10];
-        const auto compare_result = guest_cpu.gpr[9];
-        const auto integer_call_run = executor.run(guest_cpu, guest_memory, 16U);
-        const auto integer_to_unicode_run = executor.run(guest_cpu, guest_memory, 6U);
-        project360::cpu::CpuState compare_string_cpu{};
-        compare_string_cpu.pc = 0x83100U;
-        const auto compare_string_run = executor.run(compare_string_cpu, guest_memory, 12U);
-        std::uint32_t parsed_integer = 0U;
-        std::uint16_t output_string_length = 0U;
-        check(set_destination.status == project360::cpu::StepStatus::executed &&
-                  set_length.status == project360::cpu::StepStatus::executed &&
-                  set_fill.status == project360::cpu::StepStatus::executed &&
-                  call_import.status == project360::cpu::StepStatus::executed &&
-                  invoke_import.status == project360::cpu::StepStatus::executed &&
-                  set_pattern.status == project360::cpu::StepStatus::executed &&
-                  call_ulong_import.status == project360::cpu::StepStatus::executed &&
-                  invoke_ulong_import.status == project360::cpu::StepStatus::executed &&
-                  call_compare_ulong_import.status == project360::cpu::StepStatus::executed &&
-                  invoke_compare_ulong_import.status == project360::cpu::StepStatus::executed &&
-                  save_compare_ulong_result.status == project360::cpu::StepStatus::executed &&
-                  compare_destination.status == project360::cpu::StepStatus::executed &&
-                  compare_source.status == project360::cpu::StepStatus::executed &&
-                  compare_length.status == project360::cpu::StepStatus::executed &&
-                  call_compare_import.status == project360::cpu::StepStatus::executed &&
-                  invoke_compare_import.status == project360::cpu::StepStatus::executed &&
-                  save_compare_result.status == project360::cpu::StepStatus::executed &&
-                  set_move_destination.status == project360::cpu::StepStatus::executed &&
-                  set_move_source.status == project360::cpu::StepStatus::executed &&
-                  set_move_length.status == project360::cpu::StepStatus::executed &&
-                  call_move_import.status == project360::cpu::StepStatus::executed &&
-                  invoke_move_import.status == project360::cpu::StepStatus::executed &&
-                  set_zero_destination.status == project360::cpu::StepStatus::executed &&
-                  set_zero_length.status == project360::cpu::StepStatus::executed &&
-                  call_zero_import.status == project360::cpu::StepStatus::executed &&
-                  invoke_zero_import.status == project360::cpu::StepStatus::executed &&
-                  resume_guest.status == project360::cpu::StepStatus::executed &&
-                  set_ansi_destination.status == project360::cpu::StepStatus::executed &&
-                  set_ansi_source.status == project360::cpu::StepStatus::executed &&
-                  call_ansi_import.status == project360::cpu::StepStatus::executed &&
-                  invoke_ansi_import.status == project360::cpu::StepStatus::executed &&
-                  read_ansi_header.status == project360::cpu::StepStatus::executed &&
-                  read_ansi_buffer.status == project360::cpu::StepStatus::executed &&
-                  set_unicode_destination.status == project360::cpu::StepStatus::executed &&
-                  set_unicode_source.status == project360::cpu::StepStatus::executed &&
-                  call_unicode_import.status == project360::cpu::StepStatus::executed &&
-                  invoke_unicode_import.status == project360::cpu::StepStatus::executed &&
-                  read_unicode_header.status == project360::cpu::StepStatus::executed &&
-                  read_unicode_buffer.status == project360::cpu::StepStatus::executed &&
-                  integer_call_run.instructions_executed == 16U &&
-                  integer_call_run.stop.status ==
-                      project360::cpu::StepStatus::instruction_limit_reached &&
-                  integer_to_unicode_run.instructions_executed == 6U &&
-                  integer_to_unicode_run.stop.status ==
-                      project360::cpu::StepStatus::instruction_limit_reached,
-              "loaded XEX program calls twelve imported kernel routines and resumes");
-        check(compare_string_run.instructions_executed == 12U &&
-                  compare_string_run.stop.status ==
-                      project360::cpu::StepStatus::instruction_limit_reached &&
-                  compare_string_cpu.pc == 0x83128U && compare_string_cpu.gpr[6] == 0U &&
-                  compare_string_cpu.gpr[7] == std::numeric_limits<std::uint64_t>::max(),
-              "synthetic XEX calls RtlCompareString through its import thunk in both ASCII case modes");
-        check(fill_visible,
-              "XEX RtlFillMemory thunk fills guest bytes using the Xenon argument registers");
-        check(ulong_pattern_visible,
-              "XEX RtlFillMemoryUlong thunk repeats the GPR5 word in big-endian guest memory");
-        check(compare_ulong_result == 8U,
-              "XEX RtlCompareMemoryUlong thunk returns the matching byte count in GPR3");
-        check(compare_result == 4U,
-              "XEX RtlCompareMemory thunk returns its matching byte count in GPR3");
-        check(move_visible,
-              "XEX RtlMoveMemory thunk copies the source bytes into guest destination memory");
-        std::uint32_t ansi_header = 0U;
-        std::uint32_t ansi_buffer = 0U;
-        check(guest_memory.read_u32_be(0x5080U, ansi_header) &&
-                  ansi_header == 0x00040005U &&
-                  guest_memory.read_u32_be(0x5084U, ansi_buffer) && ansi_buffer == 0x5040U,
-              "XEX RtlInitAnsiString thunk writes a big-endian header and source pointer");
-        check(guest_cpu.gpr[7] == 0x00040006U && guest_cpu.gpr[8] == 0x5060U,
-              "XEX RtlInitUnicodeString thunk writes byte lengths and source pointer");
-        check(guest_cpu.gpr[3] == 0U && guest_cpu.gpr[11] == 0U &&
-                  guest_cpu.gpr[12] == 0U && guest_cpu.pc == 0x830f8U &&
-                  guest_memory.read_u32_be(0x50b8U, parsed_integer) && parsed_integer == 42U,
-              "XEX integer conversion shims return through LR and guest code resumes");
-        std::uint16_t upper_two = 0U;
-        std::uint16_t upper_a = 0U;
-        check(guest_memory.read_u16_be(0x50d0U, output_string_length) &&
-                  output_string_length == 4U &&
-                  guest_memory.read_u16_be(0x50e0U, upper_two) && upper_two == '2' &&
-                  guest_memory.read_u16_be(0x50e2U, upper_a) && upper_a == 'A',
-              "XEX RtlIntegerToUnicodeString thunk formats uppercase UTF-16 hexadecimal");
-        check(guest_memory.read_u32_be(0x5000U, cleared_word) && cleared_word == 0U &&
-                  guest_memory.read_u32_be(0x5008U, cleared_copy_word) &&
-                  cleared_copy_word == 0U && guest_cpu.gpr[6] == 9U &&
-                  guest_cpu.pc == 0x830f8U,
-              "XEX RtlZeroMemory thunk clears bytes and returns through the caller LR");
+        const auto& import_records = loaded.image->xex.import_libraries[0]
+                                         .import_record_addresses;
+        struct ImportCallResult {
+            project360::cpu::StepResult step;
+            project360::cpu::CpuState state;
+        };
+        const auto invoke_import = [&](std::size_t index,
+                                       const std::array<std::uint64_t, 3>& arguments,
+                                       project360::cpu::CpuState& guest_state) {
+            guest_state = {};
+            guest_state.pc = import_records[index];
+            guest_state.lr = 0x90001004U;
+            guest_state.gpr[3] = arguments[0];
+            guest_state.gpr[4] = arguments[1];
+            guest_state.gpr[5] = arguments[2];
+            const auto step = executor.step(guest_state, guest_memory);
+            return ImportCallResult{step, guest_state};
+        };
+        project360::cpu::CpuState imported_state{};
+        const auto fill_ulong = invoke_import(1U, {0x5000U, 4U, 0x11223344U},
+                                              imported_state);
+        std::uint32_t imported_word = 0U;
+        const auto compare_ulong = invoke_import(2U, {0x5000U, 4U, 0x11223344U},
+                                                 imported_state);
+        const auto compare_memory = invoke_import(3U, {0x5000U, 0x5000U, 4U},
+                                                  imported_state);
+        const auto compare_string = invoke_import(0U, {0x5140U, 0x5150U, 1U},
+                                                  imported_state);
+        const auto compare_unicode = invoke_import(4U, {0x50b0U, 0x50b0U, 0U},
+                                                   imported_state);
+        const auto translate_status = invoke_import(5U, {0xc0000005U, 0U, 0U},
+                                                    imported_state);
+        const auto init_ansi = invoke_import(6U, {0x5080U, 0x5040U, 0U},
+                                             imported_state);
+        std::uint32_t ansi_descriptor = 0U;
+        const auto init_unicode = invoke_import(7U, {0x50a0U, 0x5060U, 0U},
+                                                imported_state);
+        std::uint32_t unicode_descriptor = 0U;
+        const auto downcase = invoke_import(8U, {0x00c9U, 0U, 0U}, imported_state);
+        const auto upcase = invoke_import(9U, {0x00e9U, 0U, 0U}, imported_state);
+        const auto interrupt_time = invoke_import(10U, {0U, 0U, 0U}, imported_state);
+        const auto performance_frequency = invoke_import(11U, {0U, 0U, 0U},
+                                                         imported_state);
+        const auto system_time = invoke_import(12U, {0x50f0U, 0U, 0U}, imported_state);
+        std::uint64_t guest_system_time = 0U;
+        check(fill_ulong.step.status == project360::cpu::StepStatus::executed &&
+                  guest_memory.read_u32_be(0x5000U, imported_word) &&
+                  imported_word == 0x11223344U,
+              "XEX RtlFillMemoryUlong thunk writes the big-endian word pattern");
+        check(compare_ulong.step.status == project360::cpu::StepStatus::executed &&
+                  compare_ulong.state.gpr[3] == 4U,
+              "XEX RtlCompareMemoryUlong thunk returns its matching byte count");
+        check(compare_memory.step.status == project360::cpu::StepStatus::executed &&
+                  compare_memory.state.gpr[3] == 4U,
+              "XEX RtlCompareMemory thunk returns its matching byte count");
+        check(compare_string.step.status == project360::cpu::StepStatus::executed &&
+                  compare_string.state.gpr[3] == 0U,
+              "XEX RtlCompareString thunk handles ASCII case-insensitive equality");
+        check(compare_unicode.step.status == project360::cpu::StepStatus::executed &&
+                  compare_unicode.state.gpr[3] == 0U,
+              "XEX RtlCompareUnicodeString thunk handles a valid counted UTF-16 descriptor");
+        check(translate_status.step.status == project360::cpu::StepStatus::executed &&
+                  translate_status.state.gpr[3] == 998U,
+              "XEX RtlNtStatusToDosError thunk translates a supported access status");
+        check(init_ansi.step.status == project360::cpu::StepStatus::executed &&
+                  guest_memory.read_u32_be(0x5080U, ansi_descriptor) &&
+                  ansi_descriptor == 0x00040005U,
+              "XEX RtlInitAnsiString thunk writes the counted-string header");
+        check(init_unicode.step.status == project360::cpu::StepStatus::executed &&
+                  guest_memory.read_u32_be(0x50a0U, unicode_descriptor) &&
+                  unicode_descriptor == 0x00040006U,
+              "XEX RtlInitUnicodeString thunk writes byte lengths");
+        check(downcase.step.status == project360::cpu::StepStatus::executed &&
+                  downcase.state.gpr[3] == 0x00e9U,
+              "XEX RtlDowncaseUnicodeChar thunk maps a supported Latin-1 character");
+        check(upcase.step.status == project360::cpu::StepStatus::executed &&
+                  upcase.state.gpr[3] == 0x00c9U,
+              "XEX RtlUpcaseUnicodeChar thunk maps a supported Latin-1 character");
+        check(interrupt_time.step.status == project360::cpu::StepStatus::executed,
+              "XEX KeQueryInterruptTime thunk returns through its import record");
+        check(performance_frequency.step.status == project360::cpu::StepStatus::executed &&
+                  performance_frequency.state.gpr[3] ==
+                      project360::kernel::KernelDispatcher::xbox_360_performance_frequency,
+              "XEX KeQueryPerformanceFrequency thunk returns the modeled counter rate");
+        check(system_time.step.status == project360::cpu::StepStatus::executed &&
+                  guest_memory.read_u64_be(0x50f0U, guest_system_time) &&
+                  guest_system_time != 0U,
+              "XEX KeQuerySystemTime thunk writes a guest big-endian timestamp");
 
         project360::cpu::CpuState bounded_cpu{};
         bounded_cpu.pc = loaded.image->entry_point;
@@ -743,20 +675,6 @@ int main() {
                       project360::cpu::StepStatus::instruction_limit_reached &&
                   bounded_cpu.pc == loaded.image->entry_point,
               "zero XEX instruction budget stops without changing guest state");
-        const auto bounded_run = executor.run(bounded_cpu, guest_memory, 39U);
-        check(bounded_run.instructions_executed == 39U &&
-              bounded_run.stop.status ==
-                      project360::cpu::StepStatus::instruction_limit_reached &&
-                  bounded_cpu.pc == 0x8307cU && bounded_cpu.gpr[7] == 0x00040006U &&
-                  bounded_cpu.gpr[8] == 0x5060U,
-              "bounded XEX execution calls the string initializers and stops at its instruction budget");
-        const auto byte_swap_run = executor.run(bounded_cpu, guest_memory, 8U);
-        check(byte_swap_run.instructions_executed == 8U &&
-                  byte_swap_run.stop.status ==
-                      project360::cpu::StepStatus::instruction_limit_reached &&
-                  bounded_cpu.gpr[9] == 0x34120000U && bounded_cpu.gpr[10] == 0x3412U,
-              "bounded XEX execution calls both byte-swap imports and verifies their return values");
-
         project360::cpu::CpuState faulting_cpu{};
         faulting_cpu.pc = 0x830f8U;
         const auto faulting_run = executor.run(faulting_cpu, guest_memory, 2U);
@@ -835,7 +753,7 @@ int main() {
               compressed_entry_instruction == ((14U << 26U) | (3U << 21U) | 0x5000U),
           "basic-compressed XEX blocks reconstruct and map a valid PE memory image");
     check(compressed_result &&
-              compressed_result.image->xex.import_libraries[0].import_ordinals.back() == 270U,
+              compressed_result.image->xex.import_libraries[0].import_ordinals.back() == 132U,
           "basic-compressed XEX import thunks are decoded from guest image addresses");
 
     auto thread_xex = loadable_xex;
