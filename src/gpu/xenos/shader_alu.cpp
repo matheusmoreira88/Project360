@@ -15,6 +15,12 @@ float multiply_xenos_legacy(float lhs, float rhs) noexcept {
     return lhs * rhs;
 }
 
+float select_xenos_operand(float lhs, float rhs, bool select_lhs) noexcept {
+    const auto lhs_bits = std::bit_cast<std::uint32_t>(lhs);
+    const auto rhs_bits = std::bit_cast<std::uint32_t>(rhs);
+    return std::bit_cast<float>(select_lhs ? lhs_bits : rhs_bits);
+}
+
 } // namespace
 
 ShaderAluInstruction decode_shader_alu_instruction(
@@ -159,9 +165,17 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
     if (instruction.vector_clamp) {
         return {{}, "Clamped Xenos vector ALU results are not implemented"};
     }
-    if (instruction.vector_opcode > 7U || instruction.vector_opcode == 2U ||
-        instruction.vector_opcode == 3U) {
+    if (instruction.vector_opcode > 7U) {
         return {{}, "Unsupported Xenos vector ALU opcode"};
+    }
+
+    if (instruction.vector_opcode == 2U || instruction.vector_opcode == 3U) {
+        for (std::size_t lane = 0; lane < 4U; ++lane) {
+            if ((instruction.vector_write_mask & (1U << lane)) != 0U &&
+                (std::isnan(source_1[lane]) || std::isnan(source_2[lane]))) {
+                return {{}, "Unordered Xenos MAX/MIN operands are not validated"};
+            }
+        }
     }
 
     ShaderVectorAluResult result{previous_destination, {}};
@@ -175,6 +189,14 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
             break;
         case 1U:
             result.destination[lane] = multiply_xenos_legacy(source_1[lane], source_2[lane]);
+            break;
+        case 2U:
+            result.destination[lane] = select_xenos_operand(source_1[lane], source_2[lane],
+                                                            source_1[lane] >= source_2[lane]);
+            break;
+        case 3U:
+            result.destination[lane] = select_xenos_operand(source_1[lane], source_2[lane],
+                                                            source_1[lane] < source_2[lane]);
             break;
         case 4U:
             result.destination[lane] = source_1[lane] == source_2[lane] ? 1.0F : 0.0F;
@@ -230,7 +252,7 @@ ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     if (instruction.vector_clamp || instruction.scalar_clamp) {
         return {{}, 0.0F, "Clamped Xenos ALU results are not implemented"};
     }
-    if (instruction.vector_opcode > 1U ||
+    if (instruction.vector_opcode > 7U ||
         (instruction.scalar_opcode != 0U && instruction.scalar_opcode != 2U)) {
         return {{}, 0.0F, "Unsupported Xenos vector/scalar ALU opcode pair"};
     }

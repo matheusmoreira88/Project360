@@ -126,7 +126,7 @@ void test_shader_vector_alu_reference_subset() {
           "Xenos vector MUL evaluates all four lanes from decoded opcode fields");
 
     auto unsupported = add;
-    unsupported.vector_opcode = 2U;
+    unsupported.vector_opcode = 8U;
     const auto unsupported_result = evaluate_shader_vector_alu(
         unsupported, source_1, source_2, previous);
     auto predicated = add;
@@ -161,17 +161,35 @@ void test_shader_vector_alu_comparisons() {
               not_equal && not_equal.destination == std::array<float, 4>{0.0F, 1.0F, 1.0F, 1.0F},
           "Xenos SEQ/SGT/SGE/SNE return per-lane booleans with IEEE unordered comparisons");
 
-    const auto unsupported = decode_shader_alu_instruction(
-        {0x00050000U, 0U, 0x02000000U});
-    const auto rejected = evaluate_shader_vector_alu(unsupported, source_1, source_2, previous);
-    check(!rejected && rejected.destination == std::array<float, 4>{},
-          "Xenos vector MAX remains unsupported rather than using unverified NaN behavior");
+    const std::array<float, 4> ordered_left{-2.0F, 4.0F, -0.0F,
+                                            std::numeric_limits<float>::infinity()};
+    const std::array<float, 4> ordered_right{-3.0F, -1.0F, 0.0F, 10.0F};
+    const auto maximum =
+        evaluate_shader_vector_alu(decode_shader_alu_instruction({0x000f0000U, 0U, 0x02000000U}),
+                                   ordered_left, ordered_right, previous);
+    const auto minimum =
+        evaluate_shader_vector_alu(decode_shader_alu_instruction({0x000f0000U, 0U, 0x03000000U}),
+                                   ordered_left, ordered_right, previous);
+    check(maximum && maximum.destination[0] == -2.0F && maximum.destination[1] == 4.0F &&
+              std::isinf(maximum.destination[3]) && minimum &&
+              minimum.destination == std::array<float, 4>{-3.0F, -1.0F, 0.0F, 10.0F},
+          "Xenos MAX/MIN use documented per-lane compare-select rules for finite values and "
+          "infinities");
+    check(std::signbit(maximum.destination[2]) && !std::signbit(minimum.destination[2]),
+          "Xenos MAX/MIN preserve the source selected by their signed-zero tie rules");
+
+    auto unordered_right = ordered_right;
+    unordered_right[1] = std::numeric_limits<float>::quiet_NaN();
+    const auto unordered =
+        evaluate_shader_vector_alu(decode_shader_alu_instruction({0x000f0000U, 0U, 0x02000000U}),
+                                   ordered_left, unordered_right, previous);
+    check(!unordered && unordered.destination == std::array<float, 4>{},
+          "Xenos MAX/MIN reject unordered operands until Xenos NaN behavior is verified");
 }
 
 void test_shader_vector_alu_legacy_multiplication() {
     using namespace project360::gpu::xenos;
-    const auto instruction = decode_shader_alu_instruction(
-        {0x000f0000U, 0U, 0x01000000U});
+    const auto instruction = decode_shader_alu_instruction({0x000f0000U, 0U, 0x01000000U});
     const std::array<float, 4> source_1{
         0.0F, -0.0F, std::numeric_limits<float>::denorm_min(), 2.0F};
     const std::array<float, 4> source_2{
@@ -327,6 +345,25 @@ void test_shader_alu_add_mul_pair_execution() {
               multiplied.previous_scalar == 40.0F,
           "Xenos vector MUL and scalar MULS merge disjoint masks on the same destination");
 
+    const auto maximum_pair = encode_pair(2U, 0U, 4U, 5U, 0x0fU, 0x0fU);
+    const auto maximized = execute_shader_alu_add_mul_pair(maximum_pair, registers);
+    check(maximized && maximized.registers[4] == std::array<float, 4>{10.0F, 20.0F, 30.0F, 40.0F} &&
+              maximized.previous_scalar == 13.0F,
+          "Xenos ALU pair executes vector MAX alongside scalar ADDS");
+
+    const auto compare_pair = encode_pair(7U, 0U, 4U, 5U, 0x0fU, 0x0fU);
+    const auto compared = execute_shader_alu_add_mul_pair(compare_pair, registers);
+    check(compared && compared.registers[4] == std::array<float, 4>{1.0F, 1.0F, 1.0F, 1.0F},
+          "Xenos ALU pair executes vector SNE comparisons alongside scalar ADDS");
+
+    auto unordered_registers = registers;
+    unordered_registers[2][1] = std::numeric_limits<float>::quiet_NaN();
+    const auto unordered_pair = encode_pair(3U, 0U, 4U, 5U, 0x0fU, 0x0fU);
+    const auto unordered_result =
+        execute_shader_alu_add_mul_pair(unordered_pair, unordered_registers);
+    check(!unordered_result && unordered_result.registers == ShaderAluTemporaryRegisterBank{},
+          "Xenos ALU pair rejects unverified MAX/MIN NaN behavior without partial writes");
+
     auto special_registers = registers;
     special_registers[3] = {std::numeric_limits<float>::infinity(), 6.0F, 7.0F,
                             std::numeric_limits<float>::denorm_min()};
@@ -401,7 +438,7 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
           "Xenos EXEC sequence runs ALU, VFETCH and dependent ALU operations in order");
 
     auto invalid_ucode = ucode;
-    invalid_ucode[2][2] |= 2U << 24U;
+    invalid_ucode[2][2] = (invalid_ucode[2][2] & ~(0x1fU << 24U)) | (8U << 24U);
     const auto rejected = execute_shader_exec_block(
         exec, invalid_ucode, fetch_constants, memory, initial_registers, {}, float_constants);
     const auto out_of_range = execute_shader_exec_block(
