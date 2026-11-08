@@ -924,6 +924,60 @@ void test_floating_point_load_store_transfers() {
               fault_state.pc == 0 && fault.fault_info &&
               fault.fault_info->kind == cpu::FaultKind::data_alignment,
           "misaligned lfd reports a data-alignment fault without changing FPR or PC");
+
+    memory::GuestMemory indexed_mem(512);
+    check(indexed_mem.write_u32_be(0x120U, 0x40200000U) &&
+              indexed_mem.write_u64_be(0x128U, std::bit_cast<std::uint64_t>(6.5)),
+          "seed indexed floating-point transfer values");
+    put_word(indexed_mem, 0, indexed_memory(1, 1, 2, 535)); // lfsx f1,r1,r2
+    put_word(indexed_mem, 4, indexed_memory(1, 1, 3, 663)); // stfsx f1,r1,r3
+    put_word(indexed_mem, 8, indexed_memory(2, 1, 4, 599)); // lfdx f2,r1,r4
+    put_word(indexed_mem, 12, indexed_memory(2, 1, 5, 727)); // stfdx f2,r1,r5
+    put_word(indexed_mem, 16, indexed_memory(6, 1, 2, 567)); // lfsux f6,r1,r2
+    put_word(indexed_mem, 20, indexed_memory(6, 1, 6, 695)); // stfsux f6,r1,r6
+    cpu::CpuState indexed_state{};
+    indexed_state.gpr[1] = 0x100U;
+    indexed_state.gpr[2] = 0x20U;
+    indexed_state.gpr[3] = 0x24U;
+    indexed_state.gpr[4] = 0x28U;
+    indexed_state.gpr[5] = 0x30U;
+    indexed_state.gpr[6] = 4U;
+    const auto indexed_result = cpu::Interpreter{}.run(indexed_state, indexed_mem, 6);
+    std::uint32_t indexed_single = 0;
+    std::uint64_t indexed_double = 0;
+    check(indexed_result.status == cpu::StepStatus::instruction_limit_reached &&
+              indexed_state.fpr[1] == std::bit_cast<std::uint64_t>(2.5) &&
+              indexed_state.fpr[2] == std::bit_cast<std::uint64_t>(6.5) &&
+              indexed_state.fpr[6] == std::bit_cast<std::uint64_t>(2.5) &&
+              indexed_state.gpr[1] == 0x124U,
+          "indexed FPR loads and update-load address semantics execute correctly");
+    check(indexed_mem.read_u32_be(0x124U, indexed_single) && indexed_single == 0x40200000U &&
+              indexed_mem.read_u64_be(0x130U, indexed_double) &&
+              indexed_double == std::bit_cast<std::uint64_t>(6.5),
+          "indexed single/double stores preserve converted values and big-endian layout");
+
+    memory::GuestMemory indexed_double_update_mem(512);
+    (void)indexed_double_update_mem.write_u64_be(0x128U,
+                                                  std::bit_cast<std::uint64_t>(6.5));
+    put_word(indexed_double_update_mem, 0, indexed_memory(3, 1, 2, 631)); // lfdux f3,r1,r2
+    put_word(indexed_double_update_mem, 4, indexed_memory(3, 1, 4, 759)); // stfdux f3,r1,r4
+    cpu::CpuState indexed_double_update_state{};
+    indexed_double_update_state.gpr[1] = 0x100U;
+    indexed_double_update_state.gpr[2] = 0x28U;
+    indexed_double_update_state.gpr[4] = 8U;
+    const auto indexed_double_update_result =
+        cpu::Interpreter{}.run(indexed_double_update_state, indexed_double_update_mem, 2);
+    check(indexed_double_update_result.status == cpu::StepStatus::instruction_limit_reached &&
+              indexed_double_update_state.fpr[3] == std::bit_cast<std::uint64_t>(6.5) &&
+              indexed_double_update_state.gpr[1] == 0x130U &&
+              indexed_double_update_mem.read_u64_be(0x130U, indexed_double) &&
+              indexed_double == std::bit_cast<std::uint64_t>(6.5),
+          "lfdux and stfdux update the base after successful doubleword transfers");
+
+    check(!cpu::decode(indexed_memory(1, 0, 2, 567)) &&
+              cpu::decode(indexed_memory(1, 1, 2, 567)) &&
+              !cpu::decode(indexed_memory(1, 1, 2, 567, true)),
+          "indexed floating update validates RA and the reserved record bit");
 }
 
 void test_indexed_memory_instructions() {

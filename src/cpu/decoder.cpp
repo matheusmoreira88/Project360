@@ -288,6 +288,8 @@ DecodeResult decode(std::uint32_t word) {
             xo10 == 23U || xo10 == 55U || xo10 == 87U || xo10 == 119U ||
             xo10 == 279U || xo10 == 331U || xo10 == 343U || xo10 == 375U ||
             xo10 == 151U || xo10 == 183U || xo10 == 215U || xo10 == 247U ||
+            xo10 == 535U || xo10 == 567U || xo10 == 599U || xo10 == 631U ||
+            xo10 == 663U || xo10 == 695U || xo10 == 727U || xo10 == 759U ||
             xo10 == 407U || xo10 == 439U || xo10 == 534U || xo10 == 662U ||
             xo10 == 790U || xo10 == 918U) {
             if ((word & 1U) != 0U) return {{}, "indexed load/store record bit is reserved"};
@@ -305,17 +307,24 @@ DecodeResult decode(std::uint32_t word) {
             case 662: ins.opcode = Opcode::stwbrx; break;
             case 790: ins.opcode = Opcode::lhbrx; break;
             case 918: ins.opcode = Opcode::sthbrx; break;
+            case 535: case 567: ins.opcode = Opcode::lfs; break;
+            case 599: case 631: ins.opcode = Opcode::lfd; break;
+            case 663: case 695: ins.opcode = Opcode::stfs; break;
+            case 727: case 759: ins.opcode = Opcode::stfd; break;
             default: break;
             }
             ins.indexed = true;
             ins.update = xo10 == 53U || xo10 == 55U || xo10 == 119U || xo10 == 331U ||
                          xo10 == 375U || xo10 == 181U || xo10 == 183U || xo10 == 247U ||
-                         xo10 == 439U;
+                         xo10 == 439U || xo10 == 567U || xo10 == 631U || xo10 == 695U ||
+                         xo10 == 759U;
             if (ins.update && ins.ra == 0U) return {{}, "indexed update requires RA != 0"};
             const bool is_load = ins.opcode == Opcode::ld || ins.opcode == Opcode::lbz ||
                                  ins.opcode == Opcode::lhz || ins.opcode == Opcode::lha ||
-                                 ins.opcode == Opcode::lwz;
-            if (ins.update && is_load && ins.rt == ins.ra) {
+                                 ins.opcode == Opcode::lwz || ins.opcode == Opcode::lfs ||
+                                 ins.opcode == Opcode::lfd;
+            if (ins.update && is_load && ins.opcode != Opcode::lfs &&
+                ins.opcode != Opcode::lfd && ins.rt == ins.ra) {
                 return {{}, "indexed update load requires RT != RA"};
             }
             return {ins, {}};

@@ -6,7 +6,7 @@ The first build has three small layers:
 - `cpu::decode` converts a 32-bit PowerPC instruction word into a typed operation or an explicit diagnostic.
 - `cpu::Interpreter` executes one instruction or a bounded sequence against `CpuState` and guest memory. Current compare instructions update the selected CR field; conditional branches use CR bits and CTR according to their BO/BI fields. Unsupported or reserved forms return a fault instead of silently succeeding.
 
-`CpuState` includes 32 FPR bit containers. The implemented scalar transfer subset is `lfs`, `lfd`, `stfs`, and `stfd` in D form, including update variants. `lfs` widens an IEEE binary32 value into the binary64 FPR representation; `stfs` converts back to binary32. Floating arithmetic, FPSCR status/rounding control, denormal/NaN exception behavior and VMX128 are not implemented, so these transfers alone do not support floating-point programs generally.
+`CpuState` includes 32 FPR bit containers. The implemented scalar transfer subset is `lfs`, `lfd`, `stfs`, and `stfd` in D and indexed forms, including update variants. `lfs` widens an IEEE binary32 value into the binary64 FPR representation; `stfs` converts back to binary32. Floating arithmetic, FPSCR status/rounding control, denormal/NaN exception behavior and VMX128 are not implemented, so these transfers alone do not support floating-point programs generally. Opcode assignments were checked against IBM's [PowerPC instruction reference](https://www.ibm.com/docs/en/aix/7.1.0?topic=reference-appendix-f-powerpc-instructions).
 
 ## Memory mapping prototype
 
