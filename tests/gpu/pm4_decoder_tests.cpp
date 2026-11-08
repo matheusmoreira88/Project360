@@ -215,6 +215,42 @@ void test_type3_constant_uploads() {
           "unsupported SET_CONSTANT bank rejects prior writes transactionally");
 }
 
+void test_unimplemented_commands_fail_explicitly() {
+    using namespace project360::gpu::xenos;
+    std::vector<std::uint8_t> draw_stream;
+    append_u32_be(draw_stream, 4U);
+    append_u32_be(draw_stream, 0x12345678U);
+    append_u32_be(draw_stream, 0xc0000000U | (0x22U << 8U)); // DRAW_INDX.
+    const auto draw_decoded = decode_pm4(draw_stream);
+    std::vector<std::uint32_t> draw_registers(8U, 0xccccccccU);
+    const auto draw_result = apply_register_packets(draw_decoded.packets, draw_stream,
+                                                   draw_registers);
+    check(!draw_result && draw_registers[4U] == 0xccccccccU,
+          "unimplemented draw command is reported without committing preceding writes");
+
+    std::vector<std::uint8_t> predicated_stream;
+    append_u32_be(predicated_stream, 0xc0000000U | (1U << 16U) |
+                                       (0x2dU << 8U) | 1U);
+    append_u32_be(predicated_stream, 0U);
+    append_u32_be(predicated_stream, 0xabcdef01U);
+    const auto predicated_decoded = decode_pm4(predicated_stream);
+    std::vector<std::uint32_t> predicated_registers(0x5000U, 0xccccccccU);
+    const auto predicated_result = apply_register_packets(
+        predicated_decoded.packets, predicated_stream, predicated_registers);
+    check(!predicated_result && predicated_registers[0x4000U] == 0xccccccccU,
+          "predicated constant upload fails until bin-selection state is modeled");
+
+    std::vector<std::uint8_t> complete_stream;
+    append_u32_be(complete_stream, 0x80000000U);
+    const auto complete_decoded = decode_pm4(complete_stream);
+    std::vector<std::uint32_t> complete_registers(1U, 0U);
+    const auto incomplete_list_result = apply_register_packets(
+        std::span<const Packet>(complete_decoded.packets.data(), 0U), complete_stream,
+        complete_registers);
+    check(!incomplete_list_result,
+          "register application rejects a packet list that omits stream contents");
+}
+
 } // namespace
 
 int main() {
@@ -222,6 +258,7 @@ int main() {
     test_noops_and_malformed_streams();
     test_register_packet_application();
     test_type3_constant_uploads();
+    test_unimplemented_commands_fail_explicitly();
     if (failures != 0) {
         std::cerr << failures << " GPU packet test(s) failed\n";
         return 1;

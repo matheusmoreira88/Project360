@@ -30,8 +30,13 @@ RegisterApplyResult apply_register_packets(std::span<const Packet> packets,
     if ((stream.size() % 4U) != 0U) return failure("PM4 stream has a partial dword", 0U);
     const auto total_words = stream.size() / 4U;
     std::vector<RegisterWrite> writes;
+    std::size_t next_packet_word = 0U;
 
     for (const auto& packet : packets) {
+        if (packet.header_word_offset != next_packet_word) {
+            return failure("PM4 packet list does not cover the stream in order",
+                           packet.header_word_offset);
+        }
         if (packet.header_word_offset >= total_words) {
             return failure("PM4 packet header is outside the stream", packet.header_word_offset);
         }
@@ -70,6 +75,7 @@ RegisterApplyResult apply_register_packets(std::span<const Packet> packets,
             return failure("PM4 register packet payload is outside the stream",
                            packet.header_word_offset);
         }
+        next_packet_word = packet.payload_word_offset + packet.payload_word_count;
 
         if (packet.type == PacketType::type0_registers) {
             if (packet.register_index != (packet.header & 0x7fffU) ||
@@ -104,6 +110,10 @@ RegisterApplyResult apply_register_packets(std::span<const Packet> packets,
         } else if (packet.type == PacketType::type3_command &&
                    (packet.opcode == 0x2dU || packet.opcode == 0x55U ||
                     packet.opcode == 0x56U)) {
+            if (packet.predicated) {
+                return failure("Predicated PM4 commands require bin-selection state",
+                               packet.header_word_offset);
+            }
             if (packet.payload_word_count == 0U) {
                 return failure("PM4 constant packet is missing its offset dword",
                                packet.header_word_offset);
@@ -127,6 +137,12 @@ RegisterApplyResult apply_register_packets(std::span<const Packet> packets,
             }
             write_count = packet.payload_word_count - 1U;
             payload_values_offset += 1U;
+        } else if (packet.type == PacketType::type3_command && packet.opcode == 0x10U) {
+            // PM4_NOP carries optional payload words used as padding or comments.
+            continue;
+        } else if (packet.type == PacketType::type3_command) {
+            return failure("PM4 type-3 opcode is not implemented by register application",
+                           packet.header_word_offset);
         } else {
             continue;
         }
@@ -146,6 +162,10 @@ RegisterApplyResult apply_register_packets(std::span<const Packet> packets,
             const auto stream_offset = (payload_values_offset + i) * 4U;
             writes.push_back({register_index, read_u32_be(stream, stream_offset)});
         }
+    }
+
+    if (next_packet_word != total_words) {
+        return failure("PM4 packet list does not cover the complete stream", next_packet_word);
     }
 
     for (const auto& write : writes) registers[write.index] = write.value;
