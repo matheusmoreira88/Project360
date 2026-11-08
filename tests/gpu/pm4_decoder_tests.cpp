@@ -1330,19 +1330,35 @@ void test_xenos_viewport_register_resolution() {
                                                            false, true},
           "Xenos OGL pixel center omits the D3D half-pixel shift");
 
+    registers[register_index::pa_cl_vte_cntl] = 0x3fU;
+    registers[register_index::pa_cl_vport_zscale] = std::bit_cast<std::uint32_t>(0.25F);
+    registers[register_index::pa_cl_vport_zoffset] = std::bit_cast<std::uint32_t>(0.25F);
+    const auto d3d_depth_range = read_xenos_viewport(registers);
+    check(d3d_depth_range && d3d_depth_range.viewport.min_depth == 0.25F &&
+              d3d_depth_range.viewport.max_depth == 0.5F &&
+              !d3d_depth_range.viewport.flip_z &&
+              !d3d_depth_range.viewport.remap_z_from_gl_clip_space,
+          "Xenos D3D viewport maps enabled Z scale and offset to Vulkan depth range");
+
     registers[register_index::pa_cl_clip_cntl] = 0U;
     const auto symmetric_gl_clip = read_xenos_viewport(registers);
     check(symmetric_gl_clip && symmetric_gl_clip.viewport.remap_z_from_gl_clip_space &&
               symmetric_gl_clip.viewport.x == 3.0F &&
               symmetric_gl_clip.viewport.y == 0.5F &&
               symmetric_gl_clip.viewport.width == 12.0F &&
-              symmetric_gl_clip.viewport.height == 12.0F,
-          "Xenos symmetric -W-to-W depth mode requests Vulkan's 0-to-W remap");
+              symmetric_gl_clip.viewport.height == 12.0F &&
+              symmetric_gl_clip.viewport.min_depth == 0.0F &&
+              symmetric_gl_clip.viewport.max_depth == 0.5F,
+          "Xenos symmetric depth mode remaps -W..W and applies its transformed depth range");
 
-    registers[register_index::pa_cl_vte_cntl] |= 1U << 4U;
-    check(!read_xenos_viewport(registers),
-          "Xenos viewport reports unsupported Z transforms instead of dropping them");
-    registers[register_index::pa_cl_vte_cntl] &= ~(1U << 4U);
+    registers[register_index::pa_cl_clip_cntl] = 1U << 19U;
+    registers[register_index::pa_cl_vport_zscale] = std::bit_cast<std::uint32_t>(-0.25F);
+    const auto reverse_z = read_xenos_viewport(registers);
+    check(reverse_z && reverse_z.viewport.flip_z && reverse_z.viewport.min_depth == 0.0F &&
+              reverse_z.viewport.max_depth == 0.25F,
+          "Xenos reverse depth range swaps Vulkan endpoints and flips clip-space Z");
+
+    registers[register_index::pa_cl_vte_cntl] = 0x0fU;
     registers[register_index::pa_cl_clip_cntl] |= 1U << 16U;
     check(!read_xenos_viewport(registers),
           "Xenos viewport rejects clipping-disabled raster state");
@@ -1351,6 +1367,12 @@ void test_xenos_viewport_register_resolution() {
           "Xenos viewport rejects unsupported user clip planes");
 
     registers[register_index::pa_cl_clip_cntl] = 1U << 19U;
+    registers[register_index::pa_cl_vport_zscale] =
+        std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN());
+    registers[register_index::pa_cl_vte_cntl] |= 1U << 4U;
+    check(!read_xenos_viewport(registers),
+          "Xenos viewport rejects non-finite depth transform values");
+    registers[register_index::pa_cl_vte_cntl] = 0x0fU;
     registers[register_index::pa_cl_vport_xscale] =
         std::bit_cast<std::uint32_t>(std::numeric_limits<float>::infinity());
     check(!read_xenos_viewport(registers),

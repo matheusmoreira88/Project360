@@ -124,10 +124,13 @@ int main() {
     append_pm4_u32(pm4_draw_stream, std::bit_cast<std::uint32_t>(8.0F));
     append_pm4_u32(pm4_draw_stream, std::bit_cast<std::uint32_t>(-4.0F));
     append_pm4_u32(pm4_draw_stream, std::bit_cast<std::uint32_t>(8.0F));
+    append_pm4_u32(pm4_draw_stream, (1U << 16U) | 0x2113U); // Z viewport scale/offset.
+    append_pm4_u32(pm4_draw_stream, std::bit_cast<std::uint32_t>(0.5F));
+    append_pm4_u32(pm4_draw_stream, std::bit_cast<std::uint32_t>(0.25F));
     append_pm4_u32(pm4_draw_stream, (0U << 16U) | 0x2204U); // D3D clip space.
     append_pm4_u32(pm4_draw_stream, 1U << 19U);
     append_pm4_u32(pm4_draw_stream, (0U << 16U) | 0x2206U); // Enable X/Y scale/offset.
-    append_pm4_u32(pm4_draw_stream, 0x0fU);
+    append_pm4_u32(pm4_draw_stream, 0x3fU);
     append_pm4_u32(pm4_draw_stream, (2U << 16U) | 0x2100U); // VGT_MAX/MIN/INDX_OFFSET.
     append_pm4_u32(pm4_draw_stream, 0x00ffffffU);
     append_pm4_u32(pm4_draw_stream, 0U);
@@ -164,7 +167,9 @@ int main() {
         return 1;
     }
     const auto viewport = read_xenos_viewport(draw_dispatch.draws[0].register_snapshot);
-    if (!viewport || viewport.viewport != XenosViewport{4.5F, 4.5F, 8.0F, 8.0F, false, true}) {
+    if (!viewport ||
+        viewport.viewport != XenosViewport{4.5F, 4.5F, 8.0F, 8.0F, false, true,
+                                            false, false, 0.25F, 0.75F}) {
         std::cerr << "FAIL: PM4 draw did not resolve its Xenos viewport"
                   << (viewport ? "" : ": " + viewport.error) << '\n';
         return 1;
@@ -322,6 +327,15 @@ int main() {
     if (invalid_viewport ||
         invalid_viewport.error.find("viewport exceeds") == std::string::npos) {
         std::cerr << "FAIL: Vulkan diagnostic accepted an out-of-target Xenos viewport\n";
+        return 1;
+    }
+    const auto invalid_depth_viewport = result.context->render_offscreen_indexed_triangles(
+        vertices, indices, std::nullopt,
+        project360::gpu::xenos::XenosViewport{4.0F, 4.0F, 8.0F, 8.0F, false, false,
+                                              false, false, 0.8F, 0.2F});
+    if (invalid_depth_viewport ||
+        invalid_depth_viewport.error.find("depth range") == std::string::npos) {
+        std::cerr << "FAIL: Vulkan diagnostic accepted a reversed host depth range\n";
         return 1;
     }
     auto blue_vertices = vertices;

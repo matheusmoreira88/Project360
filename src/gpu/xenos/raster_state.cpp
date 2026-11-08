@@ -97,11 +97,9 @@ XenosViewportResult read_xenos_viewport(std::span<const std::uint32_t> register_
     constexpr std::uint32_t x_offset_enable_mask = 1U << 1U;
     constexpr std::uint32_t y_scale_enable_mask = 1U << 2U;
     constexpr std::uint32_t y_offset_enable_mask = 1U << 3U;
-    constexpr std::uint32_t z_transform_enable_mask = (1U << 4U) | (1U << 5U);
     const auto vte_control = register_file[register_index::pa_cl_vte_cntl];
-    if ((vte_control & z_transform_enable_mask) != 0U) {
-        return {{}, "Xenos Z viewport scale/offset is not implemented"};
-    }
+    constexpr std::uint32_t z_scale_enable_mask = 1U << 4U;
+    constexpr std::uint32_t z_offset_enable_mask = 1U << 5U;
 
     const auto scale_x = (vte_control & x_scale_enable_mask) != 0U
                              ? read_register_float(register_file,
@@ -119,6 +117,14 @@ XenosViewportResult read_xenos_viewport(std::span<const std::uint32_t> register_
                         ? read_register_float(register_file,
                                               register_index::pa_cl_vport_yoffset)
                         : 0.0F;
+    const auto scale_z = (vte_control & z_scale_enable_mask) != 0U
+                             ? read_register_float(register_file,
+                                                   register_index::pa_cl_vport_zscale)
+                             : 1.0F;
+    const auto offset_z = (vte_control & z_offset_enable_mask) != 0U
+                              ? read_register_float(register_file,
+                                                    register_index::pa_cl_vport_zoffset)
+                              : 0.0F;
 
     constexpr std::uint32_t window_offset_enable_mask = 1U << 16U;
     if ((register_file[register_index::pa_su_sc_mode_cntl] &
@@ -135,7 +141,8 @@ XenosViewportResult read_xenos_viewport(std::span<const std::uint32_t> register_
     }
 
     if (!std::isfinite(scale_x) || !std::isfinite(scale_y) ||
-        !std::isfinite(offset_x) || !std::isfinite(offset_y)) {
+        !std::isfinite(offset_x) || !std::isfinite(offset_y) ||
+        !std::isfinite(scale_z) || !std::isfinite(offset_z)) {
         return {{}, "Xenos viewport contains non-finite scale or offset values"};
     }
     if (scale_x == 0.0F || scale_y == 0.0F) {
@@ -144,10 +151,21 @@ XenosViewportResult read_xenos_viewport(std::span<const std::uint32_t> register_
 
     const auto extent_x = std::abs(scale_x);
     const auto extent_y = std::abs(scale_y);
+    const auto dx_clip_space = (clip_control & dx_clip_space_mask) != 0U;
+    const auto raw_min_depth = dx_clip_space ? offset_z : offset_z - scale_z;
+    const auto raw_max_depth = offset_z + scale_z;
+    if (!std::isfinite(raw_min_depth) || !std::isfinite(raw_max_depth)) {
+        return {{}, "Xenos Z viewport conversion exceeds finite host coordinates"};
+    }
+    auto min_depth = std::clamp(raw_min_depth, 0.0F, 1.0F);
+    auto max_depth = std::clamp(raw_max_depth, 0.0F, 1.0F);
+    const auto flip_z = min_depth > max_depth;
+    if (flip_z) std::swap(min_depth, max_depth);
+
     XenosViewport viewport{offset_x - extent_x, offset_y - extent_y,
                            extent_x * 2.0F, extent_y * 2.0F,
                            std::signbit(scale_x), std::signbit(scale_y),
-                           (clip_control & dx_clip_space_mask) == 0U};
+                           !dx_clip_space, flip_z, min_depth, max_depth};
     if (!std::isfinite(viewport.x) || !std::isfinite(viewport.y) ||
         !std::isfinite(viewport.width) || !std::isfinite(viewport.height)) {
         return {{}, "Xenos viewport conversion exceeds finite host coordinates"};

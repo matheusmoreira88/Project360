@@ -642,6 +642,12 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
         return {{}, {}, 0U, "Indexed triangle scissor exceeds the diagnostic render target"};
     }
     if (viewport &&
+        (!std::isfinite(viewport->min_depth) || !std::isfinite(viewport->max_depth) ||
+         viewport->min_depth < 0.0F || viewport->max_depth > 1.0F ||
+         viewport->min_depth > viewport->max_depth)) {
+        return {{}, {}, 0U, "Xenos viewport has an invalid depth range"};
+    }
+    if (viewport &&
         (!std::isfinite(viewport->x) || !std::isfinite(viewport->y) ||
          !std::isfinite(viewport->width) || !std::isfinite(viewport->height) ||
          viewport->x < 0.0F || viewport->y < 0.0F || viewport->width <= 0.0F ||
@@ -987,7 +993,7 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
     vkCmdBeginRenderPass(command_buffer, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
     const VkViewport render_viewport =
         viewport ? VkViewport{viewport->x, viewport->y, viewport->width, viewport->height,
-                              0.0F, 1.0F}
+                              viewport->min_depth, viewport->max_depth}
                  : VkViewport{0.0F, 0.0F, static_cast<float>(image_width),
                               static_cast<float>(image_height), 0.0F, 1.0F};
     const VkRect2D render_scissor = scissor
@@ -1134,6 +1140,7 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_xenos_triangles(
         if (viewport && viewport->remap_z_from_gl_clip_space) {
             position[2] = position[2] * 0.5F + position[3] * 0.5F;
         }
+        if (viewport && viewport->flip_z) position[2] = position[3] - position[2];
         backend_vertices.push_back({position, vertex.interpolators[color_interpolator]});
     }
     return render_offscreen_indexed_triangles(backend_vertices, indices, scissor, viewport);
