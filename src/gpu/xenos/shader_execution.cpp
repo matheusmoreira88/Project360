@@ -3,6 +3,7 @@
 #include "gpu/xenos/vertex_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
+#include <array>
 #include <cstddef>
 #include <new>
 #include <string>
@@ -216,6 +217,107 @@ ShaderVertexBatchResult execute_shader_exec_vertex_batch(
         return {{}, "Not enough host memory for Xenos vertex batch output"};
     }
     return result;
+}
+
+ShaderVertexBatchResult execute_pm4_draw_vertex_batch(
+    const PreparedDrawCommand& draw, std::span<const ShaderExecInstruction> blocks,
+    std::span<const std::array<std::uint32_t, 3>> ucode, const memory::GuestMemory& memory,
+    const ShaderAluTemporaryRegisterBank& initial_registers,
+    const std::array<float, 4>& missing_component_values,
+    std::span<const bool> boolean_constants) {
+    constexpr std::size_t maximum_block_count = 4096U;
+    if (blocks.empty()) return {{}, "Xenos shader EXEC sequence is empty"};
+    if (blocks.size() > maximum_block_count) {
+        return {{}, "Xenos shader EXEC sequence exceeds the 4,096-block limit"};
+    }
+    if (draw.register_snapshot.empty()) {
+        return {{}, "Prepared PM4 draw has no retained register snapshot"};
+    }
+
+    std::array<bool, 96> required_fetch_slots{};
+    std::array<bool, 256> required_alu_constants{};
+    bool reached_shader_end = false;
+    for (const auto& block : blocks) {
+        const bool unconditional = block.opcode == 1U || block.opcode == 2U;
+        const bool conditional = block.opcode == 3U || block.opcode == 4U;
+        if (!unconditional && !conditional) {
+            return {{}, "Unsupported Xenos shader control-flow opcode"};
+        }
+        if (conditional) {
+            if (!block.absolute_addressing) {
+                return {{}, "Relative Xenos conditional EXEC addresses are not implemented"};
+            }
+            if (block.boolean_constant_address >= boolean_constants.size()) {
+                return {{}, "Xenos conditional EXEC references a missing bool constant"};
+            }
+            if (boolean_constants[block.boolean_constant_address] != block.condition) continue;
+        }
+        if (block.instruction_count > 7U) {
+            return {{}, "Xenos EXEC instruction count exceeds its encoded field"};
+        }
+        const auto start = static_cast<std::size_t>(block.instruction_address);
+        const auto count = static_cast<std::size_t>(block.instruction_count);
+        if (start > ucode.size() || count > ucode.size() - start) {
+            return {{}, "Xenos EXEC instruction range exceeds shader microcode"};
+        }
+
+        for (std::size_t slot = 0U; slot < count; ++slot) {
+            const auto& words = ucode[start + slot];
+            const auto operation_kind = (block.sequence >> (slot * 2U)) & 1U;
+            if (operation_kind != 0U) {
+                const auto decoded = decode_vertex_fetch_instruction(words);
+                if (!decoded) {
+                    return {{}, "Xenos EXEC fetch slot " + std::to_string(slot) + ": " +
+                                    decoded.error};
+                }
+                required_fetch_slots[decoded.instruction.fetch_constant_index] = true;
+                continue;
+            }
+
+            const auto instruction = decode_shader_alu_instruction(words);
+            for (std::size_t source = 0U; source < instruction.source_is_temporary.size();
+                 ++source) {
+                if (!instruction.source_is_temporary[source]) {
+                    required_alu_constants[instruction.source_registers[source]] = true;
+                }
+            }
+        }
+        if (block.opcode == 2U || block.opcode == 4U) {
+            reached_shader_end = true;
+            break;
+        }
+    }
+    if (!reached_shader_end) {
+        return {{}, "Xenos shader EXEC sequence ended without EXEC_END or matching COND_EXEC_END"};
+    }
+
+    std::array<std::uint8_t, 96> fetch_slots{};
+    std::size_t fetch_slot_count = 0U;
+    for (std::size_t slot = 0U; slot < required_fetch_slots.size(); ++slot) {
+        if (required_fetch_slots[slot]) {
+            fetch_slots[fetch_slot_count++] = static_cast<std::uint8_t>(slot);
+        }
+    }
+    const auto fetch_bank = decode_vertex_fetch_descriptor_bank(
+        draw.register_snapshot,
+        std::span<const std::uint8_t>(fetch_slots.data(), fetch_slot_count));
+    if (!fetch_bank) return {{}, "PM4 draw VFETCH resources: " + fetch_bank.error};
+
+    std::array<std::uint8_t, 256> alu_constants{};
+    std::size_t alu_constant_count = 0U;
+    for (std::size_t constant = 0U; constant < required_alu_constants.size(); ++constant) {
+        if (required_alu_constants[constant]) {
+            alu_constants[alu_constant_count++] = static_cast<std::uint8_t>(constant);
+        }
+    }
+    const auto alu_bank = decode_shader_alu_float_constant_bank(
+        draw.register_snapshot,
+        std::span<const std::uint8_t>(alu_constants.data(), alu_constant_count));
+    if (!alu_bank) return {{}, "PM4 draw ALU resources: " + alu_bank.error};
+
+    return execute_shader_exec_vertex_batch(
+        blocks, ucode, fetch_bank.descriptors, memory, draw.geometry.indices,
+        initial_registers, missing_component_values, alu_bank.constants, boolean_constants);
 }
 
 } // namespace project360::gpu::xenos

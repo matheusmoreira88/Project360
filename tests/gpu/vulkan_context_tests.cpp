@@ -152,11 +152,21 @@ int main() {
                   << '\n';
         return 1;
     }
-    const auto vertex_batch = execute_shader_exec_vertex_batch(
-        vertex_exec_blocks, vertex_ucode, fetch_constants, shader_memory,
-        prepared_geometry.indices, {}, {}, alu_constant_bank.constants);
+    const auto vertex_batch = execute_pm4_draw_vertex_batch(
+        draw_dispatch.draws[0], vertex_exec_blocks, vertex_ucode, shader_memory, {}, {});
     if (!vertex_batch) {
         std::cerr << "FAIL: synthetic Xenos vertex batch failed: " << vertex_batch.error << '\n';
+        return 1;
+    }
+    auto missing_vertex_descriptor_draw = draw_dispatch.draws[0];
+    missing_vertex_descriptor_draw.register_snapshot[0x480eU] = 0U;
+    missing_vertex_descriptor_draw.register_snapshot[0x480fU] = 0U;
+    const auto missing_vertex_descriptor_batch = execute_pm4_draw_vertex_batch(
+        missing_vertex_descriptor_draw, vertex_exec_blocks, vertex_ucode, shader_memory,
+        {}, {});
+    if (missing_vertex_descriptor_batch || !missing_vertex_descriptor_batch.vertices.empty() ||
+        missing_vertex_descriptor_batch.error.find("VFETCH resources") == std::string::npos) {
+        std::cerr << "FAIL: PM4 draw executor accepted a missing referenced VFETCH descriptor\n";
         return 1;
     }
     constexpr std::array<std::uint32_t, 3> out_of_range_vertex_indices{0U, 1U, 3U};

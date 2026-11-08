@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu/xenos/shader_alu.hpp"
+#include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
 
 #include <array>
@@ -123,6 +124,16 @@ struct ShaderExecSequenceResult {
     const ShaderAluTemporaryRegisterBank& initial_registers,
     const std::array<float, 4>& missing_component_values,
     std::span<const std::array<float, 4>> float_constants = {},
+    std::span<const bool> boolean_constants = {});
+
+// Uses the retained PM4 register snapshot for one prepared draw to resolve
+// only the VFETCH descriptors and ALU float constants referenced by this
+// bounded linear shader, then executes it for that draw's prepared indexes.
+[[nodiscard]] ShaderVertexBatchResult execute_pm4_draw_vertex_batch(
+    const PreparedDrawCommand& draw, std::span<const ShaderExecInstruction> blocks,
+    std::span<const std::array<std::uint32_t, 3>> ucode, const memory::GuestMemory& memory,
+    const ShaderAluTemporaryRegisterBank& initial_registers,
+    const std::array<float, 4>& missing_component_values,
     std::span<const bool> boolean_constants = {});
 
 } // namespace project360::gpu::xenos
