@@ -1,8 +1,10 @@
 #include "loader/xex_parser.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -28,6 +30,22 @@ bool read_be32(std::span<const std::byte> bytes, std::size_t offset, std::uint32
             (std::to_integer<std::uint32_t>(bytes[offset + 1U]) << 16U) |
             (std::to_integer<std::uint32_t>(bytes[offset + 2U]) << 8U) |
             std::to_integer<std::uint32_t>(bytes[offset + 3U]);
+    return true;
+}
+
+bool read_le16(std::span<const std::byte> bytes, std::size_t offset, std::uint16_t& value) {
+    if (offset > bytes.size() || bytes.size() - offset < 2U) return false;
+    value = static_cast<std::uint16_t>(std::to_integer<std::uint16_t>(bytes[offset]) |
+                                       (std::to_integer<std::uint16_t>(bytes[offset + 1U]) << 8U));
+    return true;
+}
+
+bool read_le32(std::span<const std::byte> bytes, std::size_t offset, std::uint32_t& value) {
+    if (offset > bytes.size() || bytes.size() - offset < 4U) return false;
+    value = std::to_integer<std::uint32_t>(bytes[offset]) |
+            (std::to_integer<std::uint32_t>(bytes[offset + 1U]) << 8U) |
+            (std::to_integer<std::uint32_t>(bytes[offset + 2U]) << 16U) |
+            (std::to_integer<std::uint32_t>(bytes[offset + 3U]) << 24U);
     return true;
 }
 
@@ -156,6 +174,115 @@ XexParseResult parse_xex2_file(const std::filesystem::path& path) {
         return {{}, "unable to read the complete declared XEX header"};
     }
     return parse_xex2(header);
+}
+
+PeParseResult parse_xbox_pe32(std::span<const std::byte> image) {
+    constexpr std::uint16_t kDosSignature = 0x5a4dU;
+    constexpr std::uint32_t kNtSignature = 0x00004550U;
+    constexpr std::uint16_t kPowerPcBeMachine = 0x01f2U;
+    constexpr std::uint16_t kPe32Magic = 0x010bU;
+    constexpr std::uint16_t kXboxSubsystem = 14U;
+    constexpr std::uint16_t kImage32BitMachine = 0x0100U;
+    constexpr std::uint32_t kSectionExecutable = 0x20000000U;
+    constexpr std::size_t kDosHeaderSize = 0x40U;
+    constexpr std::size_t kFileHeaderSize = 20U;
+    constexpr std::size_t kPe32OptionalHeaderSize = 224U;
+    constexpr std::size_t kSectionHeaderSize = 40U;
+    constexpr std::uint16_t kMaximumSections = 96U;
+
+    std::uint16_t dos_signature = 0;
+    std::uint32_t nt_offset = 0;
+    if (!read_le16(image, 0U, dos_signature) || dos_signature != kDosSignature ||
+        image.size() < kDosHeaderSize || !read_le32(image, 0x3cU, nt_offset)) {
+        return {{}, "decoded image has an invalid or truncated DOS header"};
+    }
+    if (!range_fits(nt_offset, 4U + kFileHeaderSize, image.size())) {
+        return {{}, "PE header offset is outside the decoded image"};
+    }
+
+    std::uint32_t nt_signature = 0;
+    if (!read_le32(image, nt_offset, nt_signature) || nt_signature != kNtSignature) {
+        return {{}, "decoded image is missing the PE signature"};
+    }
+    const auto file_header = static_cast<std::size_t>(nt_offset) + 4U;
+    std::uint16_t machine = 0;
+    std::uint16_t section_count = 0;
+    std::uint16_t optional_size = 0;
+    std::uint16_t characteristics = 0;
+    if (!read_le16(image, file_header, machine) ||
+        !read_le16(image, file_header + 2U, section_count) ||
+        !read_le16(image, file_header + 16U, optional_size) ||
+        !read_le16(image, file_header + 18U, characteristics)) {
+        return {{}, "PE file header is truncated"};
+    }
+    if (machine != kPowerPcBeMachine || (characteristics & kImage32BitMachine) == 0U) {
+        return {{}, "PE machine type is not Xbox 360 PowerPC big-endian"};
+    }
+    if (section_count == 0U || section_count > kMaximumSections ||
+        optional_size != kPe32OptionalHeaderSize) {
+        return {{}, "PE section count or PE32 optional-header size is unsupported"};
+    }
+
+    const auto optional_header = file_header + kFileHeaderSize;
+    if (!range_fits(optional_header, optional_size, image.size())) {
+        return {{}, "PE optional header exceeds the decoded image"};
+    }
+    std::uint16_t optional_magic = 0;
+    std::uint16_t subsystem = 0;
+    XboxPeMetadata metadata{};
+    if (!read_le16(image, optional_header, optional_magic) || optional_magic != kPe32Magic ||
+        !read_le32(image, optional_header + 16U, metadata.entry_point_rva) ||
+        !read_le32(image, optional_header + 28U, metadata.image_base) ||
+        !read_le32(image, optional_header + 32U, metadata.section_alignment) ||
+        !read_le32(image, optional_header + 36U, metadata.file_alignment) ||
+        !read_le32(image, optional_header + 56U, metadata.image_size) ||
+        !read_le32(image, optional_header + 60U, metadata.headers_size) ||
+        !read_le16(image, optional_header + 68U, subsystem)) {
+        return {{}, "PE32 optional header is truncated"};
+    }
+    if (subsystem != kXboxSubsystem || metadata.section_alignment == 0U ||
+        metadata.file_alignment == 0U || metadata.image_size == 0U ||
+        metadata.headers_size > image.size() || metadata.headers_size > metadata.image_size ||
+        metadata.entry_point_rva >= metadata.image_size) {
+        return {{}, "PE32 Xbox subsystem or image layout fields are invalid"};
+    }
+
+    const auto section_table = optional_header + optional_size;
+    const auto section_table_size = static_cast<std::uint64_t>(section_count) * kSectionHeaderSize;
+    if (!range_fits(section_table, section_table_size, image.size()) ||
+        !range_fits(section_table, section_table_size, metadata.headers_size)) {
+        return {{}, "PE section table exceeds the image or declared headers"};
+    }
+
+    metadata.sections.reserve(section_count);
+    bool entry_is_executable = false;
+    for (std::uint16_t i = 0; i < section_count; ++i) {
+        const auto offset = section_table + static_cast<std::size_t>(i) * kSectionHeaderSize;
+        PeSectionMetadata section{};
+        for (std::size_t n = 0; n < section.name.size(); ++n) {
+            section.name[n] = static_cast<char>(std::to_integer<unsigned char>(image[offset + n]));
+        }
+        if (!read_le32(image, offset + 8U, section.virtual_size) ||
+            !read_le32(image, offset + 12U, section.virtual_address) ||
+            !read_le32(image, offset + 16U, section.raw_size) ||
+            !read_le32(image, offset + 20U, section.raw_offset) ||
+            !read_le32(image, offset + 36U, section.characteristics)) {
+            return {{}, "PE section table entry is truncated"};
+        }
+        const auto virtual_extent = std::max(section.virtual_size, section.raw_size);
+        if (!range_fits(section.virtual_address, virtual_extent, metadata.image_size) ||
+            !range_fits(section.raw_offset, section.raw_size, image.size())) {
+            return {{}, "PE section points outside the image"};
+        }
+        if ((section.characteristics & kSectionExecutable) != 0U &&
+            metadata.entry_point_rva >= section.virtual_address &&
+            metadata.entry_point_rva - section.virtual_address < virtual_extent) {
+            entry_is_executable = true;
+        }
+        metadata.sections.push_back(section);
+    }
+    if (!entry_is_executable) return {{}, "PE entry point is not inside an executable section"};
+    return {metadata, {}};
 }
 
 } // namespace project360::loader
