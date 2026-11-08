@@ -51,4 +51,38 @@ ShaderAluInstruction decode_shader_alu_instruction(
     return instruction;
 }
 
+ShaderVectorAluResult evaluate_shader_vector_alu(
+    const ShaderAluInstruction& instruction, const std::array<float, 4>& source_1,
+    const std::array<float, 4>& source_2,
+    const std::array<float, 4>& previous_destination) {
+    if (instruction.predicated) {
+        return {{}, "Predicated Xenos vector ALU execution is not implemented"};
+    }
+    if (instruction.vector_destination_relative) {
+        return {{}, "Relative Xenos vector destinations are not implemented"};
+    }
+    if (instruction.export_result) {
+        return {{}, "Xenos ALU export writes are not implemented"};
+    }
+    if (instruction.vector_clamp) {
+        return {{}, "Clamped Xenos vector ALU results are not implemented"};
+    }
+    if (instruction.vector_opcode > 1U) {
+        return {{}, "Unsupported Xenos vector ALU opcode"};
+    }
+
+    ShaderVectorAluResult result{previous_destination, {}};
+    for (std::size_t lane = 0; lane < result.destination.size(); ++lane) {
+        if ((instruction.vector_write_mask & (1U << lane)) == 0U) {
+            continue;
+        }
+        if (instruction.vector_opcode == 0U) {
+            result.destination[lane] = source_1[lane] + source_2[lane];
+        } else {
+            result.destination[lane] = source_1[lane] * source_2[lane];
+        }
+    }
+    return result;
+}
+
 } // namespace project360::gpu::xenos

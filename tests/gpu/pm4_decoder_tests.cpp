@@ -105,6 +105,37 @@ void test_shader_alu_word_decode() {
           "Xenos ALU decoder preserves unknown opcode values for explicit later rejection");
 }
 
+void test_shader_vector_alu_reference_subset() {
+    using namespace project360::gpu::xenos;
+    const std::array<float, 4> source_1{1.0F, -2.0F, 3.5F, 4.0F};
+    const std::array<float, 4> source_2{2.0F, 5.0F, -0.5F, 8.0F};
+    const std::array<float, 4> previous{9.0F, 9.0F, 9.0F, 9.0F};
+
+    const auto add = decode_shader_alu_instruction({0x000b0000U, 0U, 0U});
+    const auto add_result = evaluate_shader_vector_alu(add, source_1, source_2, previous);
+    check(add_result && add_result.destination == std::array<float, 4>{3.0F, 3.0F, 9.0F, 12.0F},
+          "Xenos vector ADD evaluates enabled lanes and preserves masked destination lanes");
+
+    const auto multiply = decode_shader_alu_instruction({0x000f0000U, 0U, 0x01000000U});
+    const auto multiply_result = evaluate_shader_vector_alu(
+        multiply, source_1, source_2, previous);
+    check(multiply_result &&
+              multiply_result.destination == std::array<float, 4>{2.0F, -10.0F, -1.75F, 32.0F},
+          "Xenos vector MUL evaluates all four lanes from decoded opcode fields");
+
+    auto unsupported = add;
+    unsupported.vector_opcode = 2U;
+    const auto unsupported_result = evaluate_shader_vector_alu(
+        unsupported, source_1, source_2, previous);
+    auto predicated = add;
+    predicated.predicated = true;
+    const auto predicated_result = evaluate_shader_vector_alu(
+        predicated, source_1, source_2, previous);
+    check(!unsupported_result && unsupported_result.destination == std::array<float, 4>{} &&
+              !predicated_result && predicated_result.destination == std::array<float, 4>{},
+          "Xenos vector ALU subset rejects unsupported opcodes and predicates without partial output");
+}
+
 void test_noops_and_malformed_streams() {
     using namespace project360::gpu::xenos;
     std::vector<std::uint8_t> noops;
@@ -968,6 +999,7 @@ void test_wait_for_idle_is_synchronous_barrier() {
 int main() {
     test_packet_framing_and_metadata();
     test_shader_alu_word_decode();
+    test_shader_vector_alu_reference_subset();
     test_noops_and_malformed_streams();
     test_register_packet_application();
     test_type3_constant_uploads();

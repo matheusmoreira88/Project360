@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 
 namespace project360::gpu::xenos {
 
@@ -34,10 +35,26 @@ struct ShaderAluInstruction {
     std::array<bool, 3> source_is_temporary{};
 };
 
+struct ShaderVectorAluResult {
+    std::array<float, 4> destination{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 // `words` contains three numeric dwords after the caller has applied the
 // guest memory's byte order. This function only decodes fields; it does not
 // execute the instruction or imply support for its opcode.
 [[nodiscard]] ShaderAluInstruction decode_shader_alu_instruction(
     const std::array<std::uint32_t, 3>& words) noexcept;
+
+// Evaluates only the vector half of a decoded instruction. Source vectors must
+// already have their encoded source selection, swizzle and negate semantics
+// applied. The scalar half is deliberately not evaluated here. Unsupported
+// vector control modes fail explicitly instead of being approximated.
+[[nodiscard]] ShaderVectorAluResult evaluate_shader_vector_alu(
+    const ShaderAluInstruction& instruction, const std::array<float, 4>& source_1,
+    const std::array<float, 4>& source_2,
+    const std::array<float, 4>& previous_destination);
 
 } // namespace project360::gpu::xenos
