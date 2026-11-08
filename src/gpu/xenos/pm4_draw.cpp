@@ -38,6 +38,70 @@ DrawDecodeResult failure(std::string message, std::size_t word_offset) {
     return {{}, std::move(message), word_offset};
 }
 
+PrimitiveAssemblyResult primitive_failure(std::string message) {
+    return {{}, {}, {}, std::move(message)};
+}
+
+bool supports_restart(std::uint8_t primitive_type) {
+    return primitive_type == 3U || primitive_type == 5U || primitive_type == 6U ||
+           primitive_type == 0x0cU;
+}
+
+bool is_restart_index(const DrawCommand& command, std::uint32_t index,
+                      std::uint32_t reset_index) {
+    if (command.index_32_bit) {
+        return (index & 0x00ffffffU) == (reset_index & 0x00ffffffU);
+    }
+    return index == reset_index;
+}
+
+void append_range(PrimitiveAssemblyResult& result, std::span<const std::uint32_t> source,
+                  std::uint8_t primitive_type) {
+    const auto first_index = result.indices.size();
+    switch (primitive_type) {
+    case 1U: // Point list.
+    case 2U: // Line list.
+    case 3U: // Line strip.
+    case 4U: // Triangle list.
+    case 6U: // Triangle strip.
+        result.indices.insert(result.indices.end(), source.begin(), source.end());
+        break;
+    case 5U: // Triangle fan, converted to independent triangles.
+        for (std::size_t index = 1U; index + 1U < source.size(); ++index) {
+            result.indices.push_back(source[index]);
+            result.indices.push_back(source[index + 1U]);
+            result.indices.push_back(source[0U]);
+        }
+        break;
+    case 0x0cU: // Line loop, converted to independent line segments.
+        if (source.size() >= 2U) {
+            for (std::size_t index = 0U; index + 1U < source.size(); ++index) {
+                result.indices.push_back(source[index]);
+                result.indices.push_back(source[index + 1U]);
+            }
+            result.indices.push_back(source.back());
+            result.indices.push_back(source.front());
+        }
+        break;
+    case 0x0dU: // Quad list, split along the first-to-third diagonal.
+        for (std::size_t index = 0U; index + 3U < source.size(); index += 4U) {
+            result.indices.push_back(source[index]);
+            result.indices.push_back(source[index + 1U]);
+            result.indices.push_back(source[index + 2U]);
+            result.indices.push_back(source[index]);
+            result.indices.push_back(source[index + 2U]);
+            result.indices.push_back(source[index + 3U]);
+        }
+        break;
+    default:
+        break;
+    }
+    const auto count = result.indices.size() - first_index;
+    if (count != 0U) {
+        result.ranges.push_back({first_index, count});
+    }
+}
+
 } // namespace
 
 DrawDecodeResult decode_draw_commands(std::span<const Packet> packets,
@@ -223,6 +287,51 @@ IndexFetchResult fetch_draw_indices(const DrawCommand& command,
         }
     } catch (const std::bad_alloc&) {
         return {{}, "Not enough host memory for the decoded draw indexes"};
+    }
+    return result;
+}
+
+PrimitiveAssemblyResult assemble_draw_primitives(
+    const DrawCommand& command, std::span<const std::uint32_t> indices,
+    PrimitiveAssemblyOptions options) {
+    if (indices.size() != command.index_count) {
+        return primitive_failure("Fetched index count does not match the draw command");
+    }
+
+    PrimitiveAssemblyResult result{};
+    switch (command.primitive_type) {
+    case 1U: result.topology = PrimitiveTopology::points; break;
+    case 2U:
+    case 0x0cU: result.topology = PrimitiveTopology::lines; break;
+    case 3U: result.topology = PrimitiveTopology::line_strip; break;
+    case 4U:
+    case 5U:
+    case 0x0dU: result.topology = PrimitiveTopology::triangles; break;
+    case 6U: result.topology = PrimitiveTopology::triangle_strip; break;
+    default: return primitive_failure("Xenos primitive type is not supported yet");
+    }
+    if (options.restart_enabled && !supports_restart(command.primitive_type)) {
+        return primitive_failure("Primitive restart is not defined for this supported topology");
+    }
+
+    try {
+        if (!options.restart_enabled) {
+            append_range(result, indices, command.primitive_type);
+            return result;
+        }
+
+        std::size_t segment_begin = 0U;
+        for (std::size_t index = 0U; index <= indices.size(); ++index) {
+            const bool at_end = index == indices.size();
+            if (!at_end && !is_restart_index(command, indices[index], options.restart_index)) {
+                continue;
+            }
+            append_range(result, indices.subspan(segment_begin, index - segment_begin),
+                         command.primitive_type);
+            segment_begin = index + 1U;
+        }
+    } catch (const std::bad_alloc&) {
+        return primitive_failure("Not enough host memory to assemble draw primitives");
     }
     return result;
 }

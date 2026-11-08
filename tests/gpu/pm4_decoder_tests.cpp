@@ -392,6 +392,78 @@ void test_dma_index_fetch() {
           "auto-index source generates the guest sequential index range");
 }
 
+void test_primitive_assembly() {
+    using namespace project360::gpu::xenos;
+    DrawCommand command{};
+    command.source = DrawSource::auto_index;
+    command.primitive_type = 5U; // Triangle fan.
+    command.index_count = 4U;
+    const std::array<std::uint32_t, 4> fan{10U, 11U, 12U, 13U};
+    const auto fan_result = assemble_draw_primitives(command, fan);
+    check(static_cast<bool>(fan_result) &&
+              fan_result.topology == PrimitiveTopology::triangles &&
+              fan_result.indices == std::vector<std::uint32_t>{11U, 12U, 10U, 12U, 13U,
+                                                               10U} &&
+              fan_result.ranges.size() == 1U && fan_result.ranges[0].index_count == 6U,
+          "triangle fan becomes indexed triangles with a bounded draw range");
+
+    command.primitive_type = 0x0cU; // Line loop.
+    const auto loop_result = assemble_draw_primitives(command, fan);
+    check(static_cast<bool>(loop_result) && loop_result.topology == PrimitiveTopology::lines &&
+              loop_result.indices == std::vector<std::uint32_t>{10U, 11U, 11U, 12U, 12U,
+                                                                13U, 13U, 10U},
+          "line loop closes each sequence as independent line segments");
+
+    command.primitive_type = 0x0dU; // Quad list.
+    command.index_count = 5U;
+    const std::array<std::uint32_t, 5> quad{20U, 21U, 22U, 23U, 24U};
+    const auto quad_result = assemble_draw_primitives(command, quad);
+    check(static_cast<bool>(quad_result) &&
+              quad_result.topology == PrimitiveTopology::triangles &&
+              quad_result.indices == std::vector<std::uint32_t>{20U, 21U, 22U, 20U, 22U,
+                                                                 23U},
+          "quad list uses two triangles and ignores an incomplete trailing quad");
+
+    command.primitive_type = 6U; // Triangle strip.
+    command.index_32_bit = true;
+    command.index_count = 7U;
+    const std::array<std::uint32_t, 7> split_strip{1U, 2U, 3U, 0x120000ffU,
+                                                   4U, 5U, 6U};
+    const auto strip_result = assemble_draw_primitives(
+        command, split_strip, {.restart_enabled = true, .restart_index = 0x000000ffU});
+    check(static_cast<bool>(strip_result) &&
+              strip_result.topology == PrimitiveTopology::triangle_strip &&
+              strip_result.indices == std::vector<std::uint32_t>{1U, 2U, 3U, 4U, 5U, 6U} &&
+              strip_result.ranges.size() == 2U && strip_result.ranges[0].index_count == 3U &&
+              strip_result.ranges[1].first_index == 3U,
+          "32-bit primitive restart splits ranges using the low 24-bit reset value");
+
+    command.primitive_type = 5U;
+    command.index_32_bit = false;
+    command.index_count = 7U;
+    const std::array<std::uint32_t, 7> split_fan{1U, 2U, 3U, 0xffU, 4U, 5U, 6U};
+    const auto restart_fan = assemble_draw_primitives(
+        command, split_fan, {.restart_enabled = true, .restart_index = 0xffU});
+    check(static_cast<bool>(restart_fan) && restart_fan.ranges.size() == 2U &&
+              restart_fan.indices == std::vector<std::uint32_t>{2U, 3U, 1U, 5U, 6U, 4U},
+          "16-bit primitive restart splits triangle fans before fan expansion");
+
+    command.primitive_type = 4U;
+    const auto unsupported_restart = assemble_draw_primitives(
+        command, split_fan, {.restart_enabled = true, .restart_index = 0xffU});
+    check(!unsupported_restart && unsupported_restart.indices.empty(),
+          "restart on a topology without modeled Xenos semantics fails explicitly");
+    command.primitive_type = 0x10U;
+    const auto unsupported_type = assemble_draw_primitives(command, split_fan);
+    check(!unsupported_type && unsupported_type.indices.empty(),
+          "unsupported Xenos topology is rejected without generated indices");
+    command.primitive_type = 4U;
+    command.index_count = 2U;
+    const auto count_mismatch = assemble_draw_primitives(command, split_fan);
+    check(!count_mismatch && count_mismatch.indices.empty(),
+          "primitive assembly rejects an index span inconsistent with draw metadata");
+}
+
 void test_wait_for_idle_is_synchronous_barrier() {
     using namespace project360::gpu::xenos;
     std::vector<std::uint8_t> stream;
@@ -423,6 +495,7 @@ int main() {
     test_unimplemented_commands_fail_explicitly();
     test_draw_packet_metadata_decoding();
     test_dma_index_fetch();
+    test_primitive_assembly();
     test_wait_for_idle_is_synchronous_barrier();
     if (failures != 0) {
         std::cerr << failures << " GPU packet test(s) failed\n";
