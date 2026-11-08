@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -12,6 +13,15 @@ struct VulkanDeviceInfo {
     std::uint32_t device_id{};
     std::uint32_t api_version{};
     std::uint32_t graphics_queue_family{};
+};
+
+struct VulkanPixelReadbackResult {
+    std::array<std::uint8_t, 4> rgba{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return error.empty();
+    }
 };
 
 enum class VulkanContextStatus {
@@ -45,6 +55,7 @@ class VulkanContext final {
 
     [[nodiscard]] static VulkanContextResult create();
     [[nodiscard]] const VulkanDeviceInfo& device_info() const noexcept;
+    [[nodiscard]] VulkanPixelReadbackResult readback_clear_color_pixel() const;
 
   private:
     struct Impl;
