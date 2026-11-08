@@ -209,6 +209,86 @@ int main() {
               ansi_buffer == 0x1000U,
           "RtlInitAnsiString caps oversized counted strings to USHORT length limits");
 
+    const std::array<std::byte, 6> unicode_text{
+        std::byte{0x03}, std::byte{0xa9}, std::byte{0x4e},
+        std::byte{0x2d}, std::byte{0}, std::byte{0}};
+    check(memory.load(256U, unicode_text),
+          "test fixture seeds a null-terminated big-endian UTF-16 string");
+    state.gpr[3] = data_page + 272U;
+    state.gpr[4] = data_page + 256U;
+    state.lr = 0x1067U;
+    state.pc = 0x8000d0U;
+    const auto initialized_unicode = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_init_unicode_string_ordinal}, state, memory);
+    std::uint16_t unicode_length = 0U;
+    std::uint16_t unicode_maximum = 0U;
+    std::uint32_t unicode_buffer = 0U;
+    check(initialized_unicode == KernelDispatchStatus::handled &&
+              memory.read_u16_be(data_page + 272U, unicode_length) && unicode_length == 4U &&
+              memory.read_u16_be(data_page + 274U, unicode_maximum) &&
+              unicode_maximum == 6U && memory.read_u32_be(data_page + 276U, unicode_buffer) &&
+              unicode_buffer == data_page + 256U && state.pc == 0x1064U,
+          "xboxkrnl ordinal 290 writes the byte lengths and guest pointer of a big-endian UNICODE_STRING");
+
+    state.gpr[3] = data_page + 288U;
+    state.gpr[4] = 0U;
+    const auto initialized_null_unicode = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_init_unicode_string_ordinal}, state, memory);
+    check(initialized_null_unicode == KernelDispatchStatus::handled &&
+              memory.read_u16_be(data_page + 288U, unicode_length) && unicode_length == 0U &&
+              memory.read_u16_be(data_page + 290U, unicode_maximum) &&
+              unicode_maximum == 0U && memory.read_u32_be(data_page + 292U, unicode_buffer) &&
+              unicode_buffer == 0U,
+          "RtlInitUnicodeString initializes a null source as an empty descriptor");
+
+    const std::array<std::byte, 8> previous_unicode_descriptor{
+        std::byte{0xde}, std::byte{0xad}, std::byte{0xbe}, std::byte{0xef},
+        std::byte{0x12}, std::byte{0x34}, std::byte{0x56}, std::byte{0x78}};
+    const std::array<std::byte, 2> unterminated_unicode_unit{
+        std::byte{0x41}, std::byte{0x42}};
+    check(memory.load(GuestMemory::page_size - unterminated_unicode_unit.size(),
+                      unterminated_unicode_unit) &&
+              memory.load(304U, previous_unicode_descriptor),
+          "test fixture seeds an unterminated UTF-16 unit and a previous descriptor");
+    state.gpr[3] = data_page + 304U;
+    state.gpr[4] = data_page + GuestMemory::page_size - 2U;
+    state.pc = 0x8000e0U;
+    const auto unterminated_unicode = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_init_unicode_string_ordinal}, state,
+        memory);
+    bool unicode_descriptor_unchanged = true;
+    for (std::size_t i = 0; i < previous_unicode_descriptor.size(); ++i) {
+        std::uint8_t byte = 0U;
+        unicode_descriptor_unchanged = unicode_descriptor_unchanged &&
+                                       memory.read_u8(data_page + 304U + i, byte) &&
+                                       byte == std::to_integer<std::uint8_t>(
+                                                  previous_unicode_descriptor[i]);
+    }
+    check(unterminated_unicode == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x8000e0U && unicode_descriptor_unchanged,
+          "RtlInitUnicodeString faults at an unmapped UTF-16 unit without changing state or descriptor");
+
+    GuestMemory long_unicode_memory(0x22000U);
+    std::vector<std::byte> long_unicode(0x10002U, std::byte{0x41});
+    for (std::size_t i = 0; i < long_unicode.size(); i += 2U) {
+        long_unicode[i + 1U] = std::byte{0x41};
+    }
+    check(long_unicode_memory.load(0x1000U, long_unicode),
+          "test fixture seeds a Unicode source longer than UNICODE_STRING can represent");
+    state.gpr[3] = 0x12000U;
+    state.gpr[4] = 0x1000U;
+    const auto capped_unicode = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_init_unicode_string_ordinal}, state,
+        long_unicode_memory);
+    check(capped_unicode == KernelDispatchStatus::handled &&
+              long_unicode_memory.read_u16_be(0x12000U, unicode_length) &&
+              unicode_length == 0xfffcU &&
+              long_unicode_memory.read_u16_be(0x12002U, unicode_maximum) &&
+              unicode_maximum == 0xfffeU &&
+              long_unicode_memory.read_u32_be(0x12004U, unicode_buffer) &&
+              unicode_buffer == 0x1000U,
+          "RtlInitUnicodeString caps an oversized string at the largest even representable length");
+
     state.gpr[3] = data_page;
     state.gpr[4] = initial.size();
     state.gpr[14] = 0x1122334455667788ULL;
