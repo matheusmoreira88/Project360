@@ -20,6 +20,12 @@ struct XexBasicCompressionBlock {
     std::uint32_t zero_size{};
 };
 
+struct XexPageDescriptor {
+    std::uint32_t page_count{};
+    std::uint8_t section_type{};
+    std::array<std::byte, 20> digest{};
+};
+
 struct XexImportLibrary {
     std::string name;
     std::uint8_t library_index{};
@@ -35,6 +41,7 @@ struct XexMetadata {
     std::uint32_t header_size{};
     std::uint32_t security_info_offset{};
     std::uint32_t image_size{};
+    std::uint32_t image_flags{};
     std::uint32_t security_load_address{};
     std::uint32_t optional_header_count{};
     std::optional<std::uint32_t> title_id;
@@ -44,6 +51,7 @@ struct XexMetadata {
     std::optional<std::uint16_t> encryption_type;
     std::optional<std::uint16_t> compression_type;
     std::vector<XexBasicCompressionBlock> basic_compression_blocks;
+    std::vector<XexPageDescriptor> page_descriptors;
     std::vector<XexImportLibrary> import_libraries;
 };
 

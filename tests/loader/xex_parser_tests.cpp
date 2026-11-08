@@ -175,6 +175,20 @@ int main() {
               parsed.metadata->compression_type == 0U,
           "execution-info and entry-point headers are decoded as big-endian values");
 
+    auto described_pages = bytes;
+    write_be32(described_pages, 0x100U, 0x19cU);
+    write_be32(described_pages, 0x20cU, 0x10000000U);
+    write_be32(described_pages, 0x280U, 1U);
+    write_be32(described_pages, 0x284U, (6U << 4U) | 1U);
+    for (std::size_t i = 0; i < 20U; ++i) described_pages[0x288U + i] = std::byte{0xa5};
+    const auto parsed_pages = parse_xex2(described_pages);
+    check(parsed_pages && parsed_pages.metadata->image_flags == 0x10000000U &&
+              parsed_pages.metadata->page_descriptors.size() == 1U &&
+              parsed_pages.metadata->page_descriptors[0].page_count == 6U &&
+              parsed_pages.metadata->page_descriptors[0].section_type == 1U &&
+              parsed_pages.metadata->page_descriptors[0].digest[19] == std::byte{0xa5},
+          "XEX security metadata exposes image flags and bounded page descriptors");
+
     auto basic_metadata = bytes;
     write_be32(basic_metadata, 0x380U, 16U);
     write_be16(basic_metadata, 0x386U, 1U);

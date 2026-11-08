@@ -303,9 +303,11 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
 
     std::uint32_t security_size = 0;
     std::uint32_t image_size = 0;
+    std::uint32_t image_flags = 0;
     std::uint32_t security_load_address = 0;
     if (!read_be32(file, security_offset, security_size) ||
         !read_be32(file, static_cast<std::size_t>(security_offset) + 4U, image_size) ||
+        !read_be32(file, static_cast<std::size_t>(security_offset) + 0x10cU, image_flags) ||
         !read_be32(file, static_cast<std::size_t>(security_offset) + 0x110U,
                    security_load_address) ||
         security_size < kSecurityInfoMinimumSize ||
@@ -327,8 +329,26 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
     metadata.header_size = header_size;
     metadata.security_info_offset = security_offset;
     metadata.image_size = image_size;
+    metadata.image_flags = image_flags;
     metadata.security_load_address = security_load_address;
     metadata.optional_header_count = header_count;
+    const auto page_descriptors_offset = static_cast<std::size_t>(security_offset) +
+                                         kSecurityInfoMinimumSize;
+    metadata.page_descriptors.reserve(page_descriptor_count);
+    for (std::uint32_t i = 0; i < page_descriptor_count; ++i) {
+        const auto descriptor_offset = page_descriptors_offset +
+                                       static_cast<std::size_t>(i) * 0x18U;
+        std::uint32_t descriptor_value = 0;
+        if (!read_be32(file, descriptor_offset, descriptor_value)) {
+            return {{}, "XEX2 page descriptor is truncated"};
+        }
+        XexPageDescriptor descriptor{};
+        descriptor.section_type = static_cast<std::uint8_t>(descriptor_value & 0x0fU);
+        descriptor.page_count = descriptor_value >> 4U;
+        std::copy_n(file.begin() + descriptor_offset + 4U, descriptor.digest.size(),
+                    descriptor.digest.begin());
+        metadata.page_descriptors.push_back(descriptor);
+    }
     bool found_execution_info = false;
     bool found_file_format_info = false;
     bool found_import_libraries = false;
