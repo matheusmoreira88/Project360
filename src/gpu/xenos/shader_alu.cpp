@@ -179,6 +179,11 @@ ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     if (!source_2) {
         return {{}, 0.0F, source_2.error};
     }
+    const auto scalar_source = resolve_shader_alu_temporary_source(
+        instruction, ShaderAluSource::source_3, initial_registers);
+    if (!scalar_source) {
+        return {{}, 0.0F, scalar_source.error};
+    }
     const auto vector_result = evaluate_shader_vector_alu(
         instruction, source_1.value, source_2.value,
         initial_registers[instruction.vector_destination]);
@@ -191,9 +196,10 @@ ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
         return {{}, 0.0F, "Overlapping vector/scalar writes to one Xenos register are unsupported"};
     }
 
+    // ADDS/MULS consume the W (`a`) and X (`b`) swizzles of src3.
     const auto scalar_result = instruction.scalar_opcode == 0U
-                                   ? source_1.value[0] + source_1.value[1]
-                                   : source_1.value[0] * source_1.value[1];
+                                   ? scalar_source.value[3] + scalar_source.value[0]
+                                   : scalar_source.value[3] * scalar_source.value[0];
     ShaderAluExecutionResult result{initial_registers, scalar_result, {}};
     result.registers[instruction.vector_destination] = vector_result.destination;
     for (std::size_t lane = 0; lane < 4U; ++lane) {
