@@ -110,6 +110,12 @@ struct VertexIndexTransformReadResult {
     const DrawCommand& command, std::span<const std::uint32_t> indices,
     PrimitiveAssemblyOptions options = {});
 
+// Connects physical index fetching, primitive restart/topology assembly, and
+// the mapped vertex-index transform. This prepares CPU-side geometry only.
+[[nodiscard]] PrimitiveAssemblyResult prepare_draw_geometry(
+    const DrawCommand& command, const memory::GuestMemory& memory,
+    std::span<const std::uint32_t> registers, PrimitiveAssemblyOptions options = {});
+
 // Produces the guest vertex-shader index: add the base offset, retain 24 bits,
 // then clamp to the configured unsigned minimum and maximum.
 [[nodiscard]] std::uint32_t transform_vertex_shader_index(

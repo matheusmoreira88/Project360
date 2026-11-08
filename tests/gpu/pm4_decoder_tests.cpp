@@ -512,6 +512,50 @@ void test_vertex_shader_index_transform() {
           "vertex index transform reads the named low-24-bit Xenos register fields");
     check(!read_vertex_index_transform(std::span<const std::uint32_t>(registers.data(), 8U)),
           "vertex index transform rejects register snapshots that omit the mapped state");
+
+    project360::memory::GuestMemory memory(0x1000U);
+    const std::array<std::byte, 6> triangle_index_bytes{
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
+        std::byte{0x00}, std::byte{0x02}, std::byte{0x00}};
+    check(memory.load(0x100U, triangle_index_bytes),
+          "draw geometry fixture loads indexed triangle data");
+    DrawCommand triangle{};
+    triangle.source = DrawSource::dma;
+    triangle.index_count = 3U;
+    triangle.primitive_type = 4U;
+    triangle.dma_base = 0x100U;
+    triangle.dma_size = 3U;
+    registers[register_index::vgt_indx_offset] = 2U;
+    registers[register_index::vgt_min_vtx_indx] = 0U;
+    registers[register_index::vgt_max_vtx_indx] = 3U;
+    const auto geometry = prepare_draw_geometry(triangle, memory, registers);
+    check(geometry && geometry.topology == PrimitiveTopology::triangles &&
+              geometry.indices == std::vector<std::uint32_t>{2U, 3U, 3U} &&
+              geometry.ranges.size() == 1U && geometry.ranges[0].first_index == 0U &&
+              geometry.ranges[0].index_count == 3U,
+          "draw preparation fetches indexes, assembles topology and applies mapped bounds");
+
+    const std::array<std::byte, 8> restart_index_bytes{
+        std::byte{0x00}, std::byte{0x00}, std::byte{0xff}, std::byte{0xff},
+        std::byte{0x01}, std::byte{0x00}, std::byte{0x02}, std::byte{0x00}};
+    check(memory.load(0x120U, restart_index_bytes),
+          "draw geometry fixture loads primitive-restart data");
+    DrawCommand strip{};
+    strip.source = DrawSource::dma;
+    strip.index_count = 4U;
+    strip.primitive_type = 3U;
+    strip.dma_base = 0x120U;
+    strip.dma_size = 4U;
+    registers[register_index::vgt_indx_offset] = 1U;
+    registers[register_index::vgt_max_vtx_indx] = 0x00ffffffU;
+    const auto restarted = prepare_draw_geometry(strip, memory, registers, {true, 0xffffU});
+    check(restarted && restarted.topology == PrimitiveTopology::line_strip &&
+              restarted.indices == std::vector<std::uint32_t>{1U, 2U, 3U} &&
+              restarted.ranges.size() == 2U && restarted.ranges[0].first_index == 0U &&
+              restarted.ranges[0].index_count == 1U &&
+              restarted.ranges[1].first_index == 1U &&
+              restarted.ranges[1].index_count == 2U,
+          "draw preparation recognizes restart indexes before applying vertex offsets");
 }
 
 void test_vertex_fetch_descriptors_and_memory() {

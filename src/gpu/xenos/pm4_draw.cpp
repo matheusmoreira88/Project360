@@ -338,6 +338,23 @@ PrimitiveAssemblyResult assemble_draw_primitives(
     return result;
 }
 
+PrimitiveAssemblyResult prepare_draw_geometry(
+    const DrawCommand& command, const memory::GuestMemory& memory,
+    std::span<const std::uint32_t> registers, PrimitiveAssemblyOptions options) {
+    const auto fetched = fetch_draw_indices(command, memory);
+    if (!fetched) return primitive_failure(fetched.error);
+
+    auto assembled = assemble_draw_primitives(command, fetched.indices, options);
+    if (!assembled) return assembled;
+
+    const auto transform = read_vertex_index_transform(registers);
+    if (!transform) return primitive_failure(transform.error);
+    for (auto& index : assembled.indices) {
+        index = transform_vertex_shader_index(index, transform.transform);
+    }
+    return assembled;
+}
+
 std::uint32_t transform_vertex_shader_index(std::uint32_t vertex_index,
                                             VertexIndexTransform transform) noexcept {
     constexpr std::uint32_t kVertexIndexMask = 0x00ffffffU;
