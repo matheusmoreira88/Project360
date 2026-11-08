@@ -96,7 +96,8 @@ enum class Opcode {
     branch,
     branch_conditional,
     branch_lr,
-    branch_ctr
+    branch_ctr,
+    return_from_interrupt_doubleword
 };
 
 struct DecodedInstruction {

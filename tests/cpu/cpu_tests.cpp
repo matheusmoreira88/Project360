@@ -88,6 +88,10 @@ std::uint32_t special_register_form(bool to_special, std::uint8_t reg, std::uint
            (xo << 1U) | (record ? 1U : 0U);
 }
 
+std::uint32_t rfid_form(std::uint32_t reserved = 0) {
+    return (19U << 26U) | (18U << 1U) | reserved;
+}
+
 std::uint32_t mtcrf_form(std::uint8_t fxm, std::uint8_t rs, bool record = false,
                          std::uint8_t reserved_instruction_bit11 = 0,
                          std::uint8_t reserved_instruction_bit20 = 0) {
@@ -1277,13 +1281,80 @@ void test_branch_and_faults() {
     put_word(mem, 16, 0U);
     state.pc = 16;
     const auto illegal = cpu::Interpreter{}.step(state, mem);
-    check(illegal.status == cpu::StepStatus::fault && illegal.fault_info &&
+    check(illegal.status == cpu::StepStatus::exception_taken && illegal.fault_info &&
               illegal.fault_info->kind == cpu::FaultKind::illegal_instruction &&
-              illegal.fault_info->pc == 16U && illegal.fault_info->instruction == 0U,
-          "invalid instruction reports its PC and fetched instruction word");
+              illegal.fault_info->pc == 16U && illegal.fault_info->instruction == 0U &&
+              illegal.guest_exception && illegal.guest_exception->vector == 0x700U &&
+              state.srr0 == 16U && state.srr1 == (1ULL << 19U) && state.pc == 0x700U,
+          "invalid instruction records SRR state and transfers to the program vector");
 
     check(!cpu::decode(branch_conditional(0x15U, 0, 4)),
           "reserved conditional branch option is diagnosed");
+}
+
+void test_program_exception_and_rfid_return() {
+    using namespace project360;
+    memory::GuestMemory mem(0x800);
+    constexpr std::uint64_t msr_sf = 1ULL << 63U;
+    constexpr std::uint64_t msr_pr = 1ULL << 14U;
+    constexpr std::uint64_t program_illegal_bit = 1ULL << 19U;
+    constexpr std::uint64_t program_privileged_bit = 1ULL << 18U;
+
+    put_word(mem, 0, 0U); // Illegal instruction enters the program exception vector.
+    put_word(mem, 4, d_form(14, 8, 0, 8));
+    put_word(mem, 0x700, d_form(14, 3, 0, 7));
+    put_word(mem, 0x704, special_register_form(false, 4, 26)); // Read SRR0.
+    put_word(mem, 0x708, special_register_form(false, 5, 27)); // Read SRR1.
+    put_word(mem, 0x70c, special_register_form(true, 6, 26)); // Set return PC.
+    put_word(mem, 0x710, special_register_form(true, 7, 27)); // Set return MSR.
+    put_word(mem, 0x714, rfid_form());
+
+    cpu::CpuState state{};
+    state.msr = msr_sf;
+    state.gpr[6] = 4;
+    state.gpr[7] = msr_sf;
+    const auto result = cpu::Interpreter{}.run(state, mem, 8);
+    check(result.status == cpu::StepStatus::instruction_limit_reached,
+          "program exception handler and rfid return execute within the instruction budget");
+    check(state.gpr[3] == 7 && state.gpr[4] == 0 &&
+              state.gpr[5] == (msr_sf | program_illegal_bit),
+          "exception handler observes fault PC and saved illegal-instruction syndrome");
+    check(state.srr0 == 4 && state.srr1 == msr_sf && state.msr == msr_sf &&
+              state.gpr[8] == 8 && state.pc == 8,
+          "rfid restores the selected SRR0/SRR1 state and resumes the guest program");
+
+    check(cpu::decode(rfid_form()).instruction.opcode ==
+              cpu::Opcode::return_from_interrupt_doubleword &&
+              !cpu::decode(rfid_form(1U << 6U)) && !cpu::decode(rfid_form(1U)),
+          "rfid decodes only with reserved fields and Rc clear");
+
+    memory::GuestMemory privileged_mem(4);
+    put_word(privileged_mem, 0, rfid_form());
+    cpu::CpuState privileged_state{};
+    privileged_state.msr = msr_sf | msr_pr;
+    const auto privileged = cpu::Interpreter{}.step(privileged_state, privileged_mem);
+    check(privileged.status == cpu::StepStatus::exception_taken && privileged.fault_info &&
+              privileged.fault_info->kind == cpu::FaultKind::privileged_instruction &&
+              privileged_state.srr0 == 0 && privileged_state.srr1 ==
+                  (msr_sf | msr_pr | program_privileged_bit) && privileged_state.pc == 0x700,
+          "problem-state rfid causes a privileged-instruction program exception");
+
+    put_word(privileged_mem, 0, special_register_form(false, 3, 26));
+    cpu::CpuState privileged_spr_state{};
+    privileged_spr_state.msr = msr_sf | msr_pr;
+    const auto privileged_spr = cpu::Interpreter{}.step(privileged_spr_state, privileged_mem);
+    check(privileged_spr.status == cpu::StepStatus::exception_taken &&
+              privileged_spr.fault_info &&
+              privileged_spr.fault_info->kind == cpu::FaultKind::privileged_instruction &&
+              privileged_spr_state.pc == 0x700,
+          "problem-state access to SRR0 enters the privileged-instruction exception vector");
+
+    put_word(privileged_mem, 0, rfid_form());
+    cpu::CpuState sf32_state{};
+    sf32_state.srr0 = 0x12345678;
+    const auto sf32_return = cpu::Interpreter{}.step(sf32_state, privileged_mem);
+    check(sf32_return.status == cpu::StepStatus::executed && sf32_state.pc == 0x12345678,
+          "rfid uses the low 32-bit return address when restored MSR.SF is clear");
 }
 
 void test_compare_immediates() {
@@ -1715,6 +1786,7 @@ int main() {
     test_immediate_logic_instructions();
     test_xor_and_immediate_logic_instructions();
     test_branch_and_faults();
+    test_program_exception_and_rfid_return();
     test_compare_immediates();
     test_compare_registers();
     test_condition_register_transfers();

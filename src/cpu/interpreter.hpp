@@ -10,15 +10,23 @@
 
 namespace project360::cpu {
 
-enum class StepStatus { executed, instruction_limit_reached, fault };
+enum class StepStatus { executed, instruction_limit_reached, fault, exception_taken };
 
 enum class FaultKind {
     illegal_instruction,
+    privileged_instruction,
     instruction_alignment,
     instruction_access,
     data_alignment,
     data_access,
     interpreter_internal
+};
+
+enum class GuestExceptionKind { program };
+
+struct GuestException {
+    GuestExceptionKind kind{};
+    std::uint64_t vector{};
 };
 
 struct ExecutionFault {
@@ -32,6 +40,7 @@ struct StepResult {
     StepStatus status{StepStatus::executed};
     std::string message;
     std::optional<ExecutionFault> fault_info;
+    std::optional<GuestException> guest_exception;
 };
 
 class Interpreter {

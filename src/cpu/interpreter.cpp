@@ -14,12 +14,74 @@ namespace {
 constexpr std::uint32_t kXerSummaryOverflow = 0x80000000U;
 constexpr std::uint32_t kXerOverflow = 0x40000000U;
 constexpr std::uint32_t kXerCarry = 0x20000000U;
+constexpr std::uint64_t kProgramExceptionVector = 0x700U;
+
+constexpr std::uint64_t powerpc_bit(unsigned bit) {
+    return std::uint64_t{1} << (63U - bit);
+}
+
+std::uint64_t program_exception_srr1(std::uint64_t msr, unsigned cause_bit) {
+    std::uint64_t saved = 0;
+    for (unsigned bit = 0; bit < 64U; ++bit) {
+        if (bit <= 32U || (bit >= 37U && bit <= 41U) || bit >= 48U) {
+            saved |= msr & powerpc_bit(bit);
+        }
+    }
+    return saved | powerpc_bit(cause_bit);
+}
+
+StepResult take_program_exception(CpuState& state, FaultKind cause, unsigned syndrome_bit,
+                                  std::uint32_t instruction, std::string message) {
+    const auto fault_pc = state.pc;
+    state.srr0 = fault_pc;
+    state.srr1 = program_exception_srr1(state.msr, syndrome_bit);
+
+    // The base OEA entry clears translation, interrupt, floating-point, trace,
+    // privilege, and recoverable-interrupt state; ME and current HV are retained.
+    state.msr = powerpc_bit(0U) | (state.msr & powerpc_bit(3U)) |
+                (state.msr & powerpc_bit(51U));
+    state.pc = kProgramExceptionVector;
+
+    return {StepStatus::exception_taken, std::move(message),
+            ExecutionFault{cause, fault_pc, instruction, std::nullopt},
+            GuestException{GuestExceptionKind::program, kProgramExceptionVector}};
+}
+
+std::uint64_t restore_msr_from_srr1(std::uint64_t old_msr, std::uint64_t srr1) {
+    std::uint64_t restored = 0;
+    const auto copy_range = [&](unsigned first, unsigned last) {
+        for (unsigned bit = first; bit <= last; ++bit) {
+            restored |= srr1 & powerpc_bit(bit);
+        }
+    };
+    copy_range(1U, 2U);
+    copy_range(4U, 32U);
+    copy_range(37U, 41U);
+    copy_range(49U, 50U);
+    copy_range(52U, 57U);
+    copy_range(60U, 63U);
+
+    const auto get_bit = [](std::uint64_t value, unsigned bit) {
+        return (value & powerpc_bit(bit)) != 0U;
+    };
+    const auto set_bit = [&](unsigned bit, bool value) {
+        if (value) restored |= powerpc_bit(bit);
+    };
+    set_bit(0U, get_bit(srr1, 0U) || get_bit(srr1, 1U));
+    set_bit(3U, get_bit(old_msr, 3U) && get_bit(srr1, 3U));
+    set_bit(48U, get_bit(srr1, 48U) || get_bit(srr1, 49U));
+    set_bit(51U, (get_bit(old_msr, 3U) && get_bit(srr1, 51U)) ||
+                     (!get_bit(old_msr, 3U) && get_bit(old_msr, 51U)));
+    set_bit(58U, get_bit(srr1, 58U) || get_bit(srr1, 49U));
+    set_bit(59U, get_bit(srr1, 59U) || get_bit(srr1, 49U));
+    return restored;
+}
 
 StepResult fault(FaultKind kind, std::uint64_t pc, std::string message,
                  std::optional<std::uint32_t> instruction = std::nullopt,
                  std::optional<std::uint64_t> effective_address = std::nullopt) {
     return {StepStatus::fault, std::move(message),
-            ExecutionFault{kind, pc, instruction, effective_address}};
+            ExecutionFault{kind, pc, instruction, effective_address}, std::nullopt};
 }
 
 struct AddResult {
@@ -129,8 +191,9 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
     }
     const auto decoded = decode(word);
     if (!decoded) {
-        return fault(FaultKind::illegal_instruction, state.pc,
-                     "PC 0x" + std::to_string(state.pc) + ": " + decoded.error, word);
+        return take_program_exception(state, FaultKind::illegal_instruction, 44U, word,
+                                       "PC 0x" + std::to_string(state.pc) + ": " +
+                                           decoded.error);
     }
 
     const auto ins = decoded.instruction;
@@ -549,18 +612,32 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         break;
     }
     case Opcode::move_from_special_register:
+        if ((ins.spr == 26U || ins.spr == 27U) &&
+            (state.msr & powerpc_bit(49U)) != 0U) {
+            return take_program_exception(state, FaultKind::privileged_instruction, 45U, word,
+                                           "privileged mfspr access to SRR0/SRR1");
+        }
         switch (ins.spr) {
         case 1U: state.gpr[ins.rt] = state.xer; break;
         case 8U: state.gpr[ins.rt] = state.lr; break;
         case 9U: state.gpr[ins.rt] = state.ctr; break;
+        case 26U: state.gpr[ins.rt] = state.srr0; break;
+        case 27U: state.gpr[ins.rt] = state.srr1; break;
         default: return internal_fault("unsupported mfspr register");
         }
         break;
     case Opcode::move_to_special_register:
+        if ((ins.spr == 26U || ins.spr == 27U) &&
+            (state.msr & powerpc_bit(49U)) != 0U) {
+            return take_program_exception(state, FaultKind::privileged_instruction, 45U, word,
+                                           "privileged mtspr access to SRR0/SRR1");
+        }
         switch (ins.spr) {
         case 1U: state.xer = static_cast<std::uint32_t>(state.gpr[ins.rt]); break;
         case 8U: state.lr = state.gpr[ins.rt]; break;
         case 9U: state.ctr = state.gpr[ins.rt]; break;
+        case 26U: state.srr0 = state.gpr[ins.rt]; break;
+        case 27U: state.srr1 = state.gpr[ins.rt]; break;
         default: return internal_fault("unsupported mtspr register");
         }
         break;
@@ -745,6 +822,18 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (evaluate_branch_condition(state, ins.bo, ins.bi)) next_pc = target;
         break;
     }
+    case Opcode::return_from_interrupt_doubleword:
+        if ((state.msr & powerpc_bit(49U)) != 0U) {
+            return take_program_exception(state, FaultKind::privileged_instruction, 45U, word,
+                                           "privileged rfid instruction");
+        }
+        state.msr = restore_msr_from_srr1(state.msr, state.srr1);
+        if ((state.msr & powerpc_bit(0U)) != 0U) {
+            next_pc = state.srr0 & ~std::uint64_t{3};
+        } else {
+            next_pc = state.srr0 & 0xfffffffcULL;
+        }
+        break;
     }
     state.pc = next_pc;
     return {};

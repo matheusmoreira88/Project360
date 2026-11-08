@@ -174,6 +174,14 @@ DecodeResult decode(std::uint32_t word) {
     }
     case 19: {
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
+        if (xo10 == 18U) {
+            constexpr std::uint32_t reserved_mask = (0x7fffU << 6U) | 1U;
+            if ((word & reserved_mask) != 0U) {
+                return {{}, "rfid reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::return_from_interrupt_doubleword;
+            return {ins, {}};
+        }
         switch (xo10) {
         case 257U: ins.cr_logical_operation = CrLogicalOperation::and_; break;
         case 129U: ins.cr_logical_operation = CrLogicalOperation::and_complement; break;
@@ -230,7 +238,8 @@ DecodeResult decode(std::uint32_t word) {
                 return {{}, "mfspr/mtspr record bit is reserved"};
             }
             ins.spr = static_cast<std::uint16_t>((ins.rb << 5U) | ins.ra);
-            if (ins.spr != 1U && ins.spr != 8U && ins.spr != 9U) {
+            if (ins.spr != 1U && ins.spr != 8U && ins.spr != 9U && ins.spr != 26U &&
+                ins.spr != 27U) {
                 return {{}, "unsupported special-purpose register " + std::to_string(ins.spr)};
             }
             ins.opcode = xo10 == 339U ? Opcode::move_from_special_register

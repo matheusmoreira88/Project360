@@ -8,9 +8,11 @@ The first build has three small layers:
 
 `project360_core` contains reusable emulator code, `project360` is the smoke-program executable, and `project360_tests` is a standalone CTest target. Frontends, guest loaders and platform graphics/audio APIs are intentionally not dependencies of the CPU core.
 
-## Fault reporting boundary
+## Program exceptions and fault reporting
 
-`StepResult` attaches an `ExecutionFault` to interpreter faults. The record classifies illegal instructions, instruction alignment/access faults, data alignment/access faults, and internal consistency errors. It includes the faulting PC, the fetched instruction word when available, and the effective data address when applicable. This is diagnostic context for tests and a future debugger; the interpreter does not yet save SRR/MSR state or transfer control to guest exception vectors.
+`StepResult` attaches an `ExecutionFault` to interpreter faults. The record classifies illegal and privileged instructions, instruction alignment/access faults, data alignment/access faults, and internal consistency errors; it includes the faulting PC, fetched word when available, and effective address when applicable. Illegal and privileged instructions enter the PowerPC program exception vector at `0x700`, save SRR0/SRR1, and report a `GuestException`. The current implementation handles the illegal-instruction and privileged-instruction syndrome bits, and `rfid` restores a subset of MSR state and resumes at SRR0. SRR0/SRR1 `mfspr`/`mtspr` transfers are restricted when modeled MSR.PR is set.
+
+This is a narrow PowerPC exception subset, not the Xenon exception system: data/instruction access and alignment faults remain host diagnostics, and other exception classes, full MSR behavior, hypervisor/LPES configuration and interrupt delivery are not implemented. Exception save/restore follows the public [PowerPC Operating Environment Architecture, Book III v2.02](https://powerpc.dev/general/PPC_Vers202_Book3_public.pdf) for this limited case; `rfid` encoding and behavior are cross-checked against IBM's [instruction reference](https://www.ibm.com/docs/en/aix/7.3.0?topic=set-rfid-return-from-interrupt-double-word-instruction).
 
 ## Integer compare and branch references
 
