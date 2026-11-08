@@ -6,6 +6,7 @@
 #include "gpu/xenos/shader_alu.hpp"
 #include "gpu/xenos/shader_execution.hpp"
 #include "gpu/xenos/texture_fetch.hpp"
+#include "gpu/xenos/texture_memory.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
@@ -2069,6 +2070,104 @@ void test_texture_fetch_constant_metadata() {
           "unsupported Xenos texture storage formats fail explicitly");
 }
 
+void test_tiled_texture_block_addressing_and_reads() {
+    using namespace project360::gpu::xenos;
+    const auto check_offset = [](std::uint32_t x, std::uint32_t y,
+                                 std::uint32_t width, std::uint32_t height,
+                                 std::uint32_t pitch, std::uint8_t bytes_per_block,
+                                 std::uint64_t expected, const char* message) {
+        const auto result = xenos_tiled_2d_block_offset(
+            x, y, width, height, pitch, bytes_per_block);
+        check(result && result.byte_offset == expected, message);
+    };
+
+    check_offset(0U, 0U, 64U, 64U, 64U, 4U, 0U,
+                 "tiled 2D addressing starts the first block at the subresource base");
+    check_offset(1U, 0U, 64U, 64U, 64U, 4U, 4U,
+                 "tiled 2D addressing places adjacent X blocks contiguously");
+    check_offset(0U, 1U, 64U, 64U, 64U, 4U, 16U,
+                 "tiled 2D addressing interleaves the least significant Y bit");
+    check_offset(0U, 2U, 64U, 64U, 64U, 4U, 256U,
+                 "tiled 2D addressing maps inner microtile rows");
+    check_offset(8U, 0U, 64U, 64U, 64U, 4U, 64U,
+                 "tiled 2D addressing applies the X pipe selection");
+    check_offset(0U, 8U, 64U, 64U, 64U, 4U, 1152U,
+                 "tiled 2D addressing applies the Y pipe selection");
+    check_offset(0U, 16U, 64U, 64U, 64U, 4U, 2048U,
+                 "tiled 2D addressing applies bank selection");
+    check_offset(32U, 0U, 64U, 64U, 64U, 4U, 4096U,
+                 "tiled 2D addressing advances to the next macro tile in X");
+    check_offset(0U, 32U, 64U, 64U, 64U, 4U, 8192U,
+                 "tiled 2D addressing advances by aligned pitch between tile rows");
+
+    for (const auto bytes_per_block : std::array<std::uint8_t, 5>{1U, 2U, 4U, 8U, 16U}) {
+        const std::uint32_t period = bytes_per_block == 1U ? 128U
+                                     : bytes_per_block == 2U ? 64U
+                                                             : 32U;
+        std::vector<bool> seen(static_cast<std::size_t>(period) * period, false);
+        bool valid_permutation = true;
+        for (std::uint32_t y = 0U; y < period; ++y) {
+            for (std::uint32_t x = 0U; x < period; ++x) {
+                const auto address = xenos_tiled_2d_block_offset(
+                    x, y, period, period, period, bytes_per_block);
+                if (!address || address.byte_offset % bytes_per_block != 0U) {
+                    valid_permutation = false;
+                    continue;
+                }
+                const auto index = static_cast<std::size_t>(
+                    address.byte_offset / bytes_per_block);
+                if (index >= seen.size() || seen[index]) {
+                    valid_permutation = false;
+                    continue;
+                }
+                seen[index] = true;
+            }
+        }
+        check(valid_permutation &&
+                  std::all_of(seen.begin(), seen.end(), [](bool present) { return present; }),
+              "each Xenos format period maps bijectively with no block aliases");
+    }
+
+    check(!xenos_tiled_2d_block_offset(0U, 0U, 1U, 1U, 31U, 4U) &&
+              !xenos_tiled_2d_block_offset(1U, 0U, 1U, 1U, 32U, 4U) &&
+              !xenos_tiled_2d_block_offset(0U, 0U, 1U, 1U, 32U, 12U),
+          "tiled texture addressing rejects bad pitch, out-of-range blocks and unsupported size");
+
+    project360::memory::GuestMemory memory(0x5000U);
+    constexpr std::uint64_t rgba_base = 0x100U;
+    constexpr std::array<std::byte, 4> rgba_bytes{
+        std::byte{0x12}, std::byte{0x34}, std::byte{0x56}, std::byte{0x78}};
+    check(memory.load(rgba_base + 4096U, rgba_bytes),
+          "tiled RGBA fixture writes at its known macro-tile address");
+    const auto rgba_block = read_xenos_tiled_2d_block(
+        rgba_base, 32U, 0U, 64U, 64U, 64U, 4U, memory);
+    check(rgba_block && rgba_block.physical_address == rgba_base + 4096U &&
+              rgba_block.byte_count == rgba_bytes.size() &&
+              std::equal(rgba_bytes.begin(), rgba_bytes.end(), rgba_block.bytes.begin()),
+          "tiled texture read returns raw bytes from the computed physical block address");
+
+    constexpr std::uint64_t dxt_base = 0x300U;
+    constexpr std::array<std::byte, 8> dxt_bytes{
+        std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
+        std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8}};
+    check(memory.load(dxt_base + 16U, dxt_bytes),
+          "tiled DXT fixture writes a full compressed storage block");
+    const auto dxt_block = read_xenos_tiled_2d_block(
+        dxt_base, 0U, 1U, 8U, 8U, 32U, 8U, memory);
+    check(dxt_block && dxt_block.physical_address == dxt_base + 16U &&
+              dxt_block.byte_count == dxt_bytes.size() &&
+              std::equal(dxt_bytes.begin(), dxt_bytes.end(), dxt_block.bytes.begin()),
+          "tiled texture read preserves all bytes of one compressed block");
+
+    const auto out_of_memory = read_xenos_tiled_2d_block(
+        0x4fffU, 0U, 0U, 1U, 1U, 32U, 4U, memory);
+    const auto overflowing = read_xenos_tiled_2d_block(
+        std::numeric_limits<std::uint64_t>::max() - 8U, 32U, 0U, 64U, 64U, 64U,
+        4U, memory);
+    check(!out_of_memory && !overflowing,
+          "tiled texture block reads reject physical bounds and address overflow");
+}
+
 void test_vfetch_instruction_and_attribute_range() {
     using namespace project360::gpu::xenos;
     project360::memory::GuestMemory memory(0x1000U);
@@ -2422,6 +2521,7 @@ int main() {
     test_vertex_shader_index_transform();
     test_vertex_fetch_descriptors_and_memory();
     test_texture_fetch_constant_metadata();
+    test_tiled_texture_block_addressing_and_reads();
     test_vfetch_instruction_and_attribute_range();
     test_wait_for_idle_is_synchronous_barrier();
     if (failures != 0) {
