@@ -240,6 +240,33 @@ int main() {
                   << (xenos_triangle ? "" : ": " + xenos_triangle.error) << '\n';
         return 1;
     }
+    auto negative_d3d_depth_vertices = vertex_batch.vertices;
+    for (auto& vertex : negative_d3d_depth_vertices) {
+        vertex.position[2] = -0.5F * vertex.position[3];
+    }
+    const auto d3d_clipped_depth = result.context->render_offscreen_xenos_geometry(
+        negative_d3d_depth_vertices, 0U, prepared_geometry, scissor.rectangle,
+        viewport.viewport);
+    if (!d3d_clipped_depth || d3d_clipped_depth.green_pixel_count != 0U) {
+        std::cerr << "FAIL: D3D 0-to-W clip mode rendered vertices with negative depth\n";
+        return 1;
+    }
+    auto gl_clip_registers = draw_dispatch.draws[0].register_snapshot;
+    gl_clip_registers[register_index::pa_cl_clip_cntl] &= ~(1U << 19U);
+    const auto gl_clip_viewport = read_xenos_viewport(gl_clip_registers);
+    if (!gl_clip_viewport || !gl_clip_viewport.viewport.remap_z_from_gl_clip_space) {
+        std::cerr << "FAIL: Xenos -W-to-W clip mode did not request depth remapping"
+                  << (gl_clip_viewport ? "" : ": " + gl_clip_viewport.error) << '\n';
+        return 1;
+    }
+    const auto gl_clip_draw = result.context->render_offscreen_xenos_geometry(
+        negative_d3d_depth_vertices, 0U, prepared_geometry, scissor.rectangle,
+        gl_clip_viewport.viewport);
+    if (!gl_clip_draw || gl_clip_draw.green_pixel_count == 0U) {
+        std::cerr << "FAIL: Xenos -W-to-W depth did not survive conversion to Vulkan clip space"
+                  << (gl_clip_draw ? "" : ": " + gl_clip_draw.error) << '\n';
+        return 1;
+    }
     auto malformed_geometry = prepared_geometry;
     malformed_geometry.ranges[0].index_count = 2U;
     const auto malformed_draw = result.context->render_offscreen_xenos_geometry(

@@ -89,9 +89,6 @@ XenosViewportResult read_xenos_viewport(std::span<const std::uint32_t> register_
     if ((clip_control & clip_disabled_mask) != 0U) {
         return {{}, "Xenos viewport path does not support clipping-disabled draws"};
     }
-    if ((clip_control & dx_clip_space_mask) == 0U) {
-        return {{}, "Xenos viewport path requires Direct3D 0-to-W clip space"};
-    }
     if ((clip_control & (user_clip_enable_mask | user_clip_cull_only_mask)) != 0U) {
         return {{}, "Xenos user clip planes are unsupported by the viewport path"};
     }
@@ -149,7 +146,8 @@ XenosViewportResult read_xenos_viewport(std::span<const std::uint32_t> register_
     const auto extent_y = std::abs(scale_y);
     XenosViewport viewport{offset_x - extent_x, offset_y - extent_y,
                            extent_x * 2.0F, extent_y * 2.0F,
-                           std::signbit(scale_x), std::signbit(scale_y)};
+                           std::signbit(scale_x), std::signbit(scale_y),
+                           (clip_control & dx_clip_space_mask) == 0U};
     if (!std::isfinite(viewport.x) || !std::isfinite(viewport.y) ||
         !std::isfinite(viewport.width) || !std::isfinite(viewport.height)) {
         return {{}, "Xenos viewport conversion exceeds finite host coordinates"};

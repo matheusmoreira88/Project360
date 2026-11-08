@@ -1131,6 +1131,9 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_xenos_triangles(
         auto position = vertex.position;
         if (viewport && viewport->flip_x) position[0] = -position[0];
         if (viewport && viewport->flip_y) position[1] = -position[1];
+        if (viewport && viewport->remap_z_from_gl_clip_space) {
+            position[2] = position[2] * 0.5F + position[3] * 0.5F;
+        }
         backend_vertices.push_back({position, vertex.interpolators[color_interpolator]});
     }
     return render_offscreen_indexed_triangles(backend_vertices, indices, scissor, viewport);

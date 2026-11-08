@@ -30,6 +30,7 @@ struct XenosViewport {
     float height{};
     bool flip_x{};
     bool flip_y{};
+    bool remap_z_from_gl_clip_space{};
 
     friend constexpr bool operator==(const XenosViewport&, const XenosViewport&) = default;
 };
@@ -47,8 +48,8 @@ struct XenosViewportResult {
     std::span<const std::uint32_t> register_file, std::uint32_t target_width,
     std::uint32_t target_height);
 
-// Resolves the clipping-enabled X/Y viewport subset used by the current Vulkan
-// path. Depth transforms, user clip planes, and clipping-disabled draws fail.
+// Resolves the clipping-enabled viewport subset used by the current Vulkan
+// path. Z viewport transforms, user clip planes, and clipping-disabled draws fail.
 [[nodiscard]] XenosViewportResult read_xenos_viewport(
     std::span<const std::uint32_t> register_file);
 

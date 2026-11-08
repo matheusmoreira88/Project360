@@ -1330,6 +1330,15 @@ void test_xenos_viewport_register_resolution() {
                                                            false, true},
           "Xenos OGL pixel center omits the D3D half-pixel shift");
 
+    registers[register_index::pa_cl_clip_cntl] = 0U;
+    const auto symmetric_gl_clip = read_xenos_viewport(registers);
+    check(symmetric_gl_clip && symmetric_gl_clip.viewport.remap_z_from_gl_clip_space &&
+              symmetric_gl_clip.viewport.x == 3.0F &&
+              symmetric_gl_clip.viewport.y == 0.5F &&
+              symmetric_gl_clip.viewport.width == 12.0F &&
+              symmetric_gl_clip.viewport.height == 12.0F,
+          "Xenos symmetric -W-to-W depth mode requests Vulkan's 0-to-W remap");
+
     registers[register_index::pa_cl_vte_cntl] |= 1U << 4U;
     check(!read_xenos_viewport(registers),
           "Xenos viewport reports unsupported Z transforms instead of dropping them");
