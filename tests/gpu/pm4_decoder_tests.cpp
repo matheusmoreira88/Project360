@@ -2419,12 +2419,26 @@ void test_tiled_texture_block_addressing_and_reads() {
                   std::equal(descriptor_dxt_bytes.begin(), descriptor_dxt_bytes.end(),
                              descriptor_block.bytes.begin()),
               "descriptor-backed DXT1 read converts texels into 4x4 storage blocks");
-        const auto unsupported_dxt_sample = sample_xenos_tiled_2d_texture_point(
-            dxt_fetch.constant, 32U, 4U, memory);
-        check(!unsupported_dxt_sample &&
-                  unsupported_dxt_sample.error.find("Numeric fetch conversion") !=
-                      std::string::npos,
-              "point sampler reports unsupported numeric conversion for DXT blocks");
+        auto dxt_point_fetch = dxt_fetch.constant;
+        dxt_point_fetch.component_swizzle = static_cast<std::uint16_t>(
+            0U | (1U << 3U) | (2U << 6U) | (3U << 9U));
+        const auto dxt_point_sample = sample_xenos_tiled_2d_texture_point(
+            dxt_point_fetch, 32U, 4U, memory);
+        const auto decoded_dxt = decode_xenos_texture_block_rgba8(
+            dxt_fetch.constant.format, descriptor_dxt_bytes);
+        check(dxt_point_sample && decoded_dxt &&
+                  std::abs(dxt_point_sample.value.r -
+                           decoded_dxt.texels[0].r / 255.0F) < 0.00001F &&
+                  std::abs(dxt_point_sample.value.g -
+                           decoded_dxt.texels[0].g / 255.0F) < 0.00001F,
+              "point sampler decodes and normalizes the selected DXT1 block texel");
+        auto signed_dxt_fetch = dxt_point_fetch;
+        signed_dxt_fetch.sign_modes[0] = 1U;
+        const auto signed_dxt_sample = sample_xenos_tiled_2d_texture_point(
+            signed_dxt_fetch, 32U, 4U, memory);
+        check(!signed_dxt_sample &&
+                  signed_dxt_sample.error.find("compressed DXT") != std::string::npos,
+              "point sampler reports unsupported signed interpretation of compressed DXT");
     }
 
     const auto stacked_fetch = make_fetch(6U, 0x1000U, 64U, 64U, 2U, true, true);

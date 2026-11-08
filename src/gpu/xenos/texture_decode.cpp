@@ -209,9 +209,11 @@ TextureFloatBlockDecodeResult decode_xenos_texture_fetch_block_float(
     std::uint8_t format, const TextureFetchConstant& fetch,
     const TextureBlockDecodeResult& decoded) {
     if (!decoded) return {{}, 0U, decoded.error};
-    if (format != 6U) {
+    const bool is_rgba8 = format == 6U;
+    const bool is_dxt = format >= 18U && format <= 20U;
+    if (!is_rgba8 && !is_dxt) {
         return {{}, 0U,
-                "Numeric fetch conversion is implemented only for Xenos 8:8:8:8 format"};
+                "Numeric fetch conversion is implemented only for Xenos 8:8:8:8 and DXT1/3/5"};
     }
     if (fetch.number_format > 1U) {
         return {{}, 0U, "Texture fetch number format is unsupported"};
@@ -237,6 +239,10 @@ TextureFloatBlockDecodeResult decode_xenos_texture_fetch_block_float(
                                                                     : unsigned_value;
                 break;
             case 1U: { // Signed two's-complement.
+                if (!is_rgba8) {
+                    return {{}, 0U,
+                            "Two's-complement fetch mode is unsupported for compressed DXT data"};
+                }
                 const auto signed_value = channels[component] < 0x80U
                                               ? static_cast<std::int32_t>(channels[component])
                                               : static_cast<std::int32_t>(channels[component]) -
