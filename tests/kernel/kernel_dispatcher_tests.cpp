@@ -305,6 +305,24 @@ int main() {
               state.gpr[4] == initial.size() && state.gpr[14] == 0x1122334455667788ULL,
           "successful void import returns through LR and preserves argument/nonvolatile GPRs");
 
+    state.gpr[3] = 0x1122334455667788ULL;
+    state.lr = 0x1247U;
+    state.pc = 0x800110U;
+    const auto swapped_ulong = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_ulong_byte_swap_ordinal}, state, memory);
+    check(swapped_ulong == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0x88776655U && state.pc == 0x1244U,
+          "RtlUlongByteSwap reverses the low four bytes and returns a zero-extended ULONG");
+
+    state.gpr[3] = 0x112233445566abcdULL;
+    state.lr = 0x1257U;
+    state.pc = 0x800120U;
+    const auto swapped_ushort = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_ushort_byte_swap_ordinal}, state, memory);
+    check(swapped_ushort == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0xcdabU && state.pc == 0x1254U,
+          "RtlUshortByteSwap reverses the low two bytes and returns a zero-extended USHORT");
+
     state.gpr[3] = data_page;
     state.gpr[4] = initial.size();
     state.gpr[5] = 0x1234abU;

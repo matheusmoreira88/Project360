@@ -301,6 +301,12 @@ int main() {
     write_be32(loadable_pe, 0x270U, 0x4800004dU); // bl import thunk at +0x4c.
     write_be32(loadable_pe, 0x274U, (32U << 26U) | (7U << 21U) | 0x50a0U);
     write_be32(loadable_pe, 0x278U, (32U << 26U) | (8U << 21U) | 0x50a4U);
+    write_be32(loadable_pe, 0x27cU, (14U << 26U) | (3U << 21U) | 0x1234U);
+    write_be32(loadable_pe, 0x280U, 0x48000041U); // bl import thunk at +0x40.
+    write_be32(loadable_pe, 0x284U, (14U << 26U) | (9U << 21U) | (3U << 16U));
+    write_be32(loadable_pe, 0x288U, (14U << 26U) | (3U << 21U) | 0x1234U);
+    write_be32(loadable_pe, 0x28cU, 0x48000039U); // bl import thunk at +0x38.
+    write_be32(loadable_pe, 0x290U, (14U << 26U) | (10U << 21U) | (3U << 16U));
     write_be32(loadable_pe, 0x2a0U, 0x0100011cU); // thunk, library 0, ordinal 284
     write_be32(loadable_pe, 0x2a4U, 0x0100011dU); // thunk, library 0, ordinal 285
     write_be32(loadable_pe, 0x2a8U, 0x0100010dU); // thunk, library 0, ordinal 269
@@ -309,11 +315,13 @@ int main() {
     write_be32(loadable_pe, 0x2b4U, 0x01000140U); // thunk, library 0, ordinal 320
     write_be32(loadable_pe, 0x2b8U, 0x01000121U); // thunk, library 0, ordinal 289
     write_be32(loadable_pe, 0x2bcU, 0x01000122U); // thunk, library 0, ordinal 290
+    write_be32(loadable_pe, 0x2c0U, 0x01000133U); // thunk, library 0, ordinal 307
+    write_be32(loadable_pe, 0x2c4U, 0x0100013eU); // thunk, library 0, ordinal 318
     auto loadable_xex = make_xex2();
     write_be32(loadable_xex, 0x444U, 0x830a0U);
-    write_be32(loadable_xex, 0x400U, 0x64U);
-    write_be32(loadable_xex, 0x41cU, 0x48U);
-    write_be16(loadable_xex, 0x442U, 8U);
+    write_be32(loadable_xex, 0x400U, 0x6cU);
+    write_be32(loadable_xex, 0x41cU, 0x50U);
+    write_be16(loadable_xex, 0x442U, 10U);
     write_be32(loadable_xex, 0x448U, 0x830a4U);
     write_be32(loadable_xex, 0x44cU, 0x830a8U);
     write_be32(loadable_xex, 0x450U, 0x830acU);
@@ -321,6 +329,8 @@ int main() {
     write_be32(loadable_xex, 0x458U, 0x830b4U);
     write_be32(loadable_xex, 0x45cU, 0x830b8U);
     write_be32(loadable_xex, 0x460U, 0x830bcU);
+    write_be32(loadable_xex, 0x464U, 0x830c0U);
+    write_be32(loadable_xex, 0x468U, 0x830c4U);
     loadable_xex.insert(loadable_xex.end(), loadable_pe.begin(), loadable_pe.end());
     project360::memory::GuestMemory guest_memory(0x5000U);
     const std::array<std::byte, 8> kernel_destination_seed{
@@ -343,7 +353,7 @@ int main() {
               loaded.image->entry_point == 0x83000U && loaded.image->mapped_size == 0x2000U,
           "unencrypted uncompressed XEX2 maps decoded Xbox PE image pages");
     check(loaded && loaded.image->xex.import_libraries.size() == 1U &&
-              loaded.image->xex.import_libraries[0].import_types.size() == 8U &&
+              loaded.image->xex.import_libraries[0].import_types.size() == 10U &&
               loaded.image->xex.import_libraries[0].import_types[0] == 1U &&
               loaded.image->xex.import_libraries[0].import_ordinals[0] == 284U &&
               loaded.image->xex.import_libraries[0].import_ordinals[1] == 285U &&
@@ -352,7 +362,9 @@ int main() {
               loaded.image->xex.import_libraries[0].import_ordinals[4] == 298U &&
               loaded.image->xex.import_libraries[0].import_ordinals[5] == 320U &&
               loaded.image->xex.import_libraries[0].import_ordinals[6] == 289U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[7] == 290U,
+              loaded.image->xex.import_libraries[0].import_ordinals[7] == 290U &&
+              loaded.image->xex.import_libraries[0].import_ordinals[8] == 307U &&
+              loaded.image->xex.import_libraries[0].import_ordinals[9] == 318U,
           "loader decodes function-thunk records and Xbox kernel ordinals from PE bytes");
     std::uint32_t loaded_instruction = 0;
     check(guest_memory.fetch_u32_be(0x83000U, loaded_instruction) &&
@@ -463,7 +475,7 @@ int main() {
                   invoke_unicode_import.status == project360::cpu::StepStatus::executed &&
                   read_unicode_header.status == project360::cpu::StepStatus::executed &&
                   read_unicode_buffer.status == project360::cpu::StepStatus::executed,
-              "loaded XEX program calls eight imported kernel routines and resumes");
+              "loaded XEX program calls ten imported kernel routines and resumes");
         check(fill_visible,
               "XEX RtlFillMemory thunk fills guest bytes using the Xenon argument registers");
         check(ulong_pattern_visible,
@@ -498,14 +510,20 @@ int main() {
               "zero XEX instruction budget stops without changing guest state");
         const auto bounded_run = executor.run(bounded_cpu, guest_memory, 39U);
         check(bounded_run.instructions_executed == 39U &&
-                  bounded_run.stop.status ==
+              bounded_run.stop.status ==
                       project360::cpu::StepStatus::instruction_limit_reached &&
                   bounded_cpu.pc == 0x8307cU && bounded_cpu.gpr[7] == 0x00040006U &&
                   bounded_cpu.gpr[8] == 0x5060U,
-              "bounded XEX execution calls all eight imports and stops exactly at its instruction budget");
+              "bounded XEX execution calls the string initializers and stops at its instruction budget");
+        const auto byte_swap_run = executor.run(bounded_cpu, guest_memory, 8U);
+        check(byte_swap_run.instructions_executed == 8U &&
+                  byte_swap_run.stop.status ==
+                      project360::cpu::StepStatus::instruction_limit_reached &&
+                  bounded_cpu.gpr[9] == 0x34120000U && bounded_cpu.gpr[10] == 0x3412U,
+              "bounded XEX execution calls both byte-swap imports and verifies their return values");
 
         project360::cpu::CpuState faulting_cpu{};
-        faulting_cpu.pc = 0x8307cU;
+        faulting_cpu.pc = 0x83094U;
         const auto faulting_run = executor.run(faulting_cpu, guest_memory, 2U);
         check(faulting_run.instructions_executed == 1U &&
                   faulting_run.stop.status == project360::cpu::StepStatus::fault &&

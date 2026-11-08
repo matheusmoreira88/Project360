@@ -31,6 +31,21 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
     if (!equals_ascii_case_insensitive(import.library, "xboxkrnl.exe")) {
         return KernelDispatchStatus::unsupported_library;
     }
+    if (import.ordinal == rtl_ulong_byte_swap_ordinal) {
+        const auto value = static_cast<std::uint32_t>(state.gpr[3]);
+        state.gpr[3] = ((value & 0x000000ffU) << 24U) |
+                       ((value & 0x0000ff00U) << 8U) |
+                       ((value & 0x00ff0000U) >> 8U) |
+                       ((value & 0xff000000U) >> 24U);
+        state.pc = state.lr & ~std::uint64_t{3};
+        return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == rtl_ushort_byte_swap_ordinal) {
+        const auto value = static_cast<std::uint16_t>(state.gpr[3]);
+        state.gpr[3] = static_cast<std::uint16_t>((value >> 8U) | (value << 8U));
+        state.pc = state.lr & ~std::uint64_t{3};
+        return KernelDispatchStatus::handled;
+    }
     if (import.ordinal == rtl_init_ansi_string_ordinal) {
         const auto destination = state.gpr[3];
         const auto source = state.gpr[4];
