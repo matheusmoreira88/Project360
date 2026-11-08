@@ -2082,6 +2082,22 @@ void test_texture_block_rgba_decoding() {
               rgba.texels[0] == TextureRgba8{0x11U, 0x22U, 0x33U, 0x44U},
           "8:8:8:8 decoder extracts channels using Xenos format bit masks");
 
+    TextureFetchConstant swizzled_fetch{};
+    swizzled_fetch.component_swizzle = static_cast<std::uint16_t>(
+        2U | (5U << 3U) | (0U << 6U) | (4U << 9U));
+    const auto swizzled = apply_texture_fetch_component_swizzle(swizzled_fetch, rgba);
+    check(swizzled &&
+              swizzled.texels[0] == TextureRgba8{0x33U, 255U, 0x11U, 0U},
+          "fetch swizzle reorders decoded channels and supplies zero/one constants");
+
+    swizzled_fetch.component_swizzle = static_cast<std::uint16_t>(
+        6U | (7U << 3U) | (0U << 6U) | (1U << 9U));
+    const auto aliased_constants =
+        apply_texture_fetch_component_swizzle(swizzled_fetch, rgba);
+    check(aliased_constants && aliased_constants.texels[0] ==
+                                   TextureRgba8{0U, 255U, 0x11U, 0x22U},
+          "reserved selector aliases follow the Xenos guest-to-host constant mapping");
+
     constexpr std::array<std::byte, 2> rgb565_storage{
         std::byte{0x00}, std::byte{0xf8}};
     const auto rgb565 = decode_xenos_texture_block_rgba8(4U, rgb565_storage);

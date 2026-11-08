@@ -173,4 +173,34 @@ TextureBlockDecodeResult decode_xenos_texture_block_rgba8(
                           std::to_string(format)};
 }
 
+TextureBlockDecodeResult apply_texture_fetch_component_swizzle(
+    const TextureFetchConstant& fetch, const TextureBlockDecodeResult& decoded) {
+    if (!decoded) return decoded;
+    if (decoded.texel_count > decoded.texels.size()) {
+        return {{}, 0U, "Decoded texture block has an invalid texel count"};
+    }
+
+    TextureBlockDecodeResult result = decoded;
+    for (std::size_t texel_index = 0U; texel_index < decoded.texel_count;
+         ++texel_index) {
+        const auto& source = decoded.texels[texel_index];
+        const std::array<std::uint8_t, 4> channels{source.r, source.g, source.b,
+                                                  source.a};
+        std::array<std::uint8_t, 4> output{};
+        for (std::size_t component = 0U; component < output.size(); ++component) {
+            const auto shift = static_cast<std::uint32_t>(component * 3U);
+            const auto selector = static_cast<std::uint8_t>(
+                (fetch.component_swizzle >> shift) & 0x7U);
+            // Xenos selectors 0..3 choose X/Y/Z/W, 4 and 6 select zero, and
+            // 5 and 7 select one. This aliasing matches Xenia's public
+            // guest-to-host swizzle mapping.
+            output[component] = (selector & 0x4U) != 0U
+                                    ? ((selector & 0x1U) != 0U ? 255U : 0U)
+                                    : channels[selector];
+        }
+        result.texels[texel_index] = {output[0], output[1], output[2], output[3]};
+    }
+    return result;
+}
+
 } // namespace project360::gpu::xenos

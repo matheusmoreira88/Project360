@@ -8,6 +8,8 @@
 
 namespace project360::gpu::xenos {
 
+struct TextureFetchConstant;
+
 struct TextureRgba8 {
     std::uint8_t r{};
     std::uint8_t g{};
@@ -27,9 +29,14 @@ struct TextureBlockDecodeResult {
 
 // Decodes one complete storage block into row-major RGBA8 texels for the
 // explicitly supported Xenos formats (8:8:8:8, 5:6:5, DXT1, DXT3 and DXT5).
-// Numeric sign, gamma, component swizzle, filtering and sampling semantics are
-// not applied.
+// Numeric sign, gamma, filtering and sampling semantics are not applied.
 [[nodiscard]] TextureBlockDecodeResult decode_xenos_texture_block_rgba8(
     std::uint8_t format, std::span<const std::byte> block_bytes);
+
+// Applies the fetch descriptor's destination component selection to every
+// decoded texel. Sign modes remain associated with source components and must
+// be resolved by the sampling stage before this selection is applied.
+[[nodiscard]] TextureBlockDecodeResult apply_texture_fetch_component_swizzle(
+    const TextureFetchConstant& fetch, const TextureBlockDecodeResult& decoded);
 
 } // namespace project360::gpu::xenos
