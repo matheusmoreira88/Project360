@@ -30,6 +30,17 @@ int main() {
         std::cerr << "FAIL: offscreen clear/readback returned unexpected RGBA values\n";
         return 1;
     }
+    const auto triangle = result.context->render_offscreen_test_triangle();
+    if (!triangle) {
+        std::cerr << "FAIL: " << triangle.error << '\n';
+        return 1;
+    }
+    if (triangle.center_rgba != std::array<std::uint8_t, 4>{0U, 255U, 0U, 255U} ||
+        triangle.corner_rgba != std::array<std::uint8_t, 4>{255U, 0U, 255U, 255U} ||
+        triangle.green_pixel_count == 0U || triangle.green_pixel_count >= 16U * 16U) {
+        std::cerr << "FAIL: Vulkan triangle pixels do not match the expected rasterized output\n";
+        return 1;
+    }
 
     std::array<project360::gpu::vulkan::VulkanPixelReadbackResult, 2> concurrent_pixels{};
     std::thread first_readback(
@@ -43,6 +54,7 @@ int main() {
         std::cerr << "FAIL: concurrent Vulkan queue submissions were not serialized correctly\n";
         return 1;
     }
-    std::cout << "Vulkan offscreen clear/readback passed on " << device.name << '\n';
+    std::cout << "Vulkan offscreen clear/readback and triangle passed on " << device.name
+              << " (" << triangle.green_pixel_count << " green pixels)\n";
     return 0;
 }

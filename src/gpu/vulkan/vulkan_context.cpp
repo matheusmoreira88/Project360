@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <fstream>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -45,11 +46,18 @@ struct ClearResources {
     VkDevice device{VK_NULL_HANDLE};
     VkQueue queue{VK_NULL_HANDLE};
     VkImage image{VK_NULL_HANDLE};
+    VkImageView image_view{VK_NULL_HANDLE};
     VkDeviceMemory image_memory{VK_NULL_HANDLE};
     VkBuffer staging_buffer{VK_NULL_HANDLE};
     VkDeviceMemory staging_memory{VK_NULL_HANDLE};
     VkCommandPool command_pool{VK_NULL_HANDLE};
     VkFence fence{VK_NULL_HANDLE};
+    VkRenderPass render_pass{VK_NULL_HANDLE};
+    VkFramebuffer framebuffer{VK_NULL_HANDLE};
+    VkPipelineLayout pipeline_layout{VK_NULL_HANDLE};
+    VkPipeline pipeline{VK_NULL_HANDLE};
+    VkShaderModule vertex_shader{VK_NULL_HANDLE};
+    VkShaderModule fragment_shader{VK_NULL_HANDLE};
     bool submission_pending{};
 
     ~ClearResources() {
@@ -58,6 +66,27 @@ struct ClearResources {
         }
         if (fence != VK_NULL_HANDLE) {
             vkDestroyFence(device, fence, nullptr);
+        }
+        if (pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device, pipeline, nullptr);
+        }
+        if (pipeline_layout != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
+        }
+        if (framebuffer != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
+        if (image_view != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, image_view, nullptr);
+        }
+        if (render_pass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(device, render_pass, nullptr);
+        }
+        if (vertex_shader != VK_NULL_HANDLE) {
+            vkDestroyShaderModule(device, vertex_shader, nullptr);
+        }
+        if (fragment_shader != VK_NULL_HANDLE) {
+            vkDestroyShaderModule(device, fragment_shader, nullptr);
         }
         if (command_pool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(device, command_pool, nullptr);
@@ -76,6 +105,29 @@ struct ClearResources {
         }
     }
 };
+
+bool read_spirv(const char* filename, std::vector<std::uint32_t>& words, std::string& error) {
+    const std::string path = std::string(PROJECT360_VULKAN_SHADER_DIR) + "/" + filename;
+    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    if (!stream) {
+        error = "Could not open Vulkan test shader: " + path;
+        return false;
+    }
+    const auto end = stream.tellg();
+    if (end <= 0 || (static_cast<std::streamoff>(end) % 4) != 0) {
+        error = "Vulkan test shader has an invalid SPIR-V byte length: " + path;
+        return false;
+    }
+    words.resize(static_cast<std::size_t>(end) / sizeof(std::uint32_t));
+    stream.seekg(0, std::ios::beg);
+    stream.read(reinterpret_cast<char*>(words.data()), static_cast<std::streamsize>(end));
+    if (!stream) {
+        error = "Could not read complete Vulkan test shader: " + path;
+        words.clear();
+        return false;
+    }
+    return true;
+}
 
 bool select_memory_type(const VkPhysicalDeviceMemoryProperties& properties,
                         std::uint32_t allowed_types, VkMemoryPropertyFlags required,
@@ -472,6 +524,378 @@ VulkanPixelReadbackResult VulkanContext::readback_clear_color_pixel() const {
                         (static_cast<std::size_t>(pixel_y) * image_width + pixel_x) * 4U;
     VulkanPixelReadbackResult readback;
     std::copy_n(pixel, readback.rgba.size(), readback.rgba.begin());
+    vkUnmapMemory(impl_->device, resources.staging_memory);
+    return readback;
+}
+
+VulkanTriangleReadbackResult VulkanContext::render_offscreen_test_triangle() const {
+    std::lock_guard queue_lock(impl_->graphics_queue_mutex);
+
+    constexpr std::uint32_t image_width = 16U;
+    constexpr std::uint32_t image_height = 16U;
+    constexpr std::size_t pixel_size = 4U;
+    constexpr VkDeviceSize image_byte_count =
+        static_cast<VkDeviceSize>(image_width) * image_height * pixel_size;
+    constexpr VkImageSubresourceRange image_range{VK_IMAGE_ASPECT_COLOR_BIT, 0U, 1U, 0U, 1U};
+
+    VkImageFormatProperties format_properties{};
+    auto result = vkGetPhysicalDeviceImageFormatProperties(
+        impl_->physical_device, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D,
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 0U,
+        &format_properties);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkGetPhysicalDeviceImageFormatProperties", result)};
+    }
+    if (format_properties.maxExtent.width < image_width ||
+        format_properties.maxExtent.height < image_height) {
+        return {{}, {}, 0U, "Vulkan device cannot create the requested triangle image extent"};
+    }
+
+    ClearResources resources;
+    resources.device = impl_->device;
+    resources.queue = impl_->graphics_queue;
+
+    VkImageCreateInfo image_info{};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    image_info.extent = {image_width, image_height, 1U};
+    image_info.mipLevels = 1U;
+    image_info.arrayLayers = 1U;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    result = vkCreateImage(impl_->device, &image_info, nullptr, &resources.image);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateImage(triangle)", result)};
+    }
+
+    VkMemoryRequirements image_requirements{};
+    vkGetImageMemoryRequirements(impl_->device, resources.image, &image_requirements);
+    std::uint32_t image_memory_type = 0U;
+    VkMemoryPropertyFlags image_memory_flags = 0U;
+    if (!select_memory_type(impl_->memory_properties, image_requirements.memoryTypeBits,
+                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0U, image_memory_type,
+                            image_memory_flags)) {
+        return {{}, {}, 0U, "Vulkan device has no device-local memory for the triangle image"};
+    }
+    VkMemoryAllocateInfo image_allocation{};
+    image_allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    image_allocation.allocationSize = image_requirements.size;
+    image_allocation.memoryTypeIndex = image_memory_type;
+    result = vkAllocateMemory(impl_->device, &image_allocation, nullptr, &resources.image_memory);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkAllocateMemory(triangle image)", result)};
+    }
+    result = vkBindImageMemory(impl_->device, resources.image, resources.image_memory, 0U);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkBindImageMemory(triangle)", result)};
+    }
+
+    VkBufferCreateInfo buffer_info{};
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.size = image_byte_count;
+    buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    result = vkCreateBuffer(impl_->device, &buffer_info, nullptr, &resources.staging_buffer);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateBuffer(triangle staging)", result)};
+    }
+    VkMemoryRequirements staging_requirements{};
+    vkGetBufferMemoryRequirements(impl_->device, resources.staging_buffer, &staging_requirements);
+    std::uint32_t staging_memory_type = 0U;
+    VkMemoryPropertyFlags staging_memory_flags = 0U;
+    if (!select_memory_type(impl_->memory_properties, staging_requirements.memoryTypeBits,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging_memory_type,
+                            staging_memory_flags)) {
+        return {{}, {}, 0U, "Vulkan device has no host-visible triangle staging memory"};
+    }
+    VkMemoryAllocateInfo staging_allocation{};
+    staging_allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    staging_allocation.allocationSize = staging_requirements.size;
+    staging_allocation.memoryTypeIndex = staging_memory_type;
+    result =
+        vkAllocateMemory(impl_->device, &staging_allocation, nullptr, &resources.staging_memory);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkAllocateMemory(triangle staging)", result)};
+    }
+    result = vkBindBufferMemory(impl_->device, resources.staging_buffer, resources.staging_memory,
+                                0U);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkBindBufferMemory(triangle staging)", result)};
+    }
+
+    std::vector<std::uint32_t> vertex_words;
+    std::vector<std::uint32_t> fragment_words;
+    std::string shader_error;
+    if (!read_spirv("offscreen_triangle.vert.spv", vertex_words, shader_error) ||
+        !read_spirv("offscreen_triangle.frag.spv", fragment_words, shader_error)) {
+        return {{}, {}, 0U, std::move(shader_error)};
+    }
+    VkShaderModuleCreateInfo shader_info{};
+    shader_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    shader_info.codeSize = vertex_words.size() * sizeof(std::uint32_t);
+    shader_info.pCode = vertex_words.data();
+    result = vkCreateShaderModule(impl_->device, &shader_info, nullptr, &resources.vertex_shader);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateShaderModule(vertex)", result)};
+    }
+    shader_info.codeSize = fragment_words.size() * sizeof(std::uint32_t);
+    shader_info.pCode = fragment_words.data();
+    result = vkCreateShaderModule(impl_->device, &shader_info, nullptr, &resources.fragment_shader);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateShaderModule(fragment)", result)};
+    }
+
+    VkAttachmentDescription attachment{};
+    attachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference color_reference{0U, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1U;
+    subpass.pColorAttachments = &color_reference;
+    VkRenderPassCreateInfo render_pass_info{};
+    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    render_pass_info.attachmentCount = 1U;
+    render_pass_info.pAttachments = &attachment;
+    render_pass_info.subpassCount = 1U;
+    render_pass_info.pSubpasses = &subpass;
+    result = vkCreateRenderPass(impl_->device, &render_pass_info, nullptr, &resources.render_pass);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateRenderPass(triangle)", result)};
+    }
+
+    VkImageViewCreateInfo image_view_info{};
+    image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    image_view_info.image = resources.image;
+    image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    image_view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    image_view_info.subresourceRange = image_range;
+    result = vkCreateImageView(impl_->device, &image_view_info, nullptr, &resources.image_view);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateImageView(triangle)", result)};
+    }
+
+    VkFramebufferCreateInfo framebuffer_info{};
+    framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    framebuffer_info.renderPass = resources.render_pass;
+    framebuffer_info.attachmentCount = 1U;
+    framebuffer_info.pAttachments = &resources.image_view;
+    framebuffer_info.width = image_width;
+    framebuffer_info.height = image_height;
+    framebuffer_info.layers = 1U;
+    result = vkCreateFramebuffer(impl_->device, &framebuffer_info, nullptr, &resources.framebuffer);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateFramebuffer(triangle)", result)};
+    }
+
+    VkPipelineLayoutCreateInfo layout_info{};
+    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    result = vkCreatePipelineLayout(impl_->device, &layout_info, nullptr,
+                                    &resources.pipeline_layout);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreatePipelineLayout(triangle)", result)};
+    }
+    const std::array<VkPipelineShaderStageCreateInfo, 2> shader_stages{{
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0U,
+         VK_SHADER_STAGE_VERTEX_BIT, resources.vertex_shader, "main", nullptr},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0U,
+         VK_SHADER_STAGE_FRAGMENT_BIT, resources.fragment_shader, "main", nullptr},
+    }};
+    VkPipelineVertexInputStateCreateInfo vertex_input{};
+    vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo input_assembly{};
+    input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo viewport_state{};
+    viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1U;
+    viewport_state.scissorCount = 1U;
+    VkPipelineRasterizationStateCreateInfo rasterization{};
+    rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterization.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterization.cullMode = VK_CULL_MODE_NONE;
+    rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterization.lineWidth = 1.0F;
+    VkPipelineMultisampleStateCreateInfo multisample{};
+    multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendAttachmentState blend_attachment{};
+    blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1U;
+    blend.pAttachments = &blend_attachment;
+    const std::array<VkDynamicState, 2> dynamic_states{VK_DYNAMIC_STATE_VIEWPORT,
+                                                      VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic_state{};
+    dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic_state.dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size());
+    dynamic_state.pDynamicStates = dynamic_states.data();
+    VkGraphicsPipelineCreateInfo pipeline_info{};
+    pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_info.stageCount = static_cast<std::uint32_t>(shader_stages.size());
+    pipeline_info.pStages = shader_stages.data();
+    pipeline_info.pVertexInputState = &vertex_input;
+    pipeline_info.pInputAssemblyState = &input_assembly;
+    pipeline_info.pViewportState = &viewport_state;
+    pipeline_info.pRasterizationState = &rasterization;
+    pipeline_info.pMultisampleState = &multisample;
+    pipeline_info.pColorBlendState = &blend;
+    pipeline_info.pDynamicState = &dynamic_state;
+    pipeline_info.layout = resources.pipeline_layout;
+    pipeline_info.renderPass = resources.render_pass;
+    pipeline_info.subpass = 0U;
+    result = vkCreateGraphicsPipelines(impl_->device, VK_NULL_HANDLE, 1U, &pipeline_info, nullptr,
+                                       &resources.pipeline);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateGraphicsPipelines(triangle)", result)};
+    }
+
+    VkCommandPoolCreateInfo pool_info{};
+    pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pool_info.queueFamilyIndex = impl_->info.graphics_queue_family;
+    result = vkCreateCommandPool(impl_->device, &pool_info, nullptr, &resources.command_pool);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateCommandPool(triangle)", result)};
+    }
+    VkCommandBufferAllocateInfo command_allocation{};
+    command_allocation.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    command_allocation.commandPool = resources.command_pool;
+    command_allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_allocation.commandBufferCount = 1U;
+    VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+    result = vkAllocateCommandBuffers(impl_->device, &command_allocation, &command_buffer);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkAllocateCommandBuffers(triangle)", result)};
+    }
+    VkCommandBufferBeginInfo command_begin{};
+    command_begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    command_begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    result = vkBeginCommandBuffer(command_buffer, &command_begin);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkBeginCommandBuffer(triangle)", result)};
+    }
+    VkClearValue clear_value{};
+    clear_value.color = {{1.0F, 0.0F, 1.0F, 1.0F}};
+    VkRenderPassBeginInfo render_begin{};
+    render_begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    render_begin.renderPass = resources.render_pass;
+    render_begin.framebuffer = resources.framebuffer;
+    render_begin.renderArea.extent = {image_width, image_height};
+    render_begin.clearValueCount = 1U;
+    render_begin.pClearValues = &clear_value;
+    vkCmdBeginRenderPass(command_buffer, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
+    const VkViewport viewport{0.0F, 0.0F, static_cast<float>(image_width),
+                              static_cast<float>(image_height), 0.0F, 1.0F};
+    const VkRect2D scissor{{0, 0}, {image_width, image_height}};
+    vkCmdSetViewport(command_buffer, 0U, 1U, &viewport);
+    vkCmdSetScissor(command_buffer, 0U, 1U, &scissor);
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, resources.pipeline);
+    vkCmdDraw(command_buffer, 3U, 1U, 0U, 0U);
+    vkCmdEndRenderPass(command_buffer);
+
+    VkImageMemoryBarrier image_barrier{};
+    image_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    image_barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    image_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    image_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    image_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    image_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    image_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    image_barrier.image = resources.image;
+    image_barrier.subresourceRange = image_range;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0U, 0U, nullptr, 0U, nullptr, 1U,
+                         &image_barrier);
+    VkBufferImageCopy image_copy{};
+    image_copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0U, 0U, 1U};
+    image_copy.imageExtent = {image_width, image_height, 1U};
+    vkCmdCopyImageToBuffer(command_buffer, resources.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           resources.staging_buffer, 1U, &image_copy);
+    VkBufferMemoryBarrier buffer_barrier{};
+    buffer_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    buffer_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    buffer_barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    buffer_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    buffer_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    buffer_barrier.buffer = resources.staging_buffer;
+    buffer_barrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                         0U, 0U, nullptr, 1U, &buffer_barrier, 0U, nullptr);
+    result = vkEndCommandBuffer(command_buffer);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkEndCommandBuffer(triangle)", result)};
+    }
+    VkFenceCreateInfo fence_info{};
+    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    result = vkCreateFence(impl_->device, &fence_info, nullptr, &resources.fence);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkCreateFence(triangle)", result)};
+    }
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1U;
+    submit_info.pCommandBuffers = &command_buffer;
+    result = vkQueueSubmit(impl_->graphics_queue, 1U, &submit_info, resources.fence);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkQueueSubmit(triangle)", result)};
+    }
+    resources.submission_pending = true;
+    result = vkWaitForFences(impl_->device, 1U, &resources.fence, VK_TRUE, UINT64_MAX);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkWaitForFences(triangle)", result)};
+    }
+    resources.submission_pending = false;
+    void* mapped_memory = nullptr;
+    result = vkMapMemory(impl_->device, resources.staging_memory, 0U, VK_WHOLE_SIZE, 0U,
+                         &mapped_memory);
+    if (result != VK_SUCCESS) {
+        return {{}, {}, 0U, result_message("vkMapMemory(triangle)", result)};
+    }
+    if ((staging_memory_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0U) {
+        VkMappedMemoryRange mapped_range{};
+        mapped_range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        mapped_range.memory = resources.staging_memory;
+        mapped_range.size = VK_WHOLE_SIZE;
+        result = vkInvalidateMappedMemoryRanges(impl_->device, 1U, &mapped_range);
+        if (result != VK_SUCCESS) {
+            vkUnmapMemory(impl_->device, resources.staging_memory);
+            return {{}, {}, 0U, result_message("vkInvalidateMappedMemoryRanges(triangle)", result)};
+        }
+    }
+
+    VulkanTriangleReadbackResult readback;
+    const auto* pixels = static_cast<const std::uint8_t*>(mapped_memory);
+    const auto copy_pixel = [&](std::uint32_t x, std::uint32_t y,
+                                std::array<std::uint8_t, 4>& destination) {
+        const auto offset = (static_cast<std::size_t>(y) * image_width + x) * pixel_size;
+        std::copy_n(pixels + offset, pixel_size, destination.begin());
+    };
+    copy_pixel(image_width / 2U, image_height / 2U, readback.center_rgba);
+    copy_pixel(0U, 0U, readback.corner_rgba);
+    for (std::uint32_t y = 0U; y < image_height; ++y) {
+        for (std::uint32_t x = 0U; x < image_width; ++x) {
+            std::array<std::uint8_t, 4> pixel{};
+            copy_pixel(x, y, pixel);
+            if (pixel == std::array<std::uint8_t, 4>{0U, 255U, 0U, 255U}) {
+                ++readback.green_pixel_count;
+            }
+        }
+    }
     vkUnmapMemory(impl_->device, resources.staging_memory);
     return readback;
 }

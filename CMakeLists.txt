@@ -71,6 +71,9 @@ if(PROJECT360_BUILD_VULKAN)
     target_include_directories(project360_vulkan PUBLIC src)
     target_link_libraries(project360_vulkan PRIVATE volk)
     target_compile_features(project360_vulkan PUBLIC cxx_std_20)
+    target_compile_definitions(project360_vulkan PRIVATE
+        PROJECT360_VULKAN_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/vulkan/shaders"
+    )
     if(MSVC)
         target_compile_options(project360_vulkan PRIVATE /W4 /permissive- /EHsc)
     else()

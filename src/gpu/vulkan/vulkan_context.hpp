@@ -24,6 +24,17 @@ struct VulkanPixelReadbackResult {
     }
 };
 
+struct VulkanTriangleReadbackResult {
+    std::array<std::uint8_t, 4> center_rgba{};
+    std::array<std::uint8_t, 4> corner_rgba{};
+    std::uint32_t green_pixel_count{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return error.empty();
+    }
+};
+
 enum class VulkanContextStatus {
     ready,
     loader_unavailable,
@@ -56,6 +67,7 @@ class VulkanContext final {
     [[nodiscard]] static VulkanContextResult create();
     [[nodiscard]] const VulkanDeviceInfo& device_info() const noexcept;
     [[nodiscard]] VulkanPixelReadbackResult readback_clear_color_pixel() const;
+    [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_test_triangle() const;
 
   private:
     struct Impl;

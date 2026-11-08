@@ -14,6 +14,11 @@ int main() {
         std::cerr << "Vulkan offscreen clear/readback failed: " << pixel.error << '\n';
         return 1;
     }
+    const auto triangle = result.context->render_offscreen_test_triangle();
+    if (!triangle) {
+        std::cerr << "Vulkan offscreen triangle failed: " << triangle.error << '\n';
+        return 1;
+    }
 
     const auto& device = result.context->device_info();
     std::cout << "Vulkan graphics device: " << device.name << '\n'
@@ -25,5 +30,11 @@ int main() {
               << std::dec << "Graphics queue family: " << device.graphics_queue_family << '\n'
               << "Offscreen center pixel RGBA: " << static_cast<unsigned>(pixel.rgba[0]) << ','
               << static_cast<unsigned>(pixel.rgba[1]) << ',' << static_cast<unsigned>(pixel.rgba[2])
-              << ',' << static_cast<unsigned>(pixel.rgba[3]) << '\n';
+              << ',' << static_cast<unsigned>(pixel.rgba[3]) << '\n'
+              << "Triangle center pixel RGBA: "
+              << static_cast<unsigned>(triangle.center_rgba[0]) << ','
+              << static_cast<unsigned>(triangle.center_rgba[1]) << ','
+              << static_cast<unsigned>(triangle.center_rgba[2]) << ','
+              << static_cast<unsigned>(triangle.center_rgba[3]) << '\n'
+              << "Triangle covered green pixels: " << triangle.green_pixel_count << '\n';
 }
