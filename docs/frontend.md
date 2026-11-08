@@ -7,8 +7,9 @@ The initial desktop frontend is a separate C++20/Qt Widgets executable called `p
 - Opens a native file picker filtered for `.xex` files.
 - Lists selected existing files in memory for the current application session.
 - Shows the selected local path and a clear loader status.
+- Hides the introductory banner after a file is added so the library and details have more room.
 - Keeps **Iniciar** disabled because loading and execution are not implemented.
-- Leaves Recentes and Configurações disabled until those functions have backends.
+- Shows only the library navigation entry; other destinations will appear when they have working screens.
 - Does not read or parse the executable contents.
 
 The selection is not saved across restarts. File names come from the local path and are not verified title metadata.

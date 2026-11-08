@@ -6,6 +6,7 @@
 class QLabel;
 class QListWidget;
 class QPushButton;
+class QWidget;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -19,6 +20,7 @@ private:
     void applyTheme();
 
     QListWidget* library_ = nullptr;
+    QWidget* hero_ = nullptr;
     QLabel* selectedTitle_ = nullptr;
     QLabel* selectedPath_ = nullptr;
     QLabel* selectionStatus_ = nullptr;

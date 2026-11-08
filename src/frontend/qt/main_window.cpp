@@ -57,22 +57,6 @@ QWidget* makeSidebar() {
     libraryNav->setCursor(Qt::PointingHandCursor);
     libraryNav->setMinimumHeight(42);
     layout->addWidget(libraryNav);
-
-    auto* recentNav = new QPushButton(QStringLiteral("◷    Recentes"));
-    recentNav->setObjectName("navButton");
-    recentNav->setMinimumHeight(42);
-    recentNav->setEnabled(false);
-    recentNav->setToolTip("Histórico de execução será adicionado mais adiante.");
-    layout->addWidget(recentNav);
-
-    layout->addSpacing(20);
-    layout->addWidget(makeLabel("SISTEMA", "sectionLabel"));
-    auto* settingsNav = new QPushButton(QStringLiteral("⚙    Configurações"));
-    settingsNav->setObjectName("navButton");
-    settingsNav->setMinimumHeight(42);
-    settingsNav->setEnabled(false);
-    settingsNav->setToolTip("Configurações gráficas e de controle ainda não estão disponíveis.");
-    layout->addWidget(settingsNav);
     layout->addStretch();
 
     auto* statusCard = new QWidget;
@@ -140,7 +124,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     importButton_->setCursor(Qt::PointingHandCursor);
     topRow->addWidget(importButton_);
     contentLayout->addLayout(topRow);
-    contentLayout->addWidget(makeHero());
+    hero_ = makeHero();
+    contentLayout->addWidget(hero_);
 
     auto* libraryHeader = new QHBoxLayout;
     libraryHeader->addWidget(makeLabel("Adicionados", "sectionHeading"));
@@ -230,6 +215,7 @@ void MainWindow::importExecutable() {
         library_->addItem(item);
         library_->setCurrentItem(item);
     }
+    hero_->setVisible(library_->count() == 0);
     showSelection();
 }
 
