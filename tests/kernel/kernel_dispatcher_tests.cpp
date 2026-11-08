@@ -98,6 +98,19 @@ int main() {
     using project360::memory::GuestMemory;
     using project360::memory::GuestPageAccess;
 
+    check(KernelDispatcher::ex_allocate_pool_ordinal == 9U &&
+              KernelDispatcher::ex_allocate_pool_with_tag_ordinal == 10U &&
+              KernelDispatcher::ex_free_pool_ordinal == 15U,
+          "pool import constants match the Xbox 360 export table ordinals");
+    check(KernelDispatcher::ke_query_interrupt_time_ordinal == 130U &&
+              KernelDispatcher::ke_query_performance_frequency_ordinal == 131U &&
+              KernelDispatcher::ke_query_system_time_ordinal == 132U &&
+              KernelDispatcher::ke_tls_alloc_ordinal == 338U &&
+              KernelDispatcher::ke_tls_free_ordinal == 339U &&
+              KernelDispatcher::ke_tls_get_value_ordinal == 340U &&
+              KernelDispatcher::ke_tls_set_value_ordinal == 341U,
+          "time and TLS import constants match the Xbox 360 export table ordinals");
+
     constexpr std::uint64_t data_page = 0x200000U;
     GuestMemory memory(2U * static_cast<std::size_t>(GuestMemory::page_size));
     const std::array<std::byte, 4> initial{
