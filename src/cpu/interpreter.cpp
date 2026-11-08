@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <utility>
 
 namespace project360::cpu {
@@ -15,6 +16,7 @@ namespace {
 constexpr std::uint32_t kXerSummaryOverflow = 0x80000000U;
 constexpr std::uint32_t kXerOverflow = 0x40000000U;
 constexpr std::uint32_t kXerCarry = 0x20000000U;
+constexpr std::uint32_t kXerByteCountMask = 0x7fU;
 constexpr std::uint64_t kProgramExceptionVector = 0x700U;
 constexpr std::uint64_t kXenonDataCacheBlockSize = 128U;
 
@@ -222,6 +224,14 @@ void set_cr0(CpuState& state, std::uint64_t value) {
     const auto signed_value = std::bit_cast<std::int64_t>(value);
     set_cr_field(state, 0, compare_field(signed_value < 0, signed_value > 0,
                                          (state.xer & 0x80000000U) != 0U));
+}
+
+bool register_in_sequence(std::uint8_t candidate, std::uint8_t first,
+                          std::size_t register_count) {
+    for (std::size_t index = 0U; index < register_count; ++index) {
+        if (static_cast<std::uint8_t>((first + index) & 0x1fU) == candidate) return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -1222,6 +1232,63 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
                               ((value & 0xff000000U) >> 24U);
         if (!memory.write_u32_be(address, reversed)) {
             return data_fault(address, 4U, "stwbrx alignment or address fault");
+        }
+        break;
+    }
+    case Opcode::load_string_word_immediate:
+    case Opcode::load_string_word_indexed: {
+        const auto byte_count = ins.opcode == Opcode::load_string_word_immediate
+                                    ? static_cast<std::size_t>(ins.byte_count)
+                                    : static_cast<std::size_t>(state.xer & kXerByteCountMask);
+        if (byte_count == 0U) break;
+        const auto register_count = (byte_count + 3U) / 4U;
+        if (ins.opcode == Opcode::load_string_word_indexed &&
+            (register_in_sequence(ins.ra, ins.rt, register_count) ||
+             register_in_sequence(ins.rb, ins.rt, register_count))) {
+            return fault(FaultKind::unsupported_instruction, old_pc,
+                         "lswx with an address register in the destination range has undefined results",
+                         word);
+        }
+
+        const auto address = ins.opcode == Opcode::load_string_word_immediate
+                                 ? base
+                                 : base + state.gpr[ins.rb];
+        if (address > std::numeric_limits<std::uint64_t>::max() - (byte_count - 1U)) {
+            return data_fault(address, 1U, "load string address range overflows");
+        }
+        std::array<std::uint32_t, 32> values{};
+        for (std::size_t index = 0U; index < byte_count; ++index) {
+            std::uint8_t byte = 0U;
+            if (!memory.read_u8(address + index, byte)) {
+                return data_fault(address + index, 1U, "load string address fault");
+            }
+            const auto shift = static_cast<unsigned>(24U - (index % 4U) * 8U);
+            values[index / 4U] |= static_cast<std::uint32_t>(byte) << shift;
+        }
+        for (std::size_t index = 0U; index < register_count; ++index) {
+            state.gpr[(static_cast<std::size_t>(ins.rt) + index) & 0x1fU] = values[index];
+        }
+        break;
+    }
+    case Opcode::store_string_word_immediate:
+    case Opcode::store_string_word_indexed: {
+        const auto byte_count = ins.opcode == Opcode::store_string_word_immediate
+                                    ? static_cast<std::size_t>(ins.byte_count)
+                                    : static_cast<std::size_t>(state.xer & kXerByteCountMask);
+        if (byte_count == 0U) break;
+        const auto address = ins.opcode == Opcode::store_string_word_immediate
+                                 ? base
+                                 : base + state.gpr[ins.rb];
+        std::array<std::byte, 127> bytes{};
+        for (std::size_t index = 0U; index < byte_count; ++index) {
+            const auto source_register =
+                (static_cast<std::size_t>(ins.rt) + index / 4U) & 0x1fU;
+            const auto value = static_cast<std::uint32_t>(state.gpr[source_register]);
+            const auto shift = static_cast<unsigned>(24U - (index % 4U) * 8U);
+            bytes[index] = static_cast<std::byte>((value >> shift) & 0xffU);
+        }
+        if (!memory.write_bytes(address, std::span<const std::byte>(bytes.data(), byte_count))) {
+            return data_fault(address, 1U, "store string address fault");
         }
         break;
     }

@@ -14,6 +14,14 @@ bool valid_branch_options(std::uint8_t bo) {
     return false;
 }
 
+bool register_in_sequence(std::uint8_t candidate, std::uint8_t first,
+                         std::uint8_t register_count) {
+    for (std::uint8_t index = 0U; index < register_count; ++index) {
+        if (static_cast<std::uint8_t>((first + index) & 0x1fU) == candidate) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 DecodeResult decode(std::uint32_t word) {
@@ -370,6 +378,30 @@ DecodeResult decode(std::uint32_t word) {
             ins.opcode = Opcode::store_doubleword_conditional_indexed;
             ins.indexed = true;
             ins.record = true;
+            return {ins, {}};
+        }
+        if (xo10 == 597U || xo10 == 725U) {
+            if ((word & 1U) != 0U) return {{}, "string instruction record bit is reserved"};
+            const auto count = ins.rb == 0U ? 32U : static_cast<unsigned>(ins.rb);
+            const auto register_count = static_cast<std::uint8_t>((count + 3U) / 4U);
+            if (xo10 == 597U &&
+                (register_in_sequence(ins.ra, ins.rt, register_count) ||
+                 (ins.rt == 0U && ins.ra == 0U))) {
+                return {{}, "lswi base register overlaps its destination register range"};
+            }
+            ins.opcode = xo10 == 597U ? Opcode::load_string_word_immediate
+                                      : Opcode::store_string_word_immediate;
+            ins.byte_count = static_cast<std::uint8_t>(count);
+            return {ins, {}};
+        }
+        if (xo10 == 533U || xo10 == 661U) {
+            if ((word & 1U) != 0U) return {{}, "string instruction record bit is reserved"};
+            if (xo10 == 533U && (ins.rt == ins.ra || ins.rt == ins.rb)) {
+                return {{}, "lswx target register aliases an address register"};
+            }
+            ins.opcode = xo10 == 533U ? Opcode::load_string_word_indexed
+                                      : Opcode::store_string_word_indexed;
+            ins.indexed = true;
             return {ins, {}};
         }
         if (xo10 == 54U || xo10 == 86U || xo10 == 982U) {

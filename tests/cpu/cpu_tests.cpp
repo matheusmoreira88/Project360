@@ -1600,6 +1600,126 @@ void test_multiple_word_memory_instructions() {
           "failed stmw validates the full range before writing any word");
 }
 
+void test_string_word_memory_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(2048U);
+    for (std::size_t index = 0U; index < 5U; ++index) {
+        check(mem.write_u8(0x101U + index,
+                           static_cast<std::uint8_t>(0x11U + index * 0x11U)),
+              "seed lswi bytes");
+    }
+    for (std::size_t index = 0U; index < 6U; ++index) {
+        check(mem.write_u8(0x307U + index,
+                           static_cast<std::uint8_t>(0x01U + index * 0x22U)),
+              "seed lswx bytes");
+    }
+    for (std::size_t index = 0U; index < 32U; ++index) {
+        check(mem.write_u8(0x400U + index, static_cast<std::uint8_t>(index)),
+              "seed full-count lswi bytes");
+    }
+    put_word(mem, 0U, indexed_memory(31U, 2U, 5U, 725U)); // stswi r31,r2,5
+    put_word(mem, 4U, indexed_memory(30U, 1U, 5U, 597U)); // lswi r30,r1,5
+    put_word(mem, 8U, indexed_memory(10U, 3U, 4U, 533U)); // lswx r10,r3,r4
+    put_word(mem, 12U, indexed_memory(12U, 3U, 4U, 661U)); // stswx r12,r3,r4
+    put_word(mem, 16U, indexed_memory(28U, 5U, 0U, 597U)); // lswi r28,r5,0
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0x101U;
+    state.gpr[2] = 0x205U;
+    state.gpr[3] = 0x300U;
+    state.gpr[4] = 7U;
+    state.gpr[5] = 0x400U;
+    state.gpr[0] = 0x11223344U;
+    state.gpr[31] = 0xaabbccddffffeeeeULL;
+    state.gpr[12] = 0xdeadbeefU;
+    state.gpr[13] = 0x10203040U;
+    state.xer = 6U;
+    const auto result = cpu::Interpreter{}.run(state, mem, 4U);
+    std::array<std::uint8_t, 6> stored_indexed{};
+    for (std::size_t index = 0U; index < stored_indexed.size(); ++index) {
+        check(mem.read_u8(0x307U + index, stored_indexed[index]),
+              "read stswx result bytes");
+    }
+    check(result.status == cpu::StepStatus::instruction_limit_reached &&
+              state.gpr[30] == 0x11223344U && state.gpr[31] == 0x55000000U,
+          "lswi loads unaligned bytes left-to-right, zero-fills the partial word, and wraps");
+    std::array<std::uint8_t, 5> immediate_bytes{};
+    for (std::size_t index = 0U; index < immediate_bytes.size(); ++index) {
+        check(mem.read_u8(0x205U + index, immediate_bytes[index]),
+              "read stswi result bytes");
+    }
+    check(immediate_bytes == std::array<std::uint8_t, 5>{0xffU, 0xffU, 0xeeU, 0xeeU, 0x11U},
+          "stswi stores only its requested bytes across the register wrap");
+    check(state.gpr[10] == 0x01234567U && state.gpr[11] == 0x89ab0000U,
+          "lswx uses XER byte count and zeroes unused bytes of its final word");
+    check(stored_indexed == std::array<std::uint8_t, 6>{0xdeU, 0xadU, 0xbeU,
+                                                        0xefU, 0x10U, 0x20U},
+          "stswx stores the low 32 bits of each source GPR in big-endian byte order");
+    const auto last_load = cpu::Interpreter{}.step(state, mem);
+    check(last_load.status == cpu::StepStatus::executed &&
+              state.gpr[28] == 0x00010203U && state.gpr[31] == 0x0c0d0e0fU &&
+              state.gpr[0] == 0x10111213U && state.gpr[3] == 0x1c1d1e1fU,
+          "lswi treats NB zero as 32 bytes and wraps through GPR zero");
+
+    const auto invalid_immediate_overlap = cpu::decode(indexed_memory(3U, 4U, 8U, 597U));
+    const auto invalid_load_record = cpu::decode(indexed_memory(3U, 4U, 8U, 533U, true));
+    const auto invalid_immediate_store_record =
+        cpu::decode(indexed_memory(3U, 4U, 8U, 725U, true));
+    const auto invalid_indexed_store_record =
+        cpu::decode(indexed_memory(3U, 4U, 8U, 661U, true));
+    const auto invalid_indexed_alias = cpu::decode(indexed_memory(3U, 3U, 5U, 533U));
+    check(!invalid_immediate_overlap && !invalid_load_record &&
+              !invalid_immediate_store_record && !invalid_indexed_store_record &&
+              !invalid_indexed_alias,
+          "string decoder rejects lswi overlap, lswx operand alias, and reserved record bits");
+
+    memory::GuestMemory zero_count_mem(32U);
+    put_word(zero_count_mem, 0U, indexed_memory(7U, 1U, 2U, 533U)); // lswx r7,r1,r2
+    cpu::CpuState zero_count_state{};
+    zero_count_state.gpr[1] = 0x1000U;
+    zero_count_state.gpr[2] = 0x1000U;
+    zero_count_state.gpr[7] = 0xabcdef0123456789ULL;
+    const auto zero_count = cpu::Interpreter{}.step(zero_count_state, zero_count_mem);
+    check(zero_count.status == cpu::StepStatus::executed &&
+              zero_count_state.gpr[7] == 0xabcdef0123456789ULL,
+          "lswx with an XER byte count of zero leaves its destination and memory untouched");
+
+    memory::GuestMemory overlap_mem(64U);
+    put_word(overlap_mem, 0U, indexed_memory(3U, 4U, 5U, 533U));
+    cpu::CpuState overlap_state{};
+    overlap_state.gpr[4] = 0U;
+    overlap_state.gpr[5] = 8U;
+    overlap_state.xer = 8U;
+    const auto overlap = cpu::Interpreter{}.step(overlap_state, overlap_mem);
+    check(overlap.status == cpu::StepStatus::fault && overlap.fault_info &&
+              overlap.fault_info->kind == cpu::FaultKind::unsupported_instruction &&
+              overlap_state.pc == 0U,
+          "lswx diagnoses address-register overlap with its dynamically selected destination range");
+
+    memory::GuestMemory fault_mem(512U);
+    put_word(fault_mem, 0U, indexed_memory(30U, 1U, 5U, 597U));
+    cpu::CpuState load_fault_state{};
+    load_fault_state.gpr[1] = 510U;
+    load_fault_state.gpr[30] = 0xaaaaaaaaaaaaaaaaULL;
+    load_fault_state.gpr[31] = 0xbbbbbbbbbbbbbbbbULL;
+    const auto load_fault = cpu::Interpreter{}.step(load_fault_state, fault_mem);
+    check(load_fault.status == cpu::StepStatus::fault &&
+              load_fault_state.gpr[30] == 0xaaaaaaaaaaaaaaaaULL &&
+              load_fault_state.gpr[31] == 0xbbbbbbbbbbbbbbbbULL && load_fault_state.pc == 0U,
+          "failed string load leaves the complete destination register set unchanged");
+
+    put_word(fault_mem, 0U, indexed_memory(30U, 1U, 8U, 725U)); // stswi r30,r1,8
+    cpu::CpuState store_fault_state{};
+    store_fault_state.gpr[1] = 508U;
+    store_fault_state.gpr[30] = 0x1122334455667788ULL;
+    store_fault_state.gpr[31] = 0x99aabbccddeeff00ULL;
+    const auto store_fault = cpu::Interpreter{}.step(store_fault_state, fault_mem);
+    std::uint32_t untouched = 1U;
+    check(store_fault.status == cpu::StepStatus::fault &&
+              fault_mem.read_u32_be(508U, untouched) && untouched == 0U,
+          "failed string store validates its whole byte range before writing");
+}
+
 void test_integer_divide_instructions() {
     using namespace project360;
     memory::GuestMemory mem(64);
@@ -2955,6 +3075,7 @@ int main() {
     test_indexed_update_memory_instructions();
     test_byte_reversed_indexed_memory_instructions();
     test_multiple_word_memory_instructions();
+    test_string_word_memory_instructions();
     test_integer_divide_instructions();
     test_integer_multiply_instructions();
     test_integer_high_word_multiply_instructions();

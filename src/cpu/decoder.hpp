@@ -119,6 +119,10 @@ enum class Opcode {
     stw,
     lmw,
     stmw,
+    load_string_word_immediate,
+    load_string_word_indexed,
+    store_string_word_immediate,
+    store_string_word_indexed,
     lhbrx,
     lwbrx,
     sthbrx,
@@ -160,6 +164,7 @@ struct DecodedInstruction {
     std::uint8_t mask_begin{};
     std::uint8_t mask_end{};
     std::uint8_t field_mask{};
+    std::uint8_t byte_count{};
     std::int64_t immediate{};
     bool link{};
     bool absolute{};
