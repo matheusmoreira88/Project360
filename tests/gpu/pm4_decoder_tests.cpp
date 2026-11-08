@@ -2098,6 +2098,54 @@ void test_texture_block_rgba_decoding() {
                                    TextureRgba8{0U, 255U, 0x11U, 0x22U},
           "reserved selector aliases follow the Xenos guest-to-host constant mapping");
 
+    TextureFetchConstant numeric_fetch{};
+    numeric_fetch.component_swizzle = static_cast<std::uint16_t>(
+        0U | (1U << 3U) | (2U << 6U) | (3U << 9U));
+    const auto normalized = decode_xenos_texture_fetch_block_float(6U, numeric_fetch, rgba);
+    check(normalized && std::abs(normalized.texels[0].r - 0x11 / 255.0F) < 0.00001F &&
+              std::abs(normalized.texels[0].a - 0x44 / 255.0F) < 0.00001F,
+          "fractional unsigned fetch maps 8:8:8:8 channels to normalized floats");
+
+    TextureBlockDecodeResult signed_bytes{};
+    signed_bytes.texels[0] = {0x80U, 0xffU, 0x7fU, 0x00U};
+    signed_bytes.texel_count = 1U;
+    numeric_fetch.sign_modes = {1U, 1U, 2U, 0U};
+    const auto signed_and_biased =
+        decode_xenos_texture_fetch_block_float(6U, numeric_fetch, signed_bytes);
+    check(signed_and_biased && signed_and_biased.texels[0].r == -1.0F &&
+              std::abs(signed_and_biased.texels[0].g - (-1.0F / 127.0F)) < 0.00001F &&
+              std::abs(signed_and_biased.texels[0].b - (2.0F * 127.0F / 255.0F - 1.0F)) <
+                  0.00001F,
+          "signed and unsigned-biased modes interpret source bytes before swizzling");
+
+    numeric_fetch.sign_modes = {0U, 1U, 2U, 0U};
+    numeric_fetch.number_format = 1U;
+    const auto integer = decode_xenos_texture_fetch_block_float(6U, numeric_fetch,
+                                                                 signed_bytes);
+    check(integer && integer.texels[0] == TextureFloat4{128.0F, -1.0F, -1.0F, 0.0F},
+          "integer number format returns unsigned, signed and biased source values");
+
+    numeric_fetch.sign_modes = {3U, 0U, 0U, 0U};
+    numeric_fetch.number_format = 0U;
+    signed_bytes.texels[0].r = 128U;
+    const auto gamma =
+        decode_xenos_texture_fetch_block_float(6U, numeric_fetch, signed_bytes);
+    check(gamma && std::abs(gamma.texels[0].r - 0.2158605F) < 0.0001F,
+          "gamma sign mode linearizes 8-bit sRGB data during sampling conversion");
+
+    const auto unsupported_numeric_format =
+        decode_xenos_texture_fetch_block_float(4U, numeric_fetch, rgba);
+    numeric_fetch.number_format = 1U;
+    const auto unsupported_gamma_integer =
+        decode_xenos_texture_fetch_block_float(6U, numeric_fetch, rgba);
+    numeric_fetch.number_format = 0U;
+    numeric_fetch.sign_modes = {0U, 0U, 0U, 3U};
+    const auto unsupported_gamma_alpha =
+        decode_xenos_texture_fetch_block_float(6U, numeric_fetch, rgba);
+    check(!unsupported_numeric_format && !unsupported_gamma_integer &&
+              !unsupported_gamma_alpha,
+          "numeric conversion rejects formats and combinations without validated semantics");
+
     constexpr std::array<std::byte, 2> rgb565_storage{
         std::byte{0x00}, std::byte{0xf8}};
     const auto rgb565 = decode_xenos_texture_block_rgba8(4U, rgb565_storage);

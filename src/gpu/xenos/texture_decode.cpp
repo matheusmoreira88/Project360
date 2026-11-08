@@ -2,6 +2,8 @@
 
 #include "gpu/xenos/texture_fetch.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -197,6 +199,86 @@ TextureBlockDecodeResult apply_texture_fetch_component_swizzle(
             output[component] = (selector & 0x4U) != 0U
                                     ? ((selector & 0x1U) != 0U ? 255U : 0U)
                                     : channels[selector];
+        }
+        result.texels[texel_index] = {output[0], output[1], output[2], output[3]};
+    }
+    return result;
+}
+
+TextureFloatBlockDecodeResult decode_xenos_texture_fetch_block_float(
+    std::uint8_t format, const TextureFetchConstant& fetch,
+    const TextureBlockDecodeResult& decoded) {
+    if (!decoded) return {{}, 0U, decoded.error};
+    if (format != 6U) {
+        return {{}, 0U,
+                "Numeric fetch conversion is implemented only for Xenos 8:8:8:8 format"};
+    }
+    if (fetch.number_format > 1U) {
+        return {{}, 0U, "Texture fetch number format is unsupported"};
+    }
+    if (decoded.texel_count > decoded.texels.size()) {
+        return {{}, 0U, "Decoded texture block has an invalid texel count"};
+    }
+
+    TextureFloatBlockDecodeResult result{};
+    result.texel_count = decoded.texel_count;
+    for (std::size_t texel_index = 0U; texel_index < decoded.texel_count;
+         ++texel_index) {
+        const auto& source = decoded.texels[texel_index];
+        const std::array<std::uint8_t, 4> channels{source.r, source.g, source.b,
+                                                  source.a};
+        std::array<float, 4> interpreted{};
+        for (std::size_t component = 0U; component < channels.size(); ++component) {
+            const float unsigned_value = static_cast<float>(channels[component]);
+            const float normalized = unsigned_value / 255.0F;
+            switch (fetch.sign_modes[component]) {
+            case 0U: // Unsigned.
+                interpreted[component] = fetch.number_format == 0U ? normalized
+                                                                    : unsigned_value;
+                break;
+            case 1U: { // Signed two's-complement.
+                const auto signed_value = channels[component] < 0x80U
+                                              ? static_cast<std::int32_t>(channels[component])
+                                              : static_cast<std::int32_t>(channels[component]) -
+                                                    256;
+                interpreted[component] = fetch.number_format == 0U
+                                             ? std::max(static_cast<float>(signed_value) / 127.0F,
+                                                        -1.0F)
+                                             : static_cast<float>(signed_value);
+                break;
+            }
+            case 2U: // Unsigned-biased.
+                interpreted[component] = fetch.number_format == 0U
+                                             ? normalized * 2.0F - 1.0F
+                                             : unsigned_value * 2.0F - 255.0F;
+                break;
+            case 3U: { // Gamma encoded, converted from sRGB when sampled.
+                if (component == 3U) {
+                    return {{}, 0U, "Gamma conversion of the alpha channel is unsupported"};
+                }
+                if (fetch.number_format != 0U) {
+                    return {{}, 0U,
+                            "Integer number format with gamma sign mode is unsupported"};
+                }
+                interpreted[component] = normalized <= 0.04045F
+                                             ? normalized / 12.92F
+                                             : std::pow((normalized + 0.055F) / 1.055F,
+                                                        2.4F);
+                break;
+            }
+            default:
+                return {{}, 0U, "Texture fetch sign mode is unsupported"};
+            }
+        }
+
+        std::array<float, 4> output{};
+        for (std::size_t component = 0U; component < output.size(); ++component) {
+            const auto shift = static_cast<std::uint32_t>(component * 3U);
+            const auto selector = static_cast<std::uint8_t>(
+                (fetch.component_swizzle >> shift) & 0x7U);
+            output[component] = (selector & 0x4U) != 0U
+                                    ? ((selector & 0x1U) != 0U ? 1.0F : 0.0F)
+                                    : interpreted[selector];
         }
         result.texels[texel_index] = {output[0], output[1], output[2], output[3]};
     }
