@@ -1201,6 +1201,23 @@ int main() {
               state.pc == 0x800418U,
           "KeQueryPerformanceFrequency is not dispatched from a different import library");
 
+    const KernelDispatcher interrupt_time_dispatcher;
+    state.gpr[3] = 0U;
+    state.lr = 0x4147U;
+    state.pc = 0x800430U;
+    const auto first_interrupt_time = interrupt_time_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_query_interrupt_time_ordinal}, state,
+        memory);
+    const auto first_interrupt_ticks = state.gpr[3];
+    state.pc = 0x800438U;
+    const auto second_interrupt_time = interrupt_time_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_query_interrupt_time_ordinal}, state,
+        memory);
+    check(first_interrupt_time == KernelDispatchStatus::handled &&
+              second_interrupt_time == KernelDispatchStatus::handled &&
+              state.gpr[3] >= first_interrupt_ticks && state.pc == 0x4144U,
+          "KeQueryInterruptTime returns monotonic 100 ns guest uptime through LR");
+
     constexpr auto system_time_address = data_page + 0x600U;
     const auto host_time_before = std::chrono::system_clock::now();
     state.gpr[3] = system_time_address;

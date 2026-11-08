@@ -122,6 +122,7 @@ KernelDispatcher::KernelDispatcher(KernelTlsStorage tls_storage,
       tls_slot_limit_(tls_storage.slot_count < maximum_tls_slots
                           ? tls_storage.slot_count
                           : maximum_tls_slots),
+      guest_start_time_(std::chrono::steady_clock::now()),
       pool_allocator_(pool_storage) {}
 
 KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuState& state,
@@ -167,6 +168,15 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
     }
     if (import.ordinal == ke_query_performance_frequency_ordinal) {
         state.gpr[3] = xbox_360_performance_frequency;
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == ke_query_interrupt_time_ordinal) {
+        using HundredNanoseconds =
+            std::chrono::duration<std::uint64_t, std::ratio<1, 10'000'000>>;
+        state.gpr[3] = std::chrono::duration_cast<HundredNanoseconds>(
+                           std::chrono::steady_clock::now() - guest_start_time_)
+                           .count();
         state.pc = state.lr & ~std::uint64_t{3U};
         return KernelDispatchStatus::handled;
     }
