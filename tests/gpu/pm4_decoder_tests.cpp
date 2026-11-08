@@ -2166,6 +2166,72 @@ void test_tiled_texture_block_addressing_and_reads() {
         4U, memory);
     check(!out_of_memory && !overflowing,
           "tiled texture block reads reject physical bounds and address overflow");
+
+    const auto make_fetch = [](std::uint8_t format, std::uint32_t base,
+                               std::uint32_t width, std::uint32_t height,
+                               std::uint16_t pitch, bool tiled = true,
+                               bool stacked = false) {
+        std::array<std::uint32_t, 6> words{};
+        words[0] = 2U | (static_cast<std::uint32_t>(pitch) << 22U) |
+                   (tiled ? 0x80000000U : 0U);
+        words[1] = format | ((base >> 12U) << 12U) |
+                   (stacked ? (1U << 10U) : 0U);
+        words[2] = ((width - 1U) & 0x1fffU) |
+                   (((height - 1U) & 0x1fffU) << 13U);
+        words[5] = 1U << 9U;
+        const auto decoded = decode_texture_fetch_constant(words);
+        return decoded;
+    };
+
+    const auto rgba_fetch = make_fetch(6U, 0x1000U, 64U, 64U, 2U);
+    constexpr std::array<std::byte, 4> descriptor_rgba_bytes{
+        std::byte{0xaa}, std::byte{0xbb}, std::byte{0xcc}, std::byte{0xdd}};
+    check(rgba_fetch && memory.load(0x2000U, descriptor_rgba_bytes),
+          "decoded RGBA texture fixture is valid and loads a known base-level block");
+    if (rgba_fetch) {
+        const auto descriptor_block = read_xenos_tiled_2d_texture_block(
+            rgba_fetch.constant, 32U, 0U, memory);
+        check(descriptor_block && descriptor_block.physical_address == 0x2000U &&
+                  descriptor_block.byte_count == descriptor_rgba_bytes.size() &&
+                  std::equal(descriptor_rgba_bytes.begin(), descriptor_rgba_bytes.end(),
+                             descriptor_block.bytes.begin()),
+              "decoded texture descriptor resolves pitch, dimensions and physical block address");
+        check(!read_xenos_tiled_2d_texture_block(rgba_fetch.constant, 64U, 0U, memory),
+              "descriptor-backed texture read rejects coordinates outside visible dimensions");
+    }
+
+    const auto dxt_fetch = make_fetch(18U, 0x3000U, 64U, 64U, 2U);
+    constexpr std::array<std::byte, 8> descriptor_dxt_bytes{
+        std::byte{9}, std::byte{8}, std::byte{7}, std::byte{6},
+        std::byte{5}, std::byte{4}, std::byte{3}, std::byte{2}};
+    check(dxt_fetch && memory.load(0x3050U, descriptor_dxt_bytes),
+          "decoded DXT1 fixture is valid and loads its compressed storage block");
+    if (dxt_fetch) {
+        const auto descriptor_block = read_xenos_tiled_2d_texture_block(
+            dxt_fetch.constant, 32U, 4U, memory);
+        check(descriptor_block && descriptor_block.physical_address == 0x3050U &&
+                  descriptor_block.byte_count == descriptor_dxt_bytes.size() &&
+                  std::equal(descriptor_dxt_bytes.begin(), descriptor_dxt_bytes.end(),
+                             descriptor_block.bytes.begin()),
+              "descriptor-backed DXT1 read converts texels into 4x4 storage blocks");
+    }
+
+    const auto stacked_fetch = make_fetch(6U, 0x1000U, 64U, 64U, 2U, true, true);
+    const auto linear_fetch = make_fetch(6U, 0x1000U, 64U, 64U, 2U, false);
+    const auto narrow_pitch_fetch = make_fetch(6U, 0x1000U, 64U, 64U, 1U);
+    const auto unsupported_fetch = make_fetch(0U, 0x1000U, 64U, 64U, 2U);
+    check(!stacked_fetch || !read_xenos_tiled_2d_texture_block(
+                                stacked_fetch.constant, 0U, 0U, memory),
+          "descriptor-backed reader reports stacked textures as unsupported");
+    check(!linear_fetch || !read_xenos_tiled_2d_texture_block(
+                               linear_fetch.constant, 0U, 0U, memory),
+          "descriptor-backed reader reports linear texture layouts as unsupported");
+    check(!narrow_pitch_fetch || !read_xenos_tiled_2d_texture_block(
+                                     narrow_pitch_fetch.constant, 0U, 0U, memory),
+          "descriptor-backed reader rejects a pitch narrower than visible texture width");
+    check(!unsupported_fetch || !read_xenos_tiled_2d_texture_block(
+                                    unsupported_fetch.constant, 0U, 0U, memory),
+          "descriptor-backed reader propagates unsupported format diagnostics");
 }
 
 void test_vfetch_instruction_and_attribute_range() {

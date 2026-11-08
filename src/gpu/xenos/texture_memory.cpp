@@ -1,5 +1,6 @@
 #include "gpu/xenos/texture_memory.hpp"
 
+#include "gpu/xenos/texture_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
 #include <limits>
@@ -12,6 +13,14 @@ constexpr std::uint32_t kMacroTileLog2 = 5U;
 constexpr std::uint32_t kMacroTileSize = 1U << kMacroTileLog2;
 constexpr std::uint32_t kMaximumDimensionInBlocks = 1U << 24U;
 constexpr std::uint8_t kMaximumBytesPerBlock = 16U;
+
+std::uint32_t ceil_divide(std::uint32_t value, std::uint32_t divisor) {
+    return value / divisor + static_cast<std::uint32_t>(value % divisor != 0U);
+}
+
+std::uint32_t round_up_to_tile(std::uint32_t value) {
+    return (value + (kMacroTileSize - 1U)) & ~(kMacroTileSize - 1U);
+}
 
 bool supported_block_size(std::uint8_t bytes_per_block) {
     return bytes_per_block != 0U && bytes_per_block <= kMaximumBytesPerBlock &&
@@ -89,6 +98,42 @@ TextureBlockReadResult read_xenos_tiled_2d_block(
         return {{}, {}, 0U, "Texture block lies outside physical guest memory"};
     }
     return result;
+}
+
+TextureBlockReadResult read_xenos_tiled_2d_texture_block(
+    const TextureFetchConstant& fetch, std::uint32_t texel_x,
+    std::uint32_t texel_y, const memory::GuestMemory& memory) {
+    if (fetch.dimension != TextureDataDimension::two_d_or_stacked || fetch.stacked) {
+        return {{}, {}, 0U, "Descriptor is not a non-stacked 2D texture"};
+    }
+    if (!fetch.tiled) {
+        return {{}, {}, 0U, "Linear texture addressing is not implemented"};
+    }
+    if (fetch.pitch == 0U) {
+        return {{}, {}, 0U, "Texture descriptor has a zero base pitch"};
+    }
+    if (fetch.width == 0U || fetch.height == 0U || texel_x >= fetch.width ||
+        texel_y >= fetch.height) {
+        return {{}, {}, 0U, "Texture texel coordinate is outside the descriptor dimensions"};
+    }
+
+    const auto storage = decode_texture_storage_layout(fetch.format);
+    if (!storage) return {{}, {}, 0U, storage.error};
+
+    const auto& layout = storage.layout;
+    const auto width_blocks = ceil_divide(fetch.width, layout.block_width_pixels);
+    const auto height_blocks = ceil_divide(fetch.height, layout.block_height_pixels);
+    const auto pitch_pixels = static_cast<std::uint32_t>(fetch.pitch) * 32U;
+    const auto pitch_blocks = round_up_to_tile(
+        ceil_divide(pitch_pixels, layout.block_width_pixels));
+    if (pitch_blocks < width_blocks) {
+        return {{}, {}, 0U, "Texture pitch is smaller than its visible block width"};
+    }
+
+    return read_xenos_tiled_2d_block(
+        fetch.base_address_bytes, texel_x / layout.block_width_pixels,
+        texel_y / layout.block_height_pixels, width_blocks, height_blocks,
+        pitch_blocks, layout.bytes_per_block, memory);
 }
 
 } // namespace project360::gpu::xenos

@@ -11,6 +11,8 @@ class GuestMemory;
 
 namespace project360::gpu::xenos {
 
+struct TextureFetchConstant;
+
 struct TextureBlockOffsetResult {
     std::uint64_t byte_offset{};
     std::string error;
@@ -42,5 +44,13 @@ struct TextureBlockReadResult {
     std::uint32_t width_blocks, std::uint32_t height_blocks,
     std::uint32_t pitch_blocks, std::uint8_t bytes_per_block,
     const memory::GuestMemory& memory);
+
+// Resolves a texel coordinate through a decoded base-level 2D texture
+// descriptor, then reads its raw storage block. The fetch pitch is in
+// 32-pixel units and is converted to storage blocks and 32-block tile pitch.
+// Endian conversion, pixel decoding, mip selection and sampling are not done.
+[[nodiscard]] TextureBlockReadResult read_xenos_tiled_2d_texture_block(
+    const TextureFetchConstant& fetch, std::uint32_t texel_x,
+    std::uint32_t texel_y, const memory::GuestMemory& memory);
 
 } // namespace project360::gpu::xenos
