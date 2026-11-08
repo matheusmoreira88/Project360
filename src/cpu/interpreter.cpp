@@ -86,6 +86,7 @@ bool is_floating_point_instruction(Opcode opcode) {
     case Opcode::floating_move_register:
     case Opcode::floating_move_from_fpscr:
     case Opcode::floating_move_condition_register_from_fpscr:
+    case Opcode::floating_move_to_fpscr_field_immediate:
     case Opcode::floating_negate:
     case Opcode::floating_absolute:
     case Opcode::floating_negative_absolute:
@@ -1028,6 +1029,15 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         }
         state.fpscr &= ~clear_mask;
         update_fpscr_exception_summaries(state);
+        break;
+    }
+    case Opcode::floating_move_to_fpscr_field_immediate: {
+        const auto field_shift = static_cast<unsigned>(28U - 4U * ins.bf);
+        const auto field_mask = 0xfU << field_shift;
+        state.fpscr = (state.fpscr & ~field_mask) |
+                      (static_cast<std::uint32_t>(ins.immediate) << field_shift);
+        update_fpscr_exception_summaries(state);
+        if (ins.record) set_cr_field(state, 1U, (state.fpscr >> 28U) & 0xfU);
         break;
     }
     case Opcode::condition_register_logical: {

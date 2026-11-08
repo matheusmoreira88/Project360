@@ -179,6 +179,13 @@ std::uint32_t mcrfs_form(std::uint8_t bf, std::uint8_t bfa,
            (static_cast<std::uint32_t>(bfa) << 18U) | (64U << 1U) | reserved;
 }
 
+std::uint32_t mtfsfi_form(std::uint8_t bf, std::uint8_t immediate, bool record = false,
+                          std::uint32_t reserved = 0) {
+    return (63U << 26U) | (static_cast<std::uint32_t>(bf) << 23U) |
+           (static_cast<std::uint32_t>(immediate) << 12U) | (134U << 1U) |
+           (record ? 1U : 0U) | reserved;
+}
+
 std::uint32_t cr_logical_form(std::uint8_t bt, std::uint8_t ba, std::uint8_t bb,
                               std::uint16_t xo, bool record = false) {
     return (19U << 26U) | (static_cast<std::uint32_t>(bt) << 21U) |
@@ -1534,10 +1541,11 @@ void test_floating_point_compare_instructions() {
 void test_floating_point_unavailable_exception() {
     using namespace project360;
     memory::GuestMemory mem(16);
-    const std::array<std::uint32_t, 3> floating_instructions{
+    const std::array<std::uint32_t, 4> floating_instructions{
         fpr_unary(2, 1, 72),                  // fmr f2,f1
         d_form(50, 3, 1, 0),                 // lfd f3,0(r1)
         indexed_memory(4, 1, 2, 983),        // stfiwx f4,r1,r2
+        mtfsfi_form(0, 0xf, true),            // mtfsfi. 0,0xf
     };
     constexpr std::uint64_t old_msr = (std::uint64_t{1} << 63U) |
                                       (std::uint64_t{1} << 60U) |
@@ -1574,7 +1582,7 @@ void test_floating_point_unavailable_exception() {
                   state.fpr[3] == 0x1111222233334444ULL &&
                   state.fpr[4] == 0x5555666677778888ULL && state.cr == 0x12345678U &&
                   state.fpscr == 0xabcdef01U,
-              "MSR FP=0 vectors floating-point compute/load/store before side effects");
+              "MSR FP=0 vectors floating-point instructions before side effects");
     }
 }
 
@@ -2967,6 +2975,50 @@ void test_move_condition_register_from_fpscr() {
           "mcrfs rejects reserved fields and nonzero Rc");
 }
 
+void test_move_to_fpscr_field_immediate() {
+    using namespace project360;
+    memory::GuestMemory mem(12);
+    put_word(mem, 0, mtfsfi_form(0, 0xb, true));
+    put_word(mem, 4, mtfsfi_form(1, 0x1, true));
+    put_word(mem, 8, mtfsfi_form(4, 0xa));
+
+    cpu::CpuState state{};
+    state.cr = 0x12345678U;
+    state.msr = 1ULL << 50U; // MSR[FP]
+    state.fpscr = 0x00000080U; // Enable invalid-operation exceptions.
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.fpscr == 0x90000080U && ((state.cr >> 24U) & 0xfU) == 0x9U,
+          "mtfsfi field 0 writes FX/OX, derives FEX/VX, and records the resulting summary");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              (state.fpscr & 0x0f000000U) == 0x01000000U &&
+              (state.fpscr & 0x60000000U) == 0x60000000U &&
+              ((state.cr >> 24U) & 0xfU) == 0xfU,
+          "mtfsfi field 1 updates invalid flags and recomputes VX/FEX for record form");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              ((state.fpscr >> 12U) & 0xfU) == 0xaU &&
+              (state.fpscr & 0x80000000U) != 0U &&
+              state.cr == ((0x12345678U & ~0x0f000000U) | 0x0f000000U),
+          "mtfsfi writes an ordinary result field without altering FX or CR when Rc is clear");
+
+    constexpr auto golden = 0xfc00010cU;
+    const auto decoded = cpu::decode(golden);
+    check(decoded && decoded.instruction.opcode ==
+                         cpu::Opcode::floating_move_to_fpscr_field_immediate &&
+              decoded.instruction.bf == 0U && decoded.instruction.immediate == 0,
+          "mtfsfi decoder matches the architectural zero-field encoding");
+    check(!cpu::decode(mtfsfi_form(2, 3, false, 1U << 21U)) &&
+              !cpu::decode(mtfsfi_form(2, 3, false, 1U << 16U)) &&
+              !cpu::decode(mtfsfi_form(2, 3, false, 1U << 11U)),
+          "mtfsfi rejects all reserved field groups");
+}
+
 void test_condition_register_logical_operations() {
     using namespace project360;
     constexpr std::uint8_t target_bit = 9;
@@ -3525,6 +3577,7 @@ int main() {
     test_move_to_machine_state_register_doubleword();
     test_move_condition_register_field();
     test_move_condition_register_from_fpscr();
+    test_move_to_fpscr_field_immediate();
     test_condition_register_logical_operations();
     test_special_register_transfers();
     test_move_condition_register_from_xer();
