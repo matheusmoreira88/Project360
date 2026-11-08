@@ -191,10 +191,20 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr0(state, state.gpr[ins.ra]);
         break;
     }
-    case Opcode::rotate_left_word_mask: {
+    case Opcode::rotate_left_word_mask:
+    case Opcode::rotate_left_word_mask_insert:
+    case Opcode::rotate_left_word_variable_mask: {
         const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);
-        const auto rotated = std::rotl(source, static_cast<int>(ins.shift));
-        const auto value = static_cast<std::uint32_t>(rotated & rotate_mask(ins.mask_begin, ins.mask_end));
+        const auto shift = ins.opcode == Opcode::rotate_left_word_variable_mask
+                               ? static_cast<int>(state.gpr[ins.rb] & 0x1fU)
+                               : static_cast<int>(ins.shift);
+        const auto rotated = std::rotl(source, shift);
+        const auto mask = rotate_mask(ins.mask_begin, ins.mask_end);
+        const auto selected = static_cast<std::uint32_t>(rotated & mask);
+        const auto value = ins.opcode == Opcode::rotate_left_word_mask_insert
+                               ? static_cast<std::uint32_t>(
+                                     (static_cast<std::uint32_t>(state.gpr[ins.ra]) & ~mask) | selected)
+                               : selected;
         state.gpr[ins.ra] = value;
         if (ins.record) set_cr0(state, value);
         break;

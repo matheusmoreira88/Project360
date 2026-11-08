@@ -45,6 +45,15 @@ DecodeResult decode(std::uint32_t word) {
         ins.mask_end = static_cast<std::uint8_t>((word >> 1U) & 0x1fU);
         ins.record = (word & 1U) != 0U;
         return {ins, {}};
+    case 20:
+    case 23:
+        ins.opcode = primary == 20U ? Opcode::rotate_left_word_mask_insert
+                                    : Opcode::rotate_left_word_variable_mask;
+        ins.shift = static_cast<std::uint8_t>((word >> 11U) & 0x1fU);
+        ins.mask_begin = static_cast<std::uint8_t>((word >> 6U) & 0x1fU);
+        ins.mask_end = static_cast<std::uint8_t>((word >> 1U) & 0x1fU);
+        ins.record = (word & 1U) != 0U;
+        return {ins, {}};
     case 10:
     case 11:
         if ((word & (1U << 22U)) != 0U) return {{}, "compare immediate reserved bit is set"};

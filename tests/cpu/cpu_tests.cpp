@@ -72,6 +72,17 @@ std::uint32_t rotate_mask(std::uint8_t ra, std::uint8_t rs, std::uint8_t shift,
            (record ? 1U : 0U);
 }
 
+std::uint32_t rotate_word_form(std::uint8_t op, std::uint8_t ra, std::uint8_t rs,
+                               std::uint8_t shift_or_rb, std::uint8_t begin,
+                               std::uint8_t end, bool record = false) {
+    return (static_cast<std::uint32_t>(op) << 26U) |
+           (static_cast<std::uint32_t>(rs) << 21U) |
+           (static_cast<std::uint32_t>(ra) << 16U) |
+           (static_cast<std::uint32_t>(shift_or_rb) << 11U) |
+           (static_cast<std::uint32_t>(begin) << 6U) |
+           (static_cast<std::uint32_t>(end) << 1U) | (record ? 1U : 0U);
+}
+
 std::uint32_t compare_immediate(std::uint8_t op, std::uint8_t bf, bool wide,
                                 std::uint8_t ra, std::uint16_t immediate) {
     return (static_cast<std::uint32_t>(op) << 26U) |
@@ -411,6 +422,32 @@ void test_word_shift_immediate_instruction() {
     check(result.status == cpu::StepStatus::executed && state.gpr[11] == 0xffffffffffffffffULL &&
               (state.xer & 0xe0000000U) == 0xc0000000U && state.pc == 20,
           "zero-count srawi sign-extends the source and clears CA");
+}
+
+void test_word_rotate_insert_and_variable_mask() {
+    using namespace project360;
+    memory::GuestMemory mem(16);
+    put_word(mem, 0, rotate_word_form(20, 3, 4, 8, 8, 15, true)); // rlwimi. r3,r4,8,8,15
+    put_word(mem, 4, rotate_word_form(23, 5, 4, 6, 28, 3, true)); // rlwnm. r5,r4,r6,28,3
+
+    cpu::CpuState state{};
+    state.gpr[3] = 0x12345678aaaaaaaaULL;
+    state.gpr[4] = 0x12345678U;
+    state.gpr[6] = 0x24U; // rlwnm uses only the low five bits: rotate by four
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 0xaa56aaaaU &&
+              (state.cr >> 28U) == 4U,
+          "rlwimi inserts only selected rotated bits, clears the upper word, and records CR0");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[5] == 0x20000001U &&
+              (state.cr >> 28U) == 4U && state.pc == 8,
+          "rlwnm masks a wrapped word range and uses RB low five bits for rotation");
+
+    const auto bad_word = cpu::decode(rotate_word_form(22, 1, 2, 3, 4, 5));
+    check(!bad_word, "unassigned primary opcode between word rotate forms remains unsupported");
 }
 
 void test_leading_zero_instructions() {
@@ -1251,6 +1288,7 @@ int main() {
     test_logical_shift_and_rotate_instructions();
     test_doubleword_shift_instructions();
     test_word_shift_immediate_instruction();
+    test_word_rotate_insert_and_variable_mask();
     test_leading_zero_instructions();
     test_memory_and_endianness();
     test_byte_and_halfword_memory_instructions();
