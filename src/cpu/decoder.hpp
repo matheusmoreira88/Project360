@@ -33,6 +33,8 @@ enum class Opcode {
     addze,
     mullw,
     mulld,
+    mulhw,
+    mulhwu,
     divw,
     divwu,
     divd,

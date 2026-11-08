@@ -510,6 +510,29 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr0(state, result);
         break;
     }
+    case Opcode::mulhw:
+    case Opcode::mulhwu: {
+        const auto left_bits = static_cast<std::uint32_t>(state.gpr[ins.ra]);
+        const auto right_bits = static_cast<std::uint32_t>(state.gpr[ins.rb]);
+        std::uint32_t high_word = 0;
+        if (ins.opcode == Opcode::mulhw) {
+            const auto left = std::bit_cast<std::int32_t>(left_bits);
+            const auto right = std::bit_cast<std::int32_t>(right_bits);
+            const auto product = static_cast<std::int64_t>(left) * right;
+            high_word = static_cast<std::uint32_t>(static_cast<std::uint64_t>(product) >> 32U);
+        } else {
+            const auto product = static_cast<std::uint64_t>(left_bits) * right_bits;
+            high_word = static_cast<std::uint32_t>(product >> 32U);
+        }
+        // As with other PowerPC64 word operations, the upper destination
+        // half is architecturally undefined; clear it deterministically here.
+        state.gpr[ins.rt] = high_word;
+        if (ins.record) {
+            const auto signed_result = std::bit_cast<std::int32_t>(high_word);
+            set_cr0(state, static_cast<std::uint64_t>(static_cast<std::int64_t>(signed_result)));
+        }
+        break;
+    }
     case Opcode::divw:
     case Opcode::divwu:
     case Opcode::divd:

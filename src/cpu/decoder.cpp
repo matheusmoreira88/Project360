@@ -433,6 +433,11 @@ DecodeResult decode(std::uint32_t word) {
             ins.overflow_enable = oe;
             return {ins, {}};
         }
+        if (xo == 75U || xo == 11U) {
+            ins.opcode = xo == 75U ? Opcode::mulhw : Opcode::mulhwu;
+            ins.record = (word & 1U) != 0U;
+            return {ins, {}};
+        }
         if (xo == 491U || xo == 459U || xo == 489U || xo == 457U) {
             ins.opcode = xo == 491U ? Opcode::divw
                          : xo == 459U ? Opcode::divwu

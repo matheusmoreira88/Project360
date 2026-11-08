@@ -1387,6 +1387,30 @@ void test_integer_multiply_instructions() {
           "multiply overflow updates OV/SO and record updates CR0");
 }
 
+void test_integer_high_word_multiply_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(8);
+    put_word(mem, 0, add_xo(3, 1, 2, 75, false, true)); // mulhw. r3,r1,r2
+    put_word(mem, 4, add_xo(4, 4, 5, 11, false, true)); // mulhwu. r4,r4,r5
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0xfffffffffffffff9ULL; // -7
+    state.gpr[2] = 2;
+    state.gpr[4] = 0xffffffffU;
+    state.gpr[5] = 0xffffffffU;
+    state.xer = 0x80000000U;
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 0xffffffffU &&
+              (state.cr >> 28U) == 9U && state.xer == 0x80000000U,
+          "mulhw. returns the signed high word and records CR0 without changing XER");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[4] == 0xfffffffeU &&
+              (state.cr >> 28U) == 9U && state.xer == 0x80000000U,
+          "mulhwu. returns the unsigned high word, handles RT=RA and records signed CR0");
+}
+
 void test_sign_extension_instructions() {
     using namespace project360;
     memory::GuestMemory mem(128);
@@ -2098,6 +2122,7 @@ int main() {
     test_multiple_word_memory_instructions();
     test_integer_divide_instructions();
     test_integer_multiply_instructions();
+    test_integer_high_word_multiply_instructions();
     test_sign_extension_instructions();
     test_immediate_logic_instructions();
     test_xor_and_immediate_logic_instructions();
