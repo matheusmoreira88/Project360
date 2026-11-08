@@ -31,6 +31,22 @@ std::uint32_t d_form(std::uint8_t op, std::uint8_t rt, std::uint8_t ra, std::uin
            (static_cast<std::uint32_t>(ra) << 16U) | imm;
 }
 
+std::uint32_t trap_immediate(std::uint8_t primary, std::uint8_t to, std::uint8_t ra,
+                            std::int16_t immediate) {
+    return (static_cast<std::uint32_t>(primary) << 26U) |
+           (static_cast<std::uint32_t>(to) << 21U) |
+           (static_cast<std::uint32_t>(ra) << 16U) |
+           static_cast<std::uint16_t>(immediate);
+}
+
+std::uint32_t trap_register(std::uint8_t to, std::uint8_t ra, std::uint8_t rb,
+                            std::uint16_t xo, bool reserved_rc = false) {
+    return (31U << 26U) | (static_cast<std::uint32_t>(to) << 21U) |
+           (static_cast<std::uint32_t>(ra) << 16U) |
+           (static_cast<std::uint32_t>(rb) << 11U) |
+           (static_cast<std::uint32_t>(xo) << 1U) | (reserved_rc ? 1U : 0U);
+}
+
 std::uint32_t ds_form(std::uint8_t op, std::uint8_t rt, std::uint8_t ra,
                       std::int16_t displacement, std::uint8_t xo = 0) {
     const auto bits = static_cast<std::uint16_t>(displacement);
@@ -2287,6 +2303,59 @@ void test_compare_registers() {
           "reserved cmp/cmpl bit forms are diagnosed");
 }
 
+void test_integer_trap_instructions() {
+    using namespace project360;
+    constexpr std::uint64_t kProgramVector = 0x700U;
+    constexpr std::uint64_t kTrapSyndrome = 0x00020000U; // SRR1 architectural bit 46
+    const cpu::Interpreter interpreter{};
+
+    memory::GuestMemory tw_memory(4);
+    put_word(tw_memory, 0, trap_register(0x10U, 3, 4, 4)); // tw LT, r3, r4
+    cpu::CpuState tw_state{};
+    tw_state.gpr[3] = 0xffffffff80000000ULL;
+    tw_state.gpr[4] = 1U;
+    tw_state.cr = 0x87654321U;
+    tw_state.xer = 0xa0000000U;
+    const auto tw_result = interpreter.step(tw_state, tw_memory);
+    check(tw_result.status == cpu::StepStatus::exception_taken &&
+              tw_result.fault_info && tw_result.fault_info->kind == cpu::FaultKind::trap &&
+              tw_result.guest_exception && tw_result.guest_exception->vector == kProgramVector &&
+              tw_state.srr0 == 0U && (tw_state.srr1 & kTrapSyndrome) != 0U &&
+              tw_state.cr == 0x87654321U && tw_state.xer == 0xa0000000U,
+          "tw uses signed low-word operands and enters the trap program exception without changing CR/XER");
+
+    memory::GuestMemory twi_memory(4);
+    put_word(twi_memory, 0, trap_immediate(3, 0x02U, 5, -1)); // twi logical LT, r5, -1
+    cpu::CpuState twi_state{};
+    twi_state.gpr[5] = 0x7fffffffU;
+    const auto twi_result = interpreter.step(twi_state, twi_memory);
+    check(twi_result.status == cpu::StepStatus::exception_taken &&
+              (twi_state.srr1 & kTrapSyndrome) != 0U,
+          "twi sign-extends its immediate and evaluates the selected unsigned condition");
+
+    memory::GuestMemory td_memory(4);
+    put_word(td_memory, 0, trap_register(0x01U, 6, 7, 68)); // td unsigned GT, r6, r7
+    cpu::CpuState td_state{};
+    td_state.gpr[6] = 0x100000000ULL;
+    td_state.gpr[7] = 0xffffffffULL;
+    const auto td_result = interpreter.step(td_state, td_memory);
+    check(td_result.status == cpu::StepStatus::exception_taken &&
+              (td_state.srr1 & kTrapSyndrome) != 0U,
+          "td compares full 64-bit values for unsigned greater-than");
+
+    memory::GuestMemory tdi_memory(4);
+    put_word(tdi_memory, 0, trap_immediate(2, 0x01U, 8, -1)); // tdi unsigned GT, r8, -1
+    cpu::CpuState tdi_state{};
+    tdi_state.gpr[8] = 0x100000000ULL;
+    const auto tdi_result = interpreter.step(tdi_state, tdi_memory);
+    check(tdi_result.status == cpu::StepStatus::executed && tdi_state.pc == 4U,
+          "tdi sign-extends its immediate to 64 bits and leaves nonmatching traps unraised");
+
+    const auto invalid_rc = cpu::decode(trap_register(0x10U, 1, 2, 4, true));
+    const auto invalid_xo = cpu::decode(trap_register(0x10U, 1, 2, 4) | (1U << 10U));
+    check(!invalid_rc && !invalid_xo, "tw reserved XO and Rc bits are diagnosed");
+}
+
 void test_condition_register_transfers() {
     using namespace project360;
     memory::GuestMemory mem(12);
@@ -2801,6 +2870,7 @@ int main() {
     test_cpu_fetch_from_mapped_executable_page();
     test_compare_immediates();
     test_compare_registers();
+    test_integer_trap_instructions();
     test_condition_register_transfers();
     test_move_condition_register_field();
     test_condition_register_logical_operations();

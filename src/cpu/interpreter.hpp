@@ -16,6 +16,7 @@ enum class FaultKind {
     illegal_instruction,
     unsupported_instruction,
     privileged_instruction,
+    trap,
     instruction_alignment,
     instruction_access,
     data_alignment,

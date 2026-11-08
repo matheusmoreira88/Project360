@@ -28,6 +28,13 @@ DecodeResult decode(std::uint32_t word) {
     ins.rb = rb;
 
     switch (primary) {
+    case 2:
+    case 3:
+        ins.to = rt;
+        ins.opcode = primary == 2U ? Opcode::trap_doubleword_immediate
+                                   : Opcode::trap_word_immediate;
+        ins.immediate = std::bit_cast<std::int16_t>(imm16);
+        return {ins, {}};
     case 14: ins.opcode = Opcode::addi; ins.immediate = std::bit_cast<std::int16_t>(imm16); return {ins, {}};
     case 15: ins.opcode = Opcode::addis; ins.immediate = std::bit_cast<std::int16_t>(imm16); return {ins, {}};
     case 7: ins.opcode = Opcode::mulli; ins.immediate = std::bit_cast<std::int16_t>(imm16); return {ins, {}};
@@ -287,6 +294,14 @@ DecodeResult decode(std::uint32_t word) {
         const auto xo = static_cast<std::uint16_t>((word >> 1U) & 0x1ffU);
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
         const bool oe = (word & (1U << 10U)) != 0U;
+        if (xo == 4U || xo == 68U) {
+            if ((word & ((1U << 10U) | 1U)) != 0U) {
+                return {{}, "trap instruction reserved XO or Rc field is nonzero"};
+            }
+            ins.opcode = xo == 4U ? Opcode::trap_word : Opcode::trap_doubleword;
+            ins.to = rt;
+            return {ins, {}};
+        }
         if (xo10 == 339U || xo10 == 467U) {
             if ((word & 1U) != 0U) {
                 return {{}, "mfspr/mtspr record bit is reserved"};

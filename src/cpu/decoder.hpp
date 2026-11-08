@@ -84,6 +84,8 @@ enum class Opcode {
     cmpl,
     cmpi,
     cmpli,
+    trap_word_immediate,
+    trap_doubleword_immediate,
     move_from_condition_register,
     move_condition_register_field,
     condition_register_logical,
@@ -133,7 +135,9 @@ enum class Opcode {
     floating_absolute,
     floating_negative_absolute,
     floating_compare_unordered,
-    floating_compare_ordered
+    floating_compare_ordered,
+    trap_word,
+    trap_doubleword
 };
 
 struct DecodedInstruction {
@@ -147,6 +151,7 @@ struct DecodedInstruction {
     std::uint16_t spr{};
     std::uint8_t bo{};
     std::uint8_t bi{};
+    std::uint8_t to{};
     std::uint8_t level{};
     std::uint8_t branch_hint{};
     std::uint8_t shift{};

@@ -262,6 +262,56 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
                          "sc LEV=1 hypervisor call is unsupported", word);
         }
         return take_system_call_exception(state);
+    case Opcode::trap_word_immediate:
+    case Opcode::trap_doubleword_immediate:
+    case Opcode::trap_word:
+    case Opcode::trap_doubleword: {
+        const bool word_operation = ins.opcode == Opcode::trap_word_immediate ||
+                                    ins.opcode == Opcode::trap_word;
+        const bool immediate = ins.opcode == Opcode::trap_word_immediate ||
+                               ins.opcode == Opcode::trap_doubleword_immediate;
+        const auto left_bits = word_operation
+                                   ? static_cast<std::uint64_t>(
+                                         static_cast<std::uint32_t>(state.gpr[ins.ra]))
+                                   : state.gpr[ins.ra];
+        const auto right_bits = immediate
+                                    ? (word_operation
+                                           ? static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                                                 ins.immediate))
+                                           : static_cast<std::uint64_t>(ins.immediate))
+                                    : (word_operation
+                                           ? static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                                                 state.gpr[ins.rb]))
+                                           : state.gpr[ins.rb]);
+        const bool less_signed = word_operation
+                                     ? std::bit_cast<std::int32_t>(
+                                           static_cast<std::uint32_t>(left_bits)) <
+                                           std::bit_cast<std::int32_t>(
+                                               static_cast<std::uint32_t>(right_bits))
+                                     : std::bit_cast<std::int64_t>(left_bits) <
+                                           std::bit_cast<std::int64_t>(right_bits);
+        const bool greater_signed = word_operation
+                                        ? std::bit_cast<std::int32_t>(
+                                              static_cast<std::uint32_t>(left_bits)) >
+                                              std::bit_cast<std::int32_t>(
+                                                  static_cast<std::uint32_t>(right_bits))
+                                        : std::bit_cast<std::int64_t>(left_bits) >
+                                              std::bit_cast<std::int64_t>(right_bits);
+        const bool equal = left_bits == right_bits;
+        const bool less_unsigned = left_bits < right_bits;
+        const bool greater_unsigned = left_bits > right_bits;
+        const auto to = ins.to;
+        const bool trap = ((to & 0x10U) != 0U && less_signed) ||
+                          ((to & 0x08U) != 0U && greater_signed) ||
+                          ((to & 0x04U) != 0U && equal) ||
+                          ((to & 0x02U) != 0U && less_unsigned) ||
+                          ((to & 0x01U) != 0U && greater_unsigned);
+        if (trap) {
+            return take_program_exception(state, FaultKind::trap, 46U, word,
+                                          "PowerPC integer trap condition matched");
+        }
+        break;
+    }
     case Opcode::isync:
         // Guest instructions are fetched from memory on every step, so this
         // interpreter has no prefetched host instruction cache to invalidate.
