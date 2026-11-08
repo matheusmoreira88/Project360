@@ -168,6 +168,71 @@ bool GuestMemory::read_u8(std::uint64_t address, std::uint8_t& value) const noex
     return true;
 }
 
+bool GuestMemory::read_bytes(std::uint64_t address, std::span<std::byte> destination,
+                             std::uint64_t* fault_address) const noexcept {
+    if (destination.empty()) return true;
+    if (address > std::numeric_limits<std::uint64_t>::max() -
+                      (destination.size() - 1U)) {
+        if (fault_address != nullptr) *fault_address = address;
+        return false;
+    }
+
+    const std::shared_lock lock(access_mutex_);
+    if (!mapping_enabled_.load(std::memory_order_acquire)) {
+        if (!contains(address, destination.size())) {
+            if (fault_address != nullptr) {
+                auto first_invalid = address;
+                if (address <= static_cast<std::uint64_t>(
+                                   std::numeric_limits<std::size_t>::max())) {
+                    const auto start = static_cast<std::size_t>(address);
+                    if (start <= bytes_.size()) {
+                        first_invalid += static_cast<std::uint64_t>(bytes_.size() - start);
+                    }
+                }
+                *fault_address = first_invalid;
+            }
+            return false;
+        }
+        const auto start = static_cast<std::size_t>(address);
+        std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(start), destination.size(),
+                    destination.begin());
+        return true;
+    }
+
+    auto current = address;
+    auto remaining = destination.size();
+    while (remaining != 0U) {
+        std::uint64_t physical = 0U;
+        if (!translate_unlocked(current, GuestPageAccess::read, physical)) {
+            if (fault_address != nullptr) *fault_address = current;
+            return false;
+        }
+        const auto page_offset = static_cast<std::size_t>(current & (page_size - 1U));
+        const auto chunk = std::min(remaining,
+                                    static_cast<std::size_t>(page_size) - page_offset);
+        current += static_cast<std::uint64_t>(chunk);
+        remaining -= chunk;
+    }
+
+    current = address;
+    std::size_t data_offset = 0U;
+    remaining = destination.size();
+    while (remaining != 0U) {
+        std::uint64_t physical = 0U;
+        (void)translate_unlocked(current, GuestPageAccess::read, physical);
+        const auto page_offset = static_cast<std::size_t>(current & (page_size - 1U));
+        const auto chunk = std::min(remaining,
+                                    static_cast<std::size_t>(page_size) - page_offset);
+        const auto start = static_cast<std::size_t>(physical);
+        std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(start), chunk,
+                    destination.begin() + static_cast<std::ptrdiff_t>(data_offset));
+        current += static_cast<std::uint64_t>(chunk);
+        data_offset += chunk;
+        remaining -= chunk;
+    }
+    return true;
+}
+
 bool GuestMemory::write_u8(std::uint64_t address, std::uint8_t value) noexcept {
     const std::unique_lock lock(access_mutex_);
     std::uint64_t physical = 0;

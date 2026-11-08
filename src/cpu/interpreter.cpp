@@ -1302,14 +1302,17 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (address > std::numeric_limits<std::uint64_t>::max() - (byte_count - 1U)) {
             return data_fault(address, 1U, "lmw address range overflows");
         }
+        std::array<std::byte, 32U * sizeof(std::uint32_t)> bytes{};
+        std::uint64_t fault_address = address;
+        if (!memory.read_bytes(address, std::span<std::byte>(bytes.data(), byte_count),
+                               &fault_address)) {
+            return data_fault(fault_address, 1U, "lmw guest address fault");
+        }
         std::array<std::uint32_t, 32> values{};
         for (std::size_t index = 0U; index < byte_count; ++index) {
-            std::uint8_t byte = 0U;
-            if (!memory.read_u8(address + index, byte)) {
-                return data_fault(address + index, 1U, "lmw guest address fault");
-            }
             const auto shift = static_cast<unsigned>(24U - (index % 4U) * 8U);
-            values[index / 4U] |= static_cast<std::uint32_t>(byte) << shift;
+            values[index / 4U] |=
+                static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[index])) << shift;
         }
         for (std::size_t i = 0; i < count; ++i) {
             state.gpr[static_cast<std::size_t>(ins.rt) + i] = values[i];

@@ -135,6 +135,20 @@ int main() {
     check(fill_memory.read_u8(0x400ffeU, filled) && filled == 0x11U &&
               fill_memory.read_u8(0x401001U, filled) && filled == 0x44U,
           "transactional guest byte store reaches the full virtual destination range");
+    std::array<std::byte, 4> guest_read_bytes{};
+    std::uint64_t read_fault_address = UINT64_MAX;
+    check(fill_memory.read_bytes(0x400ffeU, guest_read_bytes, &read_fault_address) &&
+              guest_read_bytes == guest_write_bytes && read_fault_address == UINT64_MAX,
+          "guest byte read crosses non-contiguous backing pages atomically");
+    std::array<std::byte, 4> failed_read_bytes{};
+    failed_read_bytes.fill(std::byte{0x7f});
+    read_fault_address = UINT64_MAX;
+    check(!fill_memory.read_bytes(0x401ffeU, failed_read_bytes, &read_fault_address) &&
+              read_fault_address == 0x402000U &&
+              failed_read_bytes == std::array<std::byte, 4>{
+                                       std::byte{0x7f}, std::byte{0x7f},
+                                       std::byte{0x7f}, std::byte{0x7f}},
+          "failed guest read reports the first unmapped address without partial output");
     check(fill_memory.fill_u32_be(0x400ffcU, 8U, 0x11223344U),
           "word-pattern fill crosses pages backed by non-contiguous physical memory");
     std::uint32_t filled_word = 0U;
@@ -232,6 +246,17 @@ int main() {
     check(move_memory.move(UINT64_MAX, 0U, 0U) &&
               !move_memory.move(UINT64_MAX - 1U, 0U, 4U),
           "zero-length moves are no-ops and wrapped guest ranges fail safely");
+
+    GuestMemory flat_read(32U);
+    std::array<std::byte, 4> flat_read_output{};
+    flat_read_output.fill(std::byte{0x7f});
+    std::uint64_t flat_read_fault = UINT64_MAX;
+    check(!flat_read.read_bytes(30U, flat_read_output, &flat_read_fault) &&
+              flat_read_fault == 32U &&
+              flat_read_output == std::array<std::byte, 4>{
+                                      std::byte{0x7f}, std::byte{0x7f},
+                                      std::byte{0x7f}, std::byte{0x7f}},
+          "flat read reports the first out-of-range byte without partial output");
 
     GuestMemory transactional(2U * static_cast<std::size_t>(GuestMemory::page_size));
     const std::array<project360::memory::GuestPageMapping, 2> duplicate_batch{{
