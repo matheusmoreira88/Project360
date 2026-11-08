@@ -3,6 +3,7 @@
 #include "memory/guest_memory.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <limits>
 #include <span>
@@ -166,6 +167,29 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
     }
     if (import.ordinal == ke_query_performance_frequency_ordinal) {
         state.gpr[3] = xbox_360_performance_frequency;
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == ke_query_system_time_ordinal) {
+        constexpr std::uint64_t maximum_guest_address = 0xffff'ffffU;
+        constexpr std::int64_t windows_epoch_delta_100ns = 116'444'736'000'000'000LL;
+        const auto output_address = state.gpr[3];
+        if (output_address > maximum_guest_address - 7U) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        using HundredNanoseconds = std::chrono::duration<std::int64_t, std::ratio<1, 10'000'000>>;
+        const auto unix_time = std::chrono::duration_cast<HundredNanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        if (unix_time < 0 || unix_time >
+                                 std::numeric_limits<std::int64_t>::max() -
+                                     windows_epoch_delta_100ns) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        const auto windows_time = static_cast<std::uint64_t>(
+            unix_time + windows_epoch_delta_100ns);
+        if (!memory.write_u64_be(output_address, windows_time)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
         state.pc = state.lr & ~std::uint64_t{3U};
         return KernelDispatchStatus::handled;
     }

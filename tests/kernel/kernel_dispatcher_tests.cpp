@@ -5,6 +5,7 @@
 #include "memory/guest_memory.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -1199,6 +1200,37 @@ int main() {
     check(wrong_frequency_library == KernelDispatchStatus::unsupported_library &&
               state.pc == 0x800418U,
           "KeQueryPerformanceFrequency is not dispatched from a different import library");
+
+    constexpr auto system_time_address = data_page + 0x600U;
+    const auto host_time_before = std::chrono::system_clock::now();
+    state.gpr[3] = system_time_address;
+    state.lr = 0x4127U;
+    state.pc = 0x800420U;
+    const auto system_time = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_query_system_time_ordinal}, state, memory);
+    const auto host_time_after = std::chrono::system_clock::now();
+    std::uint64_t guest_system_time = 0U;
+    constexpr std::uint64_t windows_epoch_delta_100ns = 116'444'736'000'000'000ULL;
+    constexpr std::uint64_t allowed_clock_skew_100ns = 10'000'000ULL;
+    const auto host_time_before_100ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::duration<std::int64_t, std::ratio<1, 10'000'000>>>(
+            host_time_before.time_since_epoch()).count()) + windows_epoch_delta_100ns;
+    const auto host_time_after_100ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::duration<std::int64_t, std::ratio<1, 10'000'000>>>(
+            host_time_after.time_since_epoch()).count()) + windows_epoch_delta_100ns;
+    check(system_time == KernelDispatchStatus::handled &&
+              memory.read_u64_be(system_time_address, guest_system_time) &&
+              guest_system_time + allowed_clock_skew_100ns >= host_time_before_100ns &&
+              guest_system_time <= host_time_after_100ns + allowed_clock_skew_100ns &&
+              state.pc == 0x4124U,
+          "KeQuerySystemTime writes big-endian 100 ns time since 1601 and returns through LR");
+    state.gpr[3] = 0xffff'fff8U;
+    state.pc = 0x800428U;
+    const auto invalid_system_time_pointer = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_query_system_time_ordinal}, state, memory);
+    check(invalid_system_time_pointer == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x800428U,
+          "KeQuerySystemTime reports an unmapped output pointer without returning to the guest");
 
     constexpr std::uint32_t tls_slots_address = static_cast<std::uint32_t>(data_page + 0x400U);
     constexpr auto tls_storage = project360::kernel::KernelTlsStorage{tls_slots_address, 2U};

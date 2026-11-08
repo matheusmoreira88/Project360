@@ -57,6 +57,7 @@ public:
     static constexpr std::uint16_t rtl_unicode_string_to_integer_ordinal = 309;
     static constexpr std::uint16_t rtl_upcase_unicode_char_ordinal = 313;
     static constexpr std::uint16_t ke_get_current_thread_ordinal = 104;
+    static constexpr std::uint16_t ke_query_system_time_ordinal = 132;
     static constexpr std::uint16_t ke_query_performance_frequency_ordinal = 131;
     static constexpr std::uint16_t ke_tls_alloc_ordinal = 338;
     static constexpr std::uint16_t ke_tls_free_ordinal = 339;
