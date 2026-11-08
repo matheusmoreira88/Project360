@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstddef>
+#include <span>
 #include <string_view>
 
 namespace project360::kernel {
@@ -11,6 +12,7 @@ namespace {
 
 constexpr std::uint32_t kStatusSuccess = 0x00000000U;
 constexpr std::uint32_t kStatusInvalidParameter = 0xc000000dU;
+constexpr std::uint32_t kStatusBufferOverflow = 0x80000005U;
 constexpr std::uint32_t kErrorMessageIdNotFound = 317U;
 
 [[nodiscard]] constexpr std::uint32_t nt_status_to_dos_error(
@@ -98,6 +100,72 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
         state.gpr[3] = static_cast<std::uint16_t>((value >> 8U) | (value << 8U));
         state.pc = state.lr & ~std::uint64_t{3};
         return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == rtl_integer_to_unicode_string_ordinal) {
+        const auto value = static_cast<std::uint32_t>(state.gpr[3]);
+        const auto requested_base = static_cast<std::uint32_t>(state.gpr[4]);
+        const auto string_address = state.gpr[5];
+        const auto return_status = [&](std::uint32_t status) {
+            state.gpr[3] = status;
+            state.pc = state.lr & ~std::uint64_t{3};
+            return KernelDispatchStatus::handled;
+        };
+        if (requested_base != 0U && requested_base != 2U && requested_base != 8U &&
+            requested_base != 10U && requested_base != 16U) {
+            return return_status(kStatusInvalidParameter);
+        }
+
+        constexpr auto guest_address_limit = std::uint64_t{0xffff'ffffU};
+        if (string_address > guest_address_limit - 7U) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        std::uint16_t previous_length = 0U;
+        std::uint16_t maximum_length = 0U;
+        std::uint32_t buffer = 0U;
+        if (!memory.read_u16_be(string_address, previous_length) ||
+            !memory.read_u16_be(string_address + 2U, maximum_length) ||
+            !memory.read_u32_be(string_address + 4U, buffer)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        (void)previous_length;
+
+        const auto base = requested_base == 0U ? 10U : requested_base;
+        std::array<std::uint16_t, 32U> reversed_digits{};
+        std::size_t digit_count = 0U;
+        auto remaining = value;
+        do {
+            const auto digit = remaining % base;
+            remaining /= base;
+            reversed_digits[digit_count++] = static_cast<std::uint16_t>(
+                digit < 10U ? static_cast<std::uint16_t>('0') + digit
+                            : static_cast<std::uint16_t>('A') + digit - 10U);
+        } while (remaining != 0U);
+
+        const auto output_length = static_cast<std::uint16_t>(digit_count * 2U);
+        const auto output_size = digit_count * 2U + 2U;
+        if (maximum_length < output_size) {
+            if (!memory.write_u16_be(string_address, output_length)) {
+                return KernelDispatchStatus::guest_memory_fault;
+            }
+            return return_status(kStatusBufferOverflow);
+        }
+        if (buffer == 0U || (buffer & 1U) != 0U ||
+            output_size - 1U > guest_address_limit - buffer) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+
+        std::array<std::byte, 66U> encoded{};
+        for (std::size_t index = 0U; index < digit_count; ++index) {
+            const auto character = reversed_digits[digit_count - index - 1U];
+            encoded[index * 2U] = static_cast<std::byte>((character >> 8U) & 0xffU);
+            encoded[index * 2U + 1U] = static_cast<std::byte>(character & 0xffU);
+        }
+        if (!memory.write_bytes(buffer,
+                                std::span<const std::byte>(encoded.data(), output_size)) ||
+            !memory.write_u16_be(string_address, output_length)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        return return_status(kStatusSuccess);
     }
     if (import.ordinal == rtl_init_ansi_string_ordinal) {
         const auto destination = state.gpr[3];

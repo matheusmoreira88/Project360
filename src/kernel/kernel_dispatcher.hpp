@@ -32,6 +32,7 @@ public:
     static constexpr std::uint16_t rtl_fill_memory_ulong_ordinal = 285;
     static constexpr std::uint16_t rtl_init_ansi_string_ordinal = 289;
     static constexpr std::uint16_t rtl_init_unicode_string_ordinal = 290;
+    static constexpr std::uint16_t rtl_integer_to_unicode_string_ordinal = 293;
     static constexpr std::uint16_t rtl_move_memory_ordinal = 298;
     static constexpr std::uint16_t rtl_nt_status_to_dos_error_ordinal = 301;
     static constexpr std::uint16_t rtl_ulong_byte_swap_ordinal = 307;

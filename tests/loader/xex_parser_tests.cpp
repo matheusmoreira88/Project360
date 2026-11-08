@@ -323,12 +323,19 @@ int main() {
     write_be32(loadable_pe, 0x2d0U, (14U << 26U) | (4U << 21U));
     write_be32(loadable_pe, 0x2d4U, (14U << 26U) | (5U << 21U) | 0x50b8U);
     write_be32(loadable_pe, 0x2d8U, 0x4bfffff1U); // bl import thunk at -0x10.
-    write_be32(loadable_pe, 0x2dcU, 0x4bffffc8U); // b back to guest code at +0xa4.
+    write_be32(loadable_pe, 0x2dcU, 0x48000004U); // b to the next caller instruction at +0xe0.
+    write_be32(loadable_pe, 0x2e0U, (14U << 26U) | (11U << 21U) | (3U << 16U));
+    write_be32(loadable_pe, 0x2e4U, (14U << 26U) | (3U << 21U) | 42U);
+    write_be32(loadable_pe, 0x2e8U, (14U << 26U) | (4U << 21U) | 16U);
+    write_be32(loadable_pe, 0x2ecU, (14U << 26U) | (5U << 21U) | 0x50d0U);
+    write_be32(loadable_pe, 0x2f0U, 0x4800000dU); // bl import thunk at +0x0c.
+    write_be32(loadable_pe, 0x2f4U, (14U << 26U) | (12U << 21U) | (3U << 16U));
+    write_be32(loadable_pe, 0x2fcU, 0x01000125U); // thunk, library 0, ordinal 293.
     auto loadable_xex = make_xex2();
     write_be32(loadable_xex, 0x444U, 0x830a0U);
-    write_be32(loadable_xex, 0x400U, 0x70U);
-    write_be32(loadable_xex, 0x41cU, 0x54U);
-    write_be16(loadable_xex, 0x442U, 11U);
+    write_be32(loadable_xex, 0x400U, 0x74U);
+    write_be32(loadable_xex, 0x41cU, 0x58U);
+    write_be16(loadable_xex, 0x442U, 12U);
     write_be32(loadable_xex, 0x448U, 0x830a4U);
     write_be32(loadable_xex, 0x44cU, 0x830a8U);
     write_be32(loadable_xex, 0x450U, 0x830acU);
@@ -339,6 +346,7 @@ int main() {
     write_be32(loadable_xex, 0x464U, 0x830c0U);
     write_be32(loadable_xex, 0x468U, 0x830c4U);
     write_be32(loadable_xex, 0x46cU, 0x830c8U);
+    write_be32(loadable_xex, 0x470U, 0x830fcU);
     loadable_xex.insert(loadable_xex.end(), loadable_pe.begin(), loadable_pe.end());
     project360::memory::GuestMemory guest_memory(0x5000U);
     const std::array<std::byte, 8> kernel_destination_seed{
@@ -355,6 +363,9 @@ int main() {
     const std::array<std::byte, 8> integer_unicode_source{
         std::byte{0}, std::byte{'0'}, std::byte{0}, std::byte{'x'},
         std::byte{0}, std::byte{'2'}, std::byte{0}, std::byte{'a'}};
+    const std::array<std::byte, 8> integer_output_descriptor{
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{16},
+        std::byte{0}, std::byte{0}, std::byte{0x50}, std::byte{0xe0}};
     check(guest_memory.load(0x4000U, kernel_destination_seed),
           "integration fixture initializes a separate guest kernel destination");
     check(guest_memory.load(0x4040U, ansi_source),
@@ -362,15 +373,19 @@ int main() {
     check(guest_memory.load(0x4060U, unicode_source),
           "integration fixture seeds the source for a guest UNICODE_STRING");
     check(guest_memory.load(0x40b0U, integer_unicode_descriptor) &&
-              guest_memory.load(0x40c0U, integer_unicode_source),
-          "integration fixture seeds a counted UTF-16 integer string");
+              guest_memory.load(0x40c0U, integer_unicode_source) &&
+              guest_memory.load(0x40d0U, integer_output_descriptor),
+          "integration fixture seeds counted UTF-16 input and output descriptors");
+    const std::array<std::byte, 68> integer_output_seed{};
+    check(guest_memory.load(0x40e0U, integer_output_seed),
+          "integration fixture reserves the Unicode conversion output buffer");
     const auto loaded = project360::loader::load_xex2_uncompressed(loadable_xex,
                                                                     guest_memory, 0U);
     check(loaded && loaded.image->image_base == 0x82000U &&
               loaded.image->entry_point == 0x83000U && loaded.image->mapped_size == 0x2000U,
           "unencrypted uncompressed XEX2 maps decoded Xbox PE image pages");
     check(loaded && loaded.image->xex.import_libraries.size() == 1U &&
-              loaded.image->xex.import_libraries[0].import_types.size() == 11U &&
+              loaded.image->xex.import_libraries[0].import_types.size() == 12U &&
               loaded.image->xex.import_libraries[0].import_types[0] == 1U &&
               loaded.image->xex.import_libraries[0].import_ordinals[0] == 284U &&
               loaded.image->xex.import_libraries[0].import_ordinals[1] == 285U &&
@@ -382,7 +397,8 @@ int main() {
               loaded.image->xex.import_libraries[0].import_ordinals[7] == 290U &&
               loaded.image->xex.import_libraries[0].import_ordinals[8] == 307U &&
               loaded.image->xex.import_libraries[0].import_ordinals[9] == 318U &&
-              loaded.image->xex.import_libraries[0].import_ordinals[10] == 309U,
+              loaded.image->xex.import_libraries[0].import_ordinals[10] == 309U &&
+              loaded.image->xex.import_libraries[0].import_ordinals[11] == 293U,
           "loader decodes function-thunk records and Xbox kernel ordinals from PE bytes");
     std::uint32_t loaded_instruction = 0;
     check(guest_memory.fetch_u32_be(0x83000U, loaded_instruction) &&
@@ -456,8 +472,10 @@ int main() {
         const auto read_unicode_buffer = executor.step(guest_cpu, guest_memory);
         const auto compare_ulong_result = guest_cpu.gpr[10];
         const auto compare_result = guest_cpu.gpr[9];
-        const auto integer_call_run = executor.run(guest_cpu, guest_memory, 15U);
+        const auto integer_call_run = executor.run(guest_cpu, guest_memory, 16U);
+        const auto integer_to_unicode_run = executor.run(guest_cpu, guest_memory, 6U);
         std::uint32_t parsed_integer = 0U;
+        std::uint16_t output_string_length = 0U;
         check(set_destination.status == project360::cpu::StepStatus::executed &&
                   set_length.status == project360::cpu::StepStatus::executed &&
                   set_fill.status == project360::cpu::StepStatus::executed &&
@@ -497,10 +515,13 @@ int main() {
                   invoke_unicode_import.status == project360::cpu::StepStatus::executed &&
                   read_unicode_header.status == project360::cpu::StepStatus::executed &&
                   read_unicode_buffer.status == project360::cpu::StepStatus::executed &&
-                  integer_call_run.instructions_executed == 15U &&
+                  integer_call_run.instructions_executed == 16U &&
                   integer_call_run.stop.status ==
+                      project360::cpu::StepStatus::instruction_limit_reached &&
+                  integer_to_unicode_run.instructions_executed == 6U &&
+                  integer_to_unicode_run.stop.status ==
                       project360::cpu::StepStatus::instruction_limit_reached,
-              "loaded XEX program calls eleven imported kernel routines and resumes");
+              "loaded XEX program calls twelve imported kernel routines and resumes");
         check(fill_visible,
               "XEX RtlFillMemory thunk fills guest bytes using the Xenon argument registers");
         check(ulong_pattern_visible,
@@ -519,13 +540,21 @@ int main() {
               "XEX RtlInitAnsiString thunk writes a big-endian header and source pointer");
         check(guest_cpu.gpr[7] == 0x00040006U && guest_cpu.gpr[8] == 0x5060U,
               "XEX RtlInitUnicodeString thunk writes byte lengths and source pointer");
-        check(guest_cpu.gpr[3] == 0U && guest_cpu.pc == 0x830a4U &&
+        check(guest_cpu.gpr[3] == 0U && guest_cpu.gpr[11] == 0U &&
+                  guest_cpu.gpr[12] == 0U && guest_cpu.pc == 0x830f8U &&
                   guest_memory.read_u32_be(0x50b8U, parsed_integer) && parsed_integer == 42U,
-              "XEX RtlUnicodeStringToInteger thunk parses counted UTF-16 and returns through LR");
+              "XEX integer conversion shims return through LR and guest code resumes");
+        std::uint16_t upper_two = 0U;
+        std::uint16_t upper_a = 0U;
+        check(guest_memory.read_u16_be(0x50d0U, output_string_length) &&
+                  output_string_length == 4U &&
+                  guest_memory.read_u16_be(0x50e0U, upper_two) && upper_two == '2' &&
+                  guest_memory.read_u16_be(0x50e2U, upper_a) && upper_a == 'A',
+              "XEX RtlIntegerToUnicodeString thunk formats uppercase UTF-16 hexadecimal");
         check(guest_memory.read_u32_be(0x5000U, cleared_word) && cleared_word == 0U &&
                   guest_memory.read_u32_be(0x5008U, cleared_copy_word) &&
                   cleared_copy_word == 0U && guest_cpu.gpr[6] == 9U &&
-                  guest_cpu.pc == 0x830a4U,
+                  guest_cpu.pc == 0x830f8U,
               "XEX RtlZeroMemory thunk clears bytes and returns through the caller LR");
 
         project360::cpu::CpuState bounded_cpu{};
@@ -551,7 +580,7 @@ int main() {
               "bounded XEX execution calls both byte-swap imports and verifies their return values");
 
         project360::cpu::CpuState faulting_cpu{};
-        faulting_cpu.pc = 0x830e4U;
+        faulting_cpu.pc = 0x830f8U;
         const auto faulting_run = executor.run(faulting_cpu, guest_memory, 2U);
         check(faulting_run.instructions_executed == 1U &&
                   faulting_run.stop.status == project360::cpu::StepStatus::fault &&

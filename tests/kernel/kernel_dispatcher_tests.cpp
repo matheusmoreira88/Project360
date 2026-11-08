@@ -35,6 +35,21 @@ bool write_unicode_descriptor(project360::memory::GuestMemory& memory,
     return true;
 }
 
+bool unicode_buffer_equals(project360::memory::GuestMemory& memory,
+                           std::uint64_t buffer,
+                           std::span<const std::uint16_t> characters) {
+    for (std::size_t index = 0U; index < characters.size(); ++index) {
+        std::uint16_t actual = 0U;
+        if (!memory.read_u16_be(buffer + index * 2U, actual) ||
+            actual != characters[index]) {
+            return false;
+        }
+    }
+    std::uint16_t terminator = 1U;
+    return memory.read_u16_be(buffer + characters.size() * 2U, terminator) &&
+           terminator == 0U;
+}
+
 } // namespace
 
 int main() {
@@ -466,6 +481,119 @@ int main() {
     check(unknown_status == KernelDispatchStatus::handled && state.gpr[3] == 317U &&
               state.pc == 0x1314U,
           "RtlNtStatusToDosError returns ERROR_MR_MID_NOT_FOUND for an unmapped status");
+
+    constexpr std::uint64_t integer_string_descriptor = data_page + 0x400U;
+    constexpr std::uint64_t integer_string_buffer = data_page + 0x500U;
+    const auto call_integer_to_unicode = [&](std::uint32_t value, std::uint32_t base,
+                                             std::uint64_t lr) {
+        state.gpr[3] = value;
+        state.gpr[4] = base;
+        state.gpr[5] = integer_string_descriptor;
+        state.lr = lr;
+        return KernelDispatcher{}.dispatch(
+            {"xboxkrnl.exe", KernelDispatcher::rtl_integer_to_unicode_string_ordinal},
+            state, memory);
+    };
+    const auto seed_integer_descriptor = [&](std::uint16_t maximum_length) {
+        return memory.write_u16_be(integer_string_descriptor, 0U) &&
+               memory.write_u16_be(integer_string_descriptor + 2U, maximum_length) &&
+               memory.write_u32_be(integer_string_descriptor + 4U,
+                                   static_cast<std::uint32_t>(integer_string_buffer));
+    };
+    std::uint16_t integer_string_length = 0U;
+    check(seed_integer_descriptor(68U),
+          "test fixture creates a writable 68-byte Unicode output buffer");
+    const std::array<std::uint16_t, 2> uppercase_hex{
+        static_cast<std::uint16_t>('F'), static_cast<std::uint16_t>('F')};
+    check(call_integer_to_unicode(255U, 16U, 0x1407U) ==
+                  KernelDispatchStatus::handled &&
+              state.gpr[3] == 0U && state.pc == 0x1404U &&
+              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
+              integer_string_length == 4U &&
+              unicode_buffer_equals(memory, integer_string_buffer, uppercase_hex),
+          "RtlIntegerToUnicodeString formats uppercase hexadecimal and appends a UTF-16 terminator");
+
+    const std::array<std::uint16_t, 3> binary_five{
+        static_cast<std::uint16_t>('1'), static_cast<std::uint16_t>('0'),
+        static_cast<std::uint16_t>('1')};
+    check(call_integer_to_unicode(5U, 2U, 0x1417U) ==
+                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
+              integer_string_length == 6U &&
+              unicode_buffer_equals(memory, integer_string_buffer, binary_five),
+          "RtlIntegerToUnicodeString supports binary conversion");
+
+    std::array<std::uint16_t, 32U> binary_word_max{};
+    binary_word_max.fill(static_cast<std::uint16_t>('1'));
+    check(call_integer_to_unicode(0xffff'ffffU, 2U, 0x141fU) ==
+                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
+              integer_string_length == 64U &&
+              unicode_buffer_equals(memory, integer_string_buffer, binary_word_max),
+          "RtlIntegerToUnicodeString converts ULONG_MAX using its full 32-digit buffer");
+
+    const std::array<std::uint16_t, 3> decimal_255{
+        static_cast<std::uint16_t>('2'), static_cast<std::uint16_t>('5'),
+        static_cast<std::uint16_t>('5')};
+    check(call_integer_to_unicode(255U, 0U, 0x1427U) ==
+                  KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
+              integer_string_length == 6U &&
+              unicode_buffer_equals(memory, integer_string_buffer, decimal_255),
+          "RtlIntegerToUnicodeString treats base zero as decimal");
+
+    check(seed_integer_descriptor(4U) &&
+              memory.fill(integer_string_buffer, 6U, std::byte{0x7f}),
+          "test fixture seeds an undersized Unicode output buffer");
+    state.gpr[3] = 255U;
+    state.gpr[4] = 16U;
+    state.gpr[5] = integer_string_descriptor;
+    state.lr = 0x1437U;
+    const auto short_integer_buffer = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_integer_to_unicode_string_ordinal}, state,
+        memory);
+    std::uint8_t untouched_output_byte = 0U;
+    check(short_integer_buffer == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0x80000005U && state.pc == 0x1434U &&
+              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
+              integer_string_length == 4U && memory.read_u8(integer_string_buffer,
+                                                    untouched_output_byte) &&
+              untouched_output_byte == 0x7fU,
+          "RtlIntegerToUnicodeString reports required length without partially writing a short buffer");
+
+    check(memory.write_u16_be(integer_string_descriptor, 2U) &&
+              memory.write_u16_be(integer_string_descriptor + 2U, 8U),
+          "test fixture seeds descriptor values before invalid-base conversion");
+    state.gpr[3] = 42U;
+    state.gpr[4] = 3U;
+    state.gpr[5] = integer_string_descriptor;
+    state.lr = 0x1447U;
+    const auto invalid_integer_base = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_integer_to_unicode_string_ordinal},
+        state, memory);
+    check(invalid_integer_base == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0xc000000dU && state.pc == 0x1444U &&
+              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
+              integer_string_length == 2U,
+          "RtlIntegerToUnicodeString rejects unsupported bases without changing the descriptor");
+
+    check(memory.write_u16_be(integer_string_descriptor, 0U) &&
+              memory.write_u16_be(integer_string_descriptor + 2U, 68U) &&
+              memory.write_u32_be(integer_string_descriptor + 4U, 0x300000U),
+          "test fixture points a sufficiently sized output descriptor at unmapped memory");
+    state.gpr[3] = 255U;
+    state.gpr[4] = 16U;
+    state.gpr[5] = integer_string_descriptor;
+    state.lr = 0x1457U;
+    state.pc = 0x800160U;
+    const auto inaccessible_integer_buffer = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_integer_to_unicode_string_ordinal},
+        state, memory);
+    check(inaccessible_integer_buffer == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x800160U && state.gpr[3] == 255U &&
+              memory.read_u16_be(integer_string_descriptor, integer_string_length) &&
+              integer_string_length == 0U,
+          "RtlIntegerToUnicodeString faults on inaccessible output without returning or changing Length");
 
     state.gpr[3] = data_page;
     state.gpr[4] = initial.size();
