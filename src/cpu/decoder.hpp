@@ -62,6 +62,7 @@ enum class Opcode {
     shift_left_doubleword,
     shift_right_doubleword,
     shift_right_algebraic_doubleword,
+    shift_right_algebraic_doubleword_immediate,
     rotate_left_word_mask,
     rotate_left_word_variable_mask,
     rotate_left_doubleword_clear_left,

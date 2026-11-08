@@ -67,6 +67,15 @@ std::uint32_t logical_x(std::uint8_t ra, std::uint8_t rs, std::uint8_t rb, std::
            (static_cast<std::uint32_t>(xo) << 1U) | (record ? 1U : 0U);
 }
 
+std::uint32_t sradi_form(std::uint8_t ra, std::uint8_t rs, std::uint8_t amount,
+                         bool record = false) {
+    const auto xo = static_cast<std::uint32_t>(826U + ((amount >> 5U) & 1U));
+    return (31U << 26U) | (static_cast<std::uint32_t>(rs) << 21U) |
+           (static_cast<std::uint32_t>(ra) << 16U) |
+           (static_cast<std::uint32_t>(amount & 0x1fU) << 11U) | (xo << 1U) |
+           (record ? 1U : 0U);
+}
+
 std::uint32_t mfcr_form(std::uint8_t rt, bool record = false,
                         std::uint8_t reserved_ra = 0, std::uint8_t reserved_rb = 0) {
     return (31U << 26U) | (static_cast<std::uint32_t>(rt) << 21U) |
@@ -544,6 +553,50 @@ void test_doubleword_shift_instructions() {
     check(result.status == cpu::StepStatus::executed && state.gpr[22] == 0xffffffffffffffffULL &&
               (state.xer & 0x20000000U) == 0U && state.pc == 32,
           "zero-count srad copies its source and clears CA");
+}
+
+void test_doubleword_shift_immediate_instruction() {
+    using namespace project360;
+    memory::GuestMemory mem(20);
+    put_word(mem, 0, sradi_form(3, 1, 1));
+    put_word(mem, 4, sradi_form(4, 1, 63, true));
+    put_word(mem, 8, sradi_form(5, 2, 4));
+    put_word(mem, 12, sradi_form(6, 2, 0));
+    put_word(mem, 16, sradi_form(7, 8, 33));
+
+    const auto decoded_33 = cpu::decode(sradi_form(7, 8, 33));
+    check(decoded_33 && decoded_33.instruction.opcode ==
+                            cpu::Opcode::shift_right_algebraic_doubleword_immediate &&
+              decoded_33.instruction.shift == 33U,
+          "sradi decoder joins the split six-bit immediate field");
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0xfffffffffffffffdULL; // -3
+    state.gpr[2] = 0xf0U;
+    state.gpr[8] = 0x8000000000000003ULL;
+    state.xer = 0xc0000000U; // SO and OV; CA starts clear
+    const cpu::Interpreter interpreter{};
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.gpr[3] == 0xfffffffffffffffeULL &&
+              (state.xer & 0x20000000U) != 0U,
+          "sradi sign-fills a negative source and sets CA for discarded one bits");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[4] == 0xffffffffffffffffULL &&
+              (state.cr >> 28U) == 9U && (state.xer & 0x20000000U) != 0U,
+          "sradi. handles the maximum shift and records signed CR0 with sticky SO");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[5] == 0xfU &&
+              (state.xer & 0x20000000U) == 0U,
+          "sradi clears CA for a positive source even when discarded bits are nonzero");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[6] == state.gpr[2] &&
+              (state.xer & 0x20000000U) == 0U,
+          "zero-count sradi copies its source and clears CA");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[7] == 0xffffffffc0000000ULL &&
+              state.pc == 20U,
+          "sradi correctly uses SH[5] for shifts from 32 through 63");
 }
 
 void test_word_shift_immediate_instruction() {
@@ -2168,6 +2221,7 @@ int main() {
     test_carry_immediate_and_subtract_arithmetic();
     test_logical_shift_and_rotate_instructions();
     test_doubleword_shift_instructions();
+    test_doubleword_shift_immediate_instruction();
     test_word_shift_immediate_instruction();
     test_word_rotate_insert_and_variable_mask();
     test_doubleword_rotate_mask_instructions();
