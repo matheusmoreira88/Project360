@@ -57,6 +57,24 @@ std::uint32_t logical_x(std::uint8_t ra, std::uint8_t rs, std::uint8_t rb, std::
            (static_cast<std::uint32_t>(xo) << 1U) | (record ? 1U : 0U);
 }
 
+std::uint32_t mfcr_form(std::uint8_t rt, bool record = false,
+                        std::uint8_t reserved_ra = 0, std::uint8_t reserved_rb = 0) {
+    return (31U << 26U) | (static_cast<std::uint32_t>(rt) << 21U) |
+           (static_cast<std::uint32_t>(reserved_ra) << 16U) |
+           (static_cast<std::uint32_t>(reserved_rb) << 11U) | (19U << 1U) |
+           (record ? 1U : 0U);
+}
+
+std::uint32_t mtcrf_form(std::uint8_t fxm, std::uint8_t rs, bool record = false,
+                         std::uint8_t reserved_instruction_bit11 = 0,
+                         std::uint8_t reserved_instruction_bit20 = 0) {
+    return (31U << 26U) | (static_cast<std::uint32_t>(rs) << 21U) |
+           (static_cast<std::uint32_t>(reserved_instruction_bit11 & 1U) << 20U) |
+           (static_cast<std::uint32_t>(fxm) << 12U) |
+           (static_cast<std::uint32_t>(reserved_instruction_bit20 & 1U) << 11U) |
+           (144U << 1U) | (record ? 1U : 0U);
+}
+
 std::uint32_t indexed_memory(std::uint8_t rt, std::uint8_t ra, std::uint8_t rb,
                              std::uint16_t xo, bool record = false) {
     return (31U << 26U) | (static_cast<std::uint32_t>(rt) << 21U) |
@@ -1241,6 +1259,43 @@ void test_compare_registers() {
           "reserved cmp/cmpl bit forms are diagnosed");
 }
 
+void test_condition_register_transfers() {
+    using namespace project360;
+    memory::GuestMemory mem(12);
+    put_word(mem, 0, mfcr_form(5)); // mfcr r5
+    put_word(mem, 4, mtcrf_form(0xa0U, 6)); // mtcrf 0xa0,r6: CR0 and CR2
+    put_word(mem, 8, mtcrf_form(0, 7)); // empty FXM preserves CR
+
+    cpu::CpuState state{};
+    state.cr = 0x11223344U;
+    state.xer = 0xe0000000U;
+    state.gpr[5] = 0xffffffffffffffffULL;
+    state.gpr[6] = 0xa9876543U;
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[5] == 0x11223344U &&
+              state.cr == 0x11223344U && state.xer == 0xe0000000U,
+          "mfcr copies the complete CR without changing CR or XER");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.cr == 0xa1823344U &&
+              state.xer == 0xe0000000U,
+          "mtcrf copies selected GPR nibbles to CR0 and CR2, preserving other fields");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.cr == 0xa1823344U && state.pc == 12,
+          "mtcrf with an empty FXM leaves every CR field unchanged");
+
+    check(!cpu::decode(mfcr_form(1, true)) && !cpu::decode(mfcr_form(1, false, 1)) &&
+              !cpu::decode(mfcr_form(1, false, 0, 1)),
+          "mfcr record and reserved-field encodings are rejected");
+    check(!cpu::decode(mtcrf_form(0xffU, 1, true)) &&
+              !cpu::decode(mtcrf_form(0xffU, 1, false, 1)) &&
+              !cpu::decode(mtcrf_form(0xffU, 1, false, 0, 1)),
+          "mtcrf record and reserved-field encodings are rejected");
+}
+
 void test_conditional_branches() {
     using namespace project360;
     memory::GuestMemory mem(128);
@@ -1397,6 +1452,7 @@ int main() {
     test_branch_and_faults();
     test_compare_immediates();
     test_compare_registers();
+    test_condition_register_transfers();
     test_conditional_branches();
     test_absolute_and_register_branches();
     test_memory_bounds_and_alignment();

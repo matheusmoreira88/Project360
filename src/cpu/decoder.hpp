@@ -58,6 +58,8 @@ enum class Opcode {
     cmpl,
     cmpi,
     cmpli,
+    move_from_condition_register,
+    move_to_condition_register_fields,
     lbz,
     lhz,
     lha,
@@ -91,6 +93,7 @@ struct DecodedInstruction {
     std::uint8_t shift{};
     std::uint8_t mask_begin{};
     std::uint8_t mask_end{};
+    std::uint8_t field_mask{};
     std::int64_t immediate{};
     bool link{};
     bool absolute{};

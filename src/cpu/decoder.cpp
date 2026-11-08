@@ -196,6 +196,21 @@ DecodeResult decode(std::uint32_t word) {
         const auto xo = static_cast<std::uint16_t>((word >> 1U) & 0x1ffU);
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
         const bool oe = (word & (1U << 10U)) != 0U;
+        if (xo10 == 19U) {
+            if (ins.ra != 0U || ins.rb != 0U || (word & 1U) != 0U) {
+                return {{}, "mfcr reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::move_from_condition_register;
+            return {ins, {}};
+        }
+        if (xo10 == 144U) {
+            if ((word & ((1U << 20U) | (1U << 11U) | 1U)) != 0U) {
+                return {{}, "mtcrf reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::move_to_condition_register_fields;
+            ins.field_mask = static_cast<std::uint8_t>((word >> 12U) & 0xffU);
+            return {ins, {}};
+        }
         if (xo10 == 21U || xo10 == 53U || xo10 == 149U || xo10 == 181U ||
             xo10 == 23U || xo10 == 55U || xo10 == 87U || xo10 == 119U ||
             xo10 == 279U || xo10 == 331U || xo10 == 343U || xo10 == 375U ||

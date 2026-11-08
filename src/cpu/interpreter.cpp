@@ -467,6 +467,21 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
                                                   (state.xer & 0x80000000U) != 0U));
         break;
     }
+    case Opcode::move_from_condition_register:
+        state.gpr[ins.rt] = state.cr;
+        break;
+    case Opcode::move_to_condition_register_fields: {
+        const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);
+        for (std::uint8_t field = 0; field < 8U; ++field) {
+            const auto field_bit = static_cast<std::uint8_t>(0x80U >> field);
+            if ((ins.field_mask & field_bit) == 0U) continue;
+            const auto shift = static_cast<unsigned>(28U - 4U * field);
+            const auto cr_mask = 0xfU << shift;
+            const auto field_value = (source >> shift) & 0xfU;
+            state.cr = (state.cr & ~cr_mask) | (field_value << shift);
+        }
+        break;
+    }
     case Opcode::lbz: {
         std::uint8_t value = 0;
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
