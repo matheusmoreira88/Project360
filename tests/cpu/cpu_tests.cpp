@@ -329,6 +329,51 @@ void test_addze_arithmetic() {
           "addze rejects a nonzero reserved RB field");
 }
 
+void test_addme_arithmetic() {
+    using namespace project360;
+    const auto execute = [](std::uint8_t rt, std::uint8_t ra, std::uint8_t rb,
+                            bool overflow_enable, bool record, cpu::CpuState& state) {
+        memory::GuestMemory mem(4);
+        put_word(mem, 0, add_xo(rt, ra, rb, 234, overflow_enable, record));
+        return cpu::Interpreter{}.step(state, mem);
+    };
+
+    cpu::CpuState carry_state{};
+    carry_state.gpr[1] = 5U;
+    carry_state.xer = 0xc0000000U; // SO and OV; CA starts clear.
+    auto result = execute(3, 1, 0, false, true, carry_state);
+    check(result.status == cpu::StepStatus::executed && carry_state.gpr[3] == 4U &&
+              carry_state.xer == 0xe0000000U && (carry_state.cr >> 28U) == 5U,
+          "addme adds RA, XER.CA and minus one, updates CA and records CR0");
+
+    cpu::CpuState zero_state{};
+    zero_state.gpr[1] = 0U;
+    result = execute(3, 1, 0, false, false, zero_state);
+    check(result.status == cpu::StepStatus::executed &&
+              zero_state.gpr[3] == 0xffffffffffffffffULL && zero_state.xer == 0U,
+          "addme with zero carry computes minus one and clears CA");
+
+    cpu::CpuState overflow_state{};
+    overflow_state.gpr[1] = 0x8000000000000000ULL;
+    result = execute(3, 1, 0, true, true, overflow_state);
+    check(result.status == cpu::StepStatus::executed &&
+              overflow_state.gpr[3] == 0x7fffffffffffffffULL &&
+              overflow_state.xer == 0xe0000000U && (overflow_state.cr >> 28U) == 5U,
+          "addmeo. detects signed overflow, sets SO and records the result");
+
+    cpu::CpuState no_overflow_state{};
+    no_overflow_state.gpr[1] = 0x7fffffffffffffffULL;
+    no_overflow_state.xer = 0xa0000000U; // CA and sticky SO.
+    result = execute(3, 1, 0, true, false, no_overflow_state);
+    check(result.status == cpu::StepStatus::executed &&
+              no_overflow_state.gpr[3] == 0x7fffffffffffffffULL &&
+              no_overflow_state.xer == 0xa0000000U,
+          "non-overflowing addmeo clears OV while preserving CA and sticky SO");
+
+    check(!cpu::decode(add_xo(3, 1, 1, 234)),
+          "addme rejects a nonzero reserved RB field");
+}
+
 void test_negate_arithmetic() {
     using namespace project360;
     memory::GuestMemory mem(16);
@@ -2217,6 +2262,7 @@ int main() {
     test_decode_and_execute_arithmetic();
     test_carry_and_overflow_arithmetic();
     test_addze_arithmetic();
+    test_addme_arithmetic();
     test_negate_arithmetic();
     test_carry_immediate_and_subtract_arithmetic();
     test_logical_shift_and_rotate_instructions();
