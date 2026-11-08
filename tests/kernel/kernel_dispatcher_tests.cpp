@@ -33,11 +33,53 @@ int main() {
     const std::array<std::byte, 4> initial{
         std::byte{0xaa}, std::byte{0xbb}, std::byte{0xcc}, std::byte{0xdd}};
     check(memory.load(0U, initial), "test fixture initializes destination backing");
+    check(memory.load(initial.size(), initial),
+          "test fixture creates a second byte range for compare");
     check(memory.map_page(data_page, 0U,
                           GuestPageAccess::read | GuestPageAccess::write),
           "guest destination is mapped for the kernel service");
 
     CpuState state{};
+    state.gpr[3] = data_page;
+    state.gpr[4] = data_page + initial.size();
+    state.gpr[5] = initial.size();
+    state.lr = 0x1027U;
+    state.pc = 0x800080U;
+    const auto matching = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state, memory);
+    check(matching == KernelDispatchStatus::handled && state.gpr[3] == initial.size() &&
+              state.pc == 0x1024U,
+          "xboxkrnl ordinal 268 returns the full length for identical guest bytes");
+
+    check(memory.write_u8(data_page + initial.size() + 2U, 0x99U),
+          "test fixture changes a byte after the shared prefix");
+    state.gpr[3] = data_page;
+    state.gpr[4] = data_page + initial.size();
+    state.gpr[5] = initial.size();
+    const auto differing = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state, memory);
+    check(differing == KernelDispatchStatus::handled && state.gpr[3] == 2U,
+          "RtlCompareMemory returns the matching prefix length up to the first difference");
+
+    state.gpr[3] = data_page;
+    state.gpr[4] = 0x300000U;
+    state.gpr[5] = 4U;
+    state.pc = 0x800090U;
+    const auto compare_fault = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state, memory);
+    check(compare_fault == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x800090U && state.gpr[3] == data_page,
+          "RtlCompareMemory reports an inaccessible guest range without changing CPU state");
+
+    state.gpr[3] = 0xfffffff0U;
+    state.gpr[4] = 0x1000U;
+    state.gpr[5] = 0x40U;
+    const auto compare_wrap = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state, memory);
+    check(compare_wrap == KernelDispatchStatus::invalid_guest_argument &&
+              state.pc == 0x800090U,
+          "RtlCompareMemory rejects guest address ranges that wrap the 32-bit address space");
+
     state.gpr[3] = data_page;
     state.gpr[4] = initial.size();
     state.gpr[14] = 0x1122334455667788ULL;

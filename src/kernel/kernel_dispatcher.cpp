@@ -30,6 +30,34 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
     if (!equals_ascii_case_insensitive(import.library, "xboxkrnl.exe")) {
         return KernelDispatchStatus::unsupported_library;
     }
+    if (import.ordinal == rtl_compare_memory_ordinal) {
+        const auto source1 = state.gpr[3];
+        const auto source2 = state.gpr[4];
+        const auto length = state.gpr[5];
+        constexpr auto guest_address_limit = std::uint64_t{0xffff'ffffU};
+        if (source1 > guest_address_limit || source2 > guest_address_limit ||
+            length > guest_address_limit ||
+            (length != 0U &&
+             (length - 1U > guest_address_limit - source1 ||
+              length - 1U > guest_address_limit - source2))) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+
+        std::uint64_t matching_bytes = 0U;
+        for (; matching_bytes < length; ++matching_bytes) {
+            std::uint8_t left = 0U;
+            std::uint8_t right = 0U;
+            if (!memory.read_u8(source1 + matching_bytes, left) ||
+                !memory.read_u8(source2 + matching_bytes, right)) {
+                return KernelDispatchStatus::guest_memory_fault;
+            }
+            if (left != right) break;
+        }
+
+        state.gpr[3] = matching_bytes;
+        state.pc = state.lr & ~std::uint64_t{3};
+        return KernelDispatchStatus::handled;
+    }
     if (import.ordinal != rtl_fill_memory_ordinal &&
         import.ordinal != rtl_fill_memory_ulong_ordinal &&
         import.ordinal != rtl_zero_memory_ordinal) {
