@@ -149,4 +149,59 @@ ShaderVectorAluResult evaluate_shader_vector_alu_from_temporaries(
                                       previous_destination);
 }
 
+ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
+    const ShaderAluInstruction& instruction,
+    const ShaderAluTemporaryRegisterBank& initial_registers) {
+    if (instruction.predicated) {
+        return {{}, 0.0F, "Predicated Xenos ALU execution is not implemented"};
+    }
+    if (instruction.vector_destination_relative || instruction.scalar_destination_relative) {
+        return {{}, 0.0F, "Relative Xenos ALU destinations are not implemented"};
+    }
+    if (instruction.export_result) {
+        return {{}, 0.0F, "Xenos ALU export writes are not implemented"};
+    }
+    if (instruction.vector_clamp || instruction.scalar_clamp) {
+        return {{}, 0.0F, "Clamped Xenos ALU results are not implemented"};
+    }
+    if (instruction.vector_opcode > 1U ||
+        (instruction.scalar_opcode != 0U && instruction.scalar_opcode != 2U)) {
+        return {{}, 0.0F, "Unsupported Xenos vector/scalar ALU opcode pair"};
+    }
+
+    const auto source_1 = resolve_shader_alu_temporary_source(
+        instruction, ShaderAluSource::source_1, initial_registers);
+    if (!source_1) {
+        return {{}, 0.0F, source_1.error};
+    }
+    const auto source_2 = resolve_shader_alu_temporary_source(
+        instruction, ShaderAluSource::source_2, initial_registers);
+    if (!source_2) {
+        return {{}, 0.0F, source_2.error};
+    }
+    const auto vector_result = evaluate_shader_vector_alu(
+        instruction, source_1.value, source_2.value,
+        initial_registers[instruction.vector_destination]);
+    if (!vector_result) {
+        return {{}, 0.0F, vector_result.error};
+    }
+
+    if (instruction.vector_destination == instruction.scalar_destination &&
+        (instruction.vector_write_mask & instruction.scalar_write_mask) != 0U) {
+        return {{}, 0.0F, "Overlapping vector/scalar writes to one Xenos register are unsupported"};
+    }
+
+    const auto scalar_result = instruction.scalar_opcode == 0U
+                                   ? source_1.value[0] + source_1.value[1]
+                                   : source_1.value[0] * source_1.value[1];
+    ShaderAluExecutionResult result{initial_registers, scalar_result, {}};
+    result.registers[instruction.vector_destination] = vector_result.destination;
+    for (std::size_t lane = 0; lane < 4U; ++lane) {
+        if ((instruction.scalar_write_mask & (1U << lane)) != 0U) {
+            result.registers[instruction.scalar_destination][lane] = scalar_result;
+        }
+    }
+    return result;
+}
+
 } // namespace project360::gpu::xenos

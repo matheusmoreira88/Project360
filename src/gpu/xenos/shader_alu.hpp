@@ -56,6 +56,14 @@ struct ShaderAluSourceResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct ShaderAluExecutionResult {
+    ShaderAluTemporaryRegisterBank registers{};
+    float previous_scalar{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 // `words` contains three numeric dwords after the caller has applied the
 // guest memory's byte order. This function only decodes fields; it does not
 // execute the instruction or imply support for its opcode.
@@ -84,5 +92,12 @@ struct ShaderAluSourceResult {
     const ShaderAluInstruction& instruction,
     const ShaderAluTemporaryRegisterBank& temporary_registers,
     const std::array<float, 4>& previous_destination);
+
+// Executes the vector ADD/MUL and scalar ADDS/MULS pair for one instruction.
+// Both results read the original register bank; writes are committed together.
+// Unsupported addressing, exports, clamp and operation pairs fail atomically.
+[[nodiscard]] ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
+    const ShaderAluInstruction& instruction,
+    const ShaderAluTemporaryRegisterBank& initial_registers);
 
 } // namespace project360::gpu::xenos

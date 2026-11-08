@@ -186,6 +186,56 @@ void test_shader_vector_alu_from_encoded_temporaries() {
           "encoded vector evaluation rejects an unresolved constant source without a result");
 }
 
+void test_shader_alu_add_mul_pair_execution() {
+    using namespace project360::gpu::xenos;
+    ShaderAluTemporaryRegisterBank registers{};
+    registers[1] = {1.0F, 2.0F, 3.0F, 4.0F};
+    registers[2] = {10.0F, 20.0F, 30.0F, 40.0F};
+
+    const auto encode_pair = [](std::uint8_t vector_opcode, std::uint8_t scalar_opcode,
+                                std::uint8_t vector_destination,
+                                std::uint8_t scalar_destination,
+                                std::uint8_t vector_mask, std::uint8_t scalar_mask) {
+        const auto word0 = static_cast<std::uint32_t>(vector_destination) |
+                           (static_cast<std::uint32_t>(scalar_destination) << 8U) |
+                           (static_cast<std::uint32_t>(vector_mask) << 16U) |
+                           (static_cast<std::uint32_t>(scalar_mask) << 20U) |
+                           (static_cast<std::uint32_t>(scalar_opcode) << 26U);
+        const auto word2 = 0x60000000U |
+                           (static_cast<std::uint32_t>(vector_opcode) << 24U) |
+                           (2U << 8U) | 1U;
+        return decode_shader_alu_instruction({word0, 0U, word2});
+    };
+
+    const auto add_adds = encode_pair(0U, 0U, 4U, 5U, 0x0fU, 0x05U);
+    const auto added = execute_shader_alu_add_mul_pair(add_adds, registers);
+    check(added && added.registers[4] == std::array<float, 4>{11.0F, 22.0F, 33.0F, 44.0F} &&
+              added.registers[5] == std::array<float, 4>{3.0F, 0.0F, 3.0F, 0.0F} &&
+              added.previous_scalar == 3.0F,
+          "Xenos vector ADD and scalar ADDS compute from original sources and commit masked outputs");
+
+    const auto scalar_state_only = encode_pair(0U, 0U, 4U, 5U, 0x0fU, 0U);
+    const auto scalar_state = execute_shader_alu_add_mul_pair(scalar_state_only, registers);
+    check(scalar_state && scalar_state.previous_scalar == 3.0F &&
+              scalar_state.registers[5] == registers[5],
+          "Xenos ADDS updates the previous-scalar state when its destination mask is empty");
+
+    const auto multiply_pair = encode_pair(1U, 2U, 1U, 1U, 0x03U, 0x0cU);
+    const auto multiplied = execute_shader_alu_add_mul_pair(multiply_pair, registers);
+    check(multiplied &&
+              multiplied.registers[1] == std::array<float, 4>{10.0F, 40.0F, 2.0F, 2.0F} &&
+              multiplied.previous_scalar == 2.0F,
+          "Xenos vector MUL and scalar MULS merge disjoint masks on the same destination");
+
+    const auto unsupported_pair = encode_pair(0U, 1U, 4U, 5U, 0x0fU, 0x0fU);
+    const auto unsupported = execute_shader_alu_add_mul_pair(unsupported_pair, registers);
+    const auto conflicting_pair = encode_pair(0U, 0U, 4U, 4U, 0x03U, 0x01U);
+    const auto conflicting = execute_shader_alu_add_mul_pair(conflicting_pair, registers);
+    check(!unsupported && unsupported.registers == ShaderAluTemporaryRegisterBank{} &&
+              !conflicting && conflicting.registers == ShaderAluTemporaryRegisterBank{},
+          "Xenos ALU pair rejects unsupported scalar state and overlapping paired writes atomically");
+}
+
 void test_noops_and_malformed_streams() {
     using namespace project360::gpu::xenos;
     std::vector<std::uint8_t> noops;
@@ -1052,6 +1102,7 @@ int main() {
     test_shader_vector_alu_reference_subset();
     test_shader_alu_temporary_source_resolution();
     test_shader_vector_alu_from_encoded_temporaries();
+    test_shader_alu_add_mul_pair_execution();
     test_noops_and_malformed_streams();
     test_register_packet_application();
     test_type3_constant_uploads();
