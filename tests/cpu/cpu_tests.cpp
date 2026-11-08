@@ -849,8 +849,12 @@ void test_doubleword_memory_instructions() {
     fault_state.gpr[3] = 0xabcdef0123456789ULL;
     const auto unaligned_load = cpu::Interpreter{}.step(fault_state, fault_mem);
     check(unaligned_load.status == cpu::StepStatus::fault && fault_state.gpr[3] == 0xabcdef0123456789ULL &&
-              fault_state.pc == 0,
-          "unaligned ld faults without changing target or PC");
+              fault_state.pc == 0 && unaligned_load.fault_info &&
+              unaligned_load.fault_info->kind == cpu::FaultKind::data_alignment &&
+              unaligned_load.fault_info->pc == 0U &&
+              unaligned_load.fault_info->instruction.has_value() &&
+              unaligned_load.fault_info->effective_address == 4U,
+          "unaligned ld reports structured address context without changing target or PC");
 
     memory::GuestMemory update_fault_mem(64);
     put_word(update_fault_mem, 0, ds_form(58, 4, 1, 8, 1)); // ldu r4,8(r1)
@@ -859,8 +863,11 @@ void test_doubleword_memory_instructions() {
     update_fault_state.gpr[4] = 0x55;
     const auto update_fault = cpu::Interpreter{}.step(update_fault_state, update_fault_mem);
     check(update_fault.status == cpu::StepStatus::fault && update_fault_state.gpr[1] == 56 &&
-              update_fault_state.gpr[4] == 0x55 && update_fault_state.pc == 0,
-          "out-of-range ldu does not commit either destination or base register");
+              update_fault_state.gpr[4] == 0x55 && update_fault_state.pc == 0 &&
+              update_fault.fault_info &&
+              update_fault.fault_info->kind == cpu::FaultKind::data_access &&
+              update_fault.fault_info->effective_address == 64U,
+          "out-of-range ldu reports the address and commits neither destination nor base");
 }
 
 void test_indexed_memory_instructions() {
@@ -1255,7 +1262,25 @@ void test_branch_and_faults() {
     check(!bad && !bad.error.empty(), "unknown opcode is diagnosed");
     state.pc = 64;
     const auto fetch = cpu::Interpreter{}.step(state, mem);
-    check(fetch.status == cpu::StepStatus::fault, "out-of-range instruction fetch faults");
+    check(fetch.status == cpu::StepStatus::fault && fetch.fault_info.has_value() &&
+              fetch.fault_info->kind == cpu::FaultKind::instruction_access &&
+              fetch.fault_info->pc == 64U && !fetch.fault_info->instruction.has_value(),
+          "out-of-range instruction fetch reports structured access-fault context");
+
+    state.pc = 2;
+    const auto unaligned_fetch = cpu::Interpreter{}.step(state, mem);
+    check(unaligned_fetch.status == cpu::StepStatus::fault && unaligned_fetch.fault_info &&
+              unaligned_fetch.fault_info->kind == cpu::FaultKind::instruction_alignment &&
+              unaligned_fetch.fault_info->pc == 2U,
+          "unaligned instruction fetch reports an alignment fault");
+
+    put_word(mem, 16, 0U);
+    state.pc = 16;
+    const auto illegal = cpu::Interpreter{}.step(state, mem);
+    check(illegal.status == cpu::StepStatus::fault && illegal.fault_info &&
+              illegal.fault_info->kind == cpu::FaultKind::illegal_instruction &&
+              illegal.fault_info->pc == 16U && illegal.fault_info->instruction == 0U,
+          "invalid instruction reports its PC and fetched instruction word");
 
     check(!cpu::decode(branch_conditional(0x15U, 0, 4)),
           "reserved conditional branch option is diagnosed");

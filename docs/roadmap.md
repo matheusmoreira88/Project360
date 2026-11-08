@@ -5,7 +5,7 @@ The roadmap tracks evidence rather than estimated completion percentages.
 | Phase | Status | Evidence / acceptance still needed |
 |---|---|---|
 | 0 — Foundation | Locally and remotely verified | CMake configure succeeded with CMake 4.3.1 and MSVC 19.51; Debug and Release builds completed; CTest passed in both configurations; smoke executable ran. Core Windows CI also passed on the Windows 2022 runner ([run 42451851612](https://github.com/matheusmoreira88/Project360/actions/runs/42451851612)). |
-| 1 — PowerPC interpreter | Incremental subset implemented and locally tested; incomplete | Debug and Release builds and CTest passed after adding `addze` with carry-in, carry-out, OE and Rc behavior, `mfspr`/`mtspr` for XER, LR and CTR, all eight CR bitwise logical operations, `mcrf`, `mcrxr`, `mfcr` and `mtcrf`, plus `rldcl`/`rldcr` variable rotate forms and the existing immediate and word rotate groups. CR/XER tests cover truth tables, bit and field preservation, source/target aliasing, special-register transfers, XER width and nibble clearing, and reserved encodings. Floating point, VMX128, exception delivery, atomics and most instructions remain absent. |
+| 1 — PowerPC interpreter | Incremental subset implemented and locally tested; incomplete | Debug and Release builds and CTest passed after adding structured fault categories and PC/instruction/effective-address context, plus `addze`, XER/LR/CTR transfers and CR operations. These records are interpreter diagnostics, not guest exception delivery. Floating point, VMX128, SRR/MSR vector entry, atomics and most instructions remain absent. |
 | 2 — Memory subsystem | Flat-buffer widths extended; virtual memory not started | 8/16/32/64-bit big-endian accesses are bounded; multi-byte accesses enforce natural alignment. Guest address mapping, protection, translation and synchronization remain unimplemented. |
 | 3 — Loader | Not started | Safe format parsing and authorized test executable. |
 | 4 — Kernel | Not started | Explicit service support states and controlled test program. |
@@ -23,4 +23,4 @@ The optional Qt 6 Widgets source now defines a dark Project360 shell, model-back
 
 ## Next engineering step
 
-Continue with the remaining common integer operations, then define and test the CPU exception state needed by guest fault handling. The flat guest buffer still is not a virtual memory subsystem. Loader and title execution remain blocked on broader CPU semantics, virtual memory, kernel services and a safe executable loader.
+Build on structured fault reports by implementing architecturally correct guest exception entry (SRR/MSR state and vectors), then continue broadening integer semantics. The flat guest buffer still is not a virtual memory subsystem. Loader and title execution remain blocked on broader CPU semantics, virtual memory, kernel services and a safe executable loader.

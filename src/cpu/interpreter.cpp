@@ -15,7 +15,12 @@ constexpr std::uint32_t kXerSummaryOverflow = 0x80000000U;
 constexpr std::uint32_t kXerOverflow = 0x40000000U;
 constexpr std::uint32_t kXerCarry = 0x20000000U;
 
-StepResult fault(std::string message) { return {StepStatus::fault, std::move(message)}; }
+StepResult fault(FaultKind kind, std::uint64_t pc, std::string message,
+                 std::optional<std::uint32_t> instruction = std::nullopt,
+                 std::optional<std::uint64_t> effective_address = std::nullopt) {
+    return {StepStatus::fault, std::move(message),
+            ExecutionFault{kind, pc, instruction, effective_address}};
+}
 
 struct AddResult {
     std::uint64_t value{};
@@ -114,16 +119,33 @@ void set_cr0(CpuState& state, std::uint64_t value) {
 } // namespace
 
 StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const {
-    if ((state.pc & 3U) != 0U) return fault("unaligned instruction address");
+    if ((state.pc & 3U) != 0U) {
+        return fault(FaultKind::instruction_alignment, state.pc,
+                     "unaligned instruction address");
+    }
     std::uint32_t word = 0;
-    if (!memory.read_u32_be(state.pc, word)) return fault("instruction fetch out of range");
+    if (!memory.read_u32_be(state.pc, word)) {
+        return fault(FaultKind::instruction_access, state.pc, "instruction fetch out of range");
+    }
     const auto decoded = decode(word);
-    if (!decoded) return fault("PC 0x" + std::to_string(state.pc) + ": " + decoded.error);
+    if (!decoded) {
+        return fault(FaultKind::illegal_instruction, state.pc,
+                     "PC 0x" + std::to_string(state.pc) + ": " + decoded.error, word);
+    }
 
     const auto ins = decoded.instruction;
     const auto old_pc = state.pc;
     auto next_pc = old_pc + 4U;
     const auto base = ins.ra == 0 ? 0U : state.gpr[ins.ra];
+    const auto data_fault = [&](std::uint64_t address, std::size_t width,
+                                std::string message) {
+        const auto kind = width > 1U && address % width != 0U ? FaultKind::data_alignment
+                                                               : FaultKind::data_access;
+        return fault(kind, old_pc, std::move(message), word, address);
+    };
+    const auto internal_fault = [&](std::string message) {
+        return fault(FaultKind::interpreter_internal, old_pc, std::move(message), word);
+    };
     switch (ins.opcode) {
     case Opcode::addi:
         state.gpr[ins.rt] = base + static_cast<std::uint64_t>(ins.immediate);
@@ -494,7 +516,7 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         bool value = false;
         switch (ins.cr_logical_operation) {
         case CrLogicalOperation::invalid:
-            return fault("invalid decoded condition-register logical operation");
+            return internal_fault("invalid decoded condition-register logical operation");
         case CrLogicalOperation::and_: value = a && b; break;
         case CrLogicalOperation::and_complement: value = a && !b; break;
         case CrLogicalOperation::equivalent: value = a == b; break;
@@ -531,7 +553,7 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         case 1U: state.gpr[ins.rt] = state.xer; break;
         case 8U: state.gpr[ins.rt] = state.lr; break;
         case 9U: state.gpr[ins.rt] = state.ctr; break;
-        default: return fault("unsupported mfspr register");
+        default: return internal_fault("unsupported mfspr register");
         }
         break;
     case Opcode::move_to_special_register:
@@ -539,14 +561,14 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         case 1U: state.xer = static_cast<std::uint32_t>(state.gpr[ins.rt]); break;
         case 8U: state.lr = state.gpr[ins.rt]; break;
         case 9U: state.ctr = state.gpr[ins.rt]; break;
-        default: return fault("unsupported mtspr register");
+        default: return internal_fault("unsupported mtspr register");
         }
         break;
     case Opcode::lbz: {
         std::uint8_t value = 0;
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;
-        if (!memory.read_u8(address, value)) return fault("lbz address fault");
+        if (!memory.read_u8(address, value)) return data_fault(address, 1U, "lbz address fault");
         state.gpr[ins.rt] = value;
         if (ins.update) state.gpr[ins.ra] = address;
         break;
@@ -556,7 +578,9 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         std::uint16_t value = 0;
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;
-        if (!memory.read_u16_be(address, value)) return fault("halfword load alignment or address fault");
+        if (!memory.read_u16_be(address, value)) {
+            return data_fault(address, 2U, "halfword load alignment or address fault");
+        }
         state.gpr[ins.rt] = ins.opcode == Opcode::lha
                                 ? static_cast<std::uint64_t>(static_cast<std::int64_t>(
                                       std::bit_cast<std::int16_t>(value)))
@@ -568,7 +592,7 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;
         if (!memory.write_u8(address, static_cast<std::uint8_t>(state.gpr[ins.rt]))) {
-            return fault("stb address fault");
+            return data_fault(address, 1U, "stb address fault");
         }
         if (ins.update) state.gpr[ins.ra] = address;
         break;
@@ -577,7 +601,7 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;
         if (!memory.write_u16_be(address, static_cast<std::uint16_t>(state.gpr[ins.rt]))) {
-            return fault("sth alignment or address fault");
+            return data_fault(address, 2U, "sth alignment or address fault");
         }
         if (ins.update) state.gpr[ins.ra] = address;
         break;
@@ -586,7 +610,9 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;
         std::uint32_t value = 0;
-        if (!memory.read_u32_be(address, value)) return fault("lwz alignment or address fault");
+        if (!memory.read_u32_be(address, value)) {
+            return data_fault(address, 4U, "lwz alignment or address fault");
+        }
         state.gpr[ins.rt] = value;
         if (ins.update) state.gpr[ins.ra] = address;
         break;
@@ -595,7 +621,9 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;
         std::uint64_t value = 0;
-        if (!memory.read_u64_be(address, value)) return fault("ld alignment or address fault");
+        if (!memory.read_u64_be(address, value)) {
+            return data_fault(address, 8U, "ld alignment or address fault");
+        }
         state.gpr[ins.rt] = value;
         if (ins.update) state.gpr[ins.ra] = address;
         break;
@@ -603,7 +631,9 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
     case Opcode::lhbrx: {
         const auto address = base + state.gpr[ins.rb];
         std::uint16_t value = 0;
-        if (!memory.read_u16_be(address, value)) return fault("lhbrx alignment or address fault");
+        if (!memory.read_u16_be(address, value)) {
+            return data_fault(address, 2U, "lhbrx alignment or address fault");
+        }
         const auto reversed = static_cast<std::uint16_t>((value >> 8U) | (value << 8U));
         state.gpr[ins.rt] = reversed;
         break;
@@ -611,7 +641,9 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
     case Opcode::lwbrx: {
         const auto address = base + state.gpr[ins.rb];
         std::uint32_t value = 0;
-        if (!memory.read_u32_be(address, value)) return fault("lwbrx alignment or address fault");
+        if (!memory.read_u32_be(address, value)) {
+            return data_fault(address, 4U, "lwbrx alignment or address fault");
+        }
         const auto reversed = ((value & 0x000000ffU) << 24U) |
                               ((value & 0x0000ff00U) << 8U) |
                               ((value & 0x00ff0000U) >> 8U) |
@@ -623,7 +655,7 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;
         if (!memory.write_u32_be(address, static_cast<std::uint32_t>(state.gpr[ins.rt]))) {
-            return fault("stw alignment or address fault");
+            return data_fault(address, 4U, "stw alignment or address fault");
         }
         if (ins.update) state.gpr[ins.ra] = address;
         break;
@@ -632,7 +664,7 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;
         if (!memory.write_u64_be(address, state.gpr[ins.rt])) {
-            return fault("std alignment or address fault");
+            return data_fault(address, 8U, "std alignment or address fault");
         }
         if (ins.update) state.gpr[ins.ra] = address;
         break;
@@ -642,7 +674,7 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto value = static_cast<std::uint16_t>(state.gpr[ins.rt]);
         const auto reversed = static_cast<std::uint16_t>((value >> 8U) | (value << 8U));
         if (!memory.write_u16_be(address, reversed)) {
-            return fault("sthbrx alignment or address fault");
+            return data_fault(address, 2U, "sthbrx alignment or address fault");
         }
         break;
     }
@@ -654,7 +686,7 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
                               ((value & 0x00ff0000U) >> 8U) |
                               ((value & 0xff000000U) >> 24U);
         if (!memory.write_u32_be(address, reversed)) {
-            return fault("stwbrx alignment or address fault");
+            return data_fault(address, 4U, "stwbrx alignment or address fault");
         }
         break;
     }
@@ -663,12 +695,13 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto count = static_cast<std::size_t>(32U - ins.rt);
         const auto byte_count = count * sizeof(std::uint32_t);
         if ((address & 3U) != 0U || !memory.contains(address, byte_count)) {
-            return fault("lmw alignment or address fault");
+            return data_fault(address, 4U, "lmw alignment or address fault");
         }
         std::array<std::uint32_t, 32> values{};
         for (std::size_t i = 0; i < count; ++i) {
             if (!memory.read_u32_be(address + i * sizeof(std::uint32_t), values[i])) {
-                return fault("lmw alignment or address fault");
+                return data_fault(address + i * sizeof(std::uint32_t), 4U,
+                                  "lmw alignment or address fault");
             }
         }
         for (std::size_t i = 0; i < count; ++i) {
@@ -681,12 +714,13 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto count = static_cast<std::size_t>(32U - ins.rt);
         const auto byte_count = count * sizeof(std::uint32_t);
         if ((address & 3U) != 0U || !memory.contains(address, byte_count)) {
-            return fault("stmw alignment or address fault");
+            return data_fault(address, 4U, "stmw alignment or address fault");
         }
         for (std::size_t i = 0; i < count; ++i) {
             const auto value = static_cast<std::uint32_t>(state.gpr[static_cast<std::size_t>(ins.rt) + i]);
             if (!memory.write_u32_be(address + i * sizeof(std::uint32_t), value)) {
-                return fault("stmw alignment or address fault");
+                return data_fault(address + i * sizeof(std::uint32_t), 4U,
+                                  "stmw alignment or address fault");
             }
         }
         break;

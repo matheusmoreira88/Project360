@@ -13,7 +13,7 @@ Project360 is an original Xbox 360 emulation project. This repository currently 
 - Unsupported or invalid instruction forms report explicit faults. Arithmetic `record` on `add` updates CR0.
 - Dependency-free test executables covering PowerPC behavior and persistent library storage, including corrupt input handling.
 
-This is not yet a complete PowerPC or Xenon implementation. Floating-point/SIMD state, exceptions, atomic operations, MMU, kernel, loader, GPU, audio and input remain unsupported. The desktop frontend is an early scaffold described below. The instruction and data access behavior here is a testable initial subset, not a compatibility claim for commercial titles.
+This is not yet a complete PowerPC or Xenon implementation. Floating-point/SIMD state, guest architectural exception delivery, atomic operations, MMU, kernel, loader, GPU, audio and input remain unsupported. Interpreter faults include a typed category and PC, instruction word and effective address when available; this diagnostic record is not guest SRR/MSR vector delivery. The desktop frontend is an early scaffold described below. The instruction and data access behavior here is a testable initial subset, not a compatibility claim for commercial titles.
 
 ## Desktop interface (early scaffold)
 

@@ -8,6 +8,10 @@ The first build has three small layers:
 
 `project360_core` contains reusable emulator code, `project360` is the smoke-program executable, and `project360_tests` is a standalone CTest target. Frontends, guest loaders and platform graphics/audio APIs are intentionally not dependencies of the CPU core.
 
+## Fault reporting boundary
+
+`StepResult` attaches an `ExecutionFault` to interpreter faults. The record classifies illegal instructions, instruction alignment/access faults, data alignment/access faults, and internal consistency errors. It includes the faulting PC, the fetched instruction word when available, and the effective data address when applicable. This is diagnostic context for tests and a future debugger; the interpreter does not yet save SRR/MSR state or transfer control to guest exception vectors.
+
 ## Integer compare and branch references
 
 The `cmp`/`cmpl` and `cmpi`/`cmpli` implementations follow the architecture's signed/unsigned comparison, L-width, selected-CR-field, and XER summary-overflow behavior. `addc`/`adde` and `addic` forms update XER.CA; `subfc`/`subfe`/`subfic` set CA to the subtraction carry-out (1 means no borrow), while ordinary `subf` leaves CA unchanged. OE forms update XER.OV and sticky XER.SO. Immediate `b`/`bc` instructions support relative and absolute targets; `bclr`/`bcctr` apply the decoded BO condition and use aligned LR/CTR targets. Unsupported BO/BH encodings and invalid `bcctr` counter-decrement forms fault explicitly.

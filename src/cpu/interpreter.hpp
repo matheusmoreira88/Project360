@@ -4,15 +4,34 @@
 #include "memory/guest_memory.hpp"
 
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
 
 namespace project360::cpu {
 
 enum class StepStatus { executed, instruction_limit_reached, fault };
 
+enum class FaultKind {
+    illegal_instruction,
+    instruction_alignment,
+    instruction_access,
+    data_alignment,
+    data_access,
+    interpreter_internal
+};
+
+struct ExecutionFault {
+    FaultKind kind{};
+    std::uint64_t pc{};
+    std::optional<std::uint32_t> instruction;
+    std::optional<std::uint64_t> effective_address;
+};
+
 struct StepResult {
     StepStatus status{StepStatus::executed};
     std::string message;
+    std::optional<ExecutionFault> fault_info;
 };
 
 class Interpreter {
