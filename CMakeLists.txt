@@ -68,11 +68,16 @@ if(PROJECT360_BUILD_VULKAN)
     add_library(project360_vulkan
         src/gpu/vulkan/vulkan_context.cpp
     )
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+    configure_file(src/gpu/vulkan/shaders/offscreen_triangle.vert.spv
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/offscreen_triangle.vert.spv" COPYONLY)
+    configure_file(src/gpu/vulkan/shaders/offscreen_triangle.frag.spv
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/offscreen_triangle.frag.spv" COPYONLY)
     target_include_directories(project360_vulkan PUBLIC src)
     target_link_libraries(project360_vulkan PRIVATE volk)
     target_compile_features(project360_vulkan PUBLIC cxx_std_20)
     target_compile_definitions(project360_vulkan PRIVATE
-        PROJECT360_VULKAN_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/vulkan/shaders"
+        PROJECT360_VULKAN_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders"
     )
     if(MSVC)
         target_compile_options(project360_vulkan PRIVATE /W4 /permissive- /EHsc)

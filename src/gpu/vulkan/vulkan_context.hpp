@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace project360::gpu::vulkan {
@@ -33,6 +34,11 @@ struct VulkanTriangleReadbackResult {
     [[nodiscard]] explicit operator bool() const noexcept {
         return error.empty();
     }
+};
+
+struct VulkanTestVertex {
+    std::array<float, 2> position{};
+    std::array<float, 4> color{};
 };
 
 enum class VulkanContextStatus {
@@ -68,6 +74,9 @@ class VulkanContext final {
     [[nodiscard]] const VulkanDeviceInfo& device_info() const noexcept;
     [[nodiscard]] VulkanPixelReadbackResult readback_clear_color_pixel() const;
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_test_triangle() const;
+    [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_indexed_triangles(
+        std::span<const VulkanTestVertex> vertices,
+        std::span<const std::uint32_t> indices) const;
 
   private:
     struct Impl;

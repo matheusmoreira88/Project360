@@ -30,7 +30,13 @@ int main() {
         std::cerr << "FAIL: offscreen clear/readback returned unexpected RGBA values\n";
         return 1;
     }
-    const auto triangle = result.context->render_offscreen_test_triangle();
+    constexpr std::array<project360::gpu::vulkan::VulkanTestVertex, 3> vertices{{
+        {{{-0.8F, -0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{0.8F, -0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{0.0F, 0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+    }};
+    constexpr std::array<std::uint32_t, 3> indices{0U, 1U, 2U};
+    const auto triangle = result.context->render_offscreen_indexed_triangles(vertices, indices);
     if (!triangle) {
         std::cerr << "FAIL: " << triangle.error << '\n';
         return 1;
@@ -39,6 +45,26 @@ int main() {
         triangle.corner_rgba != std::array<std::uint8_t, 4>{255U, 0U, 255U, 255U} ||
         triangle.green_pixel_count == 0U || triangle.green_pixel_count >= 16U * 16U) {
         std::cerr << "FAIL: Vulkan triangle pixels do not match the expected rasterized output\n";
+        return 1;
+    }
+    constexpr std::array<std::uint32_t, 3> invalid_indices{0U, 1U, 3U};
+    const auto invalid_draw =
+        result.context->render_offscreen_indexed_triangles(vertices, invalid_indices);
+    if (invalid_draw || invalid_draw.error.find("missing vertex") == std::string::npos) {
+        std::cerr << "FAIL: Vulkan indexed draw accepted an out-of-range vertex index\n";
+        return 1;
+    }
+    auto blue_vertices = vertices;
+    for (auto& vertex : blue_vertices) {
+        vertex.color = {0.0F, 0.0F, 1.0F, 1.0F};
+    }
+    const auto blue_triangle =
+        result.context->render_offscreen_indexed_triangles(blue_vertices, indices);
+    if (!blue_triangle ||
+        blue_triangle.center_rgba != std::array<std::uint8_t, 4>{0U, 0U, 255U, 255U} ||
+        blue_triangle.corner_rgba != std::array<std::uint8_t, 4>{255U, 0U, 255U, 255U} ||
+        blue_triangle.green_pixel_count != 0U) {
+        std::cerr << "FAIL: Vulkan draw did not consume the uploaded vertex colors\n";
         return 1;
     }
 

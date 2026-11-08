@@ -62,7 +62,7 @@ ctest --test-dir out/build/windows-vulkan -C Debug --output-on-failure
 .\out\build\windows-vulkan\Debug\project360_vulkan_info.exe
 ```
 
-This target creates a Vulkan instance and graphics device, verifies offscreen clear/readback, and rasterizes a synthetic triangle using checked-in SPIR-V shaders. It does not execute Xenos shaders or a game. See [docs/hardware/vulkan_backend.md](docs/hardware/vulkan_backend.md) and [docs/dependencies.md](docs/dependencies.md).
+This target creates a Vulkan instance and graphics device, verifies offscreen clear/readback, uploads bounded vertex/index buffers, and rasterizes synthetic triangles using checked-in SPIR-V shaders. It does not execute Xenos shaders or a game. See [docs/hardware/vulkan_backend.md](docs/hardware/vulkan_backend.md) and [docs/dependencies.md](docs/dependencies.md).
 
 ## Project status
 

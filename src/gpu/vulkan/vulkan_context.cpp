@@ -3,11 +3,15 @@
 #include <volk.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -50,6 +54,10 @@ struct ClearResources {
     VkDeviceMemory image_memory{VK_NULL_HANDLE};
     VkBuffer staging_buffer{VK_NULL_HANDLE};
     VkDeviceMemory staging_memory{VK_NULL_HANDLE};
+    VkBuffer vertex_buffer{VK_NULL_HANDLE};
+    VkDeviceMemory vertex_memory{VK_NULL_HANDLE};
+    VkBuffer index_buffer{VK_NULL_HANDLE};
+    VkDeviceMemory index_memory{VK_NULL_HANDLE};
     VkCommandPool command_pool{VK_NULL_HANDLE};
     VkFence fence{VK_NULL_HANDLE};
     VkRenderPass render_pass{VK_NULL_HANDLE};
@@ -94,8 +102,20 @@ struct ClearResources {
         if (staging_buffer != VK_NULL_HANDLE) {
             vkDestroyBuffer(device, staging_buffer, nullptr);
         }
+        if (vertex_buffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, vertex_buffer, nullptr);
+        }
+        if (index_buffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, index_buffer, nullptr);
+        }
         if (staging_memory != VK_NULL_HANDLE) {
             vkFreeMemory(device, staging_memory, nullptr);
+        }
+        if (vertex_memory != VK_NULL_HANDLE) {
+            vkFreeMemory(device, vertex_memory, nullptr);
+        }
+        if (index_memory != VK_NULL_HANDLE) {
+            vkFreeMemory(device, index_memory, nullptr);
         }
         if (image != VK_NULL_HANDLE) {
             vkDestroyImage(device, image, nullptr);
@@ -155,6 +175,69 @@ bool select_memory_type(const VkPhysicalDeviceMemoryProperties& properties,
         }
     }
     return best_score >= 0;
+}
+
+bool create_host_uploaded_buffer(VkDevice device,
+                                const VkPhysicalDeviceMemoryProperties& memory_properties,
+                                std::span<const std::byte> contents, VkBufferUsageFlags usage,
+                                VkBuffer& buffer, VkDeviceMemory& memory,
+                                std::string& error) {
+    VkBufferCreateInfo buffer_info{};
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.size = static_cast<VkDeviceSize>(contents.size());
+    buffer_info.usage = usage;
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    auto result = vkCreateBuffer(device, &buffer_info, nullptr, &buffer);
+    if (result != VK_SUCCESS) {
+        error = result_message("vkCreateBuffer(upload)", result);
+        return false;
+    }
+
+    VkMemoryRequirements requirements{};
+    vkGetBufferMemoryRequirements(device, buffer, &requirements);
+    std::uint32_t memory_type = 0U;
+    VkMemoryPropertyFlags memory_flags = 0U;
+    if (!select_memory_type(memory_properties, requirements.memoryTypeBits,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, memory_type, memory_flags)) {
+        error = "Vulkan device has no host-visible memory for a draw buffer";
+        return false;
+    }
+    VkMemoryAllocateInfo allocation{};
+    allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocation.allocationSize = requirements.size;
+    allocation.memoryTypeIndex = memory_type;
+    result = vkAllocateMemory(device, &allocation, nullptr, &memory);
+    if (result != VK_SUCCESS) {
+        error = result_message("vkAllocateMemory(upload)", result);
+        return false;
+    }
+    result = vkBindBufferMemory(device, buffer, memory, 0U);
+    if (result != VK_SUCCESS) {
+        error = result_message("vkBindBufferMemory(upload)", result);
+        return false;
+    }
+    void* mapped = nullptr;
+    result = vkMapMemory(device, memory, 0U, VK_WHOLE_SIZE, 0U, &mapped);
+    if (result != VK_SUCCESS) {
+        error = result_message("vkMapMemory(upload)", result);
+        return false;
+    }
+    std::memcpy(mapped, contents.data(), contents.size());
+    if ((memory_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0U) {
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = memory;
+        range.size = VK_WHOLE_SIZE;
+        result = vkFlushMappedMemoryRanges(device, 1U, &range);
+        if (result != VK_SUCCESS) {
+            vkUnmapMemory(device, memory);
+            error = result_message("vkFlushMappedMemoryRanges(upload)", result);
+            return false;
+        }
+    }
+    vkUnmapMemory(device, memory);
+    return true;
 }
 
 bool find_graphics_queue(VkPhysicalDevice physical_device, std::uint32_t& family_index) {
@@ -529,6 +612,46 @@ VulkanPixelReadbackResult VulkanContext::readback_clear_color_pixel() const {
 }
 
 VulkanTriangleReadbackResult VulkanContext::render_offscreen_test_triangle() const {
+    constexpr std::array<VulkanTestVertex, 3> vertices{{
+        {{{-0.8F, -0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{0.8F, -0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{0.0F, 0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+    }};
+    constexpr std::array<std::uint32_t, 3> indices{0U, 1U, 2U};
+    return render_offscreen_indexed_triangles(vertices, indices);
+}
+
+VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
+    std::span<const VulkanTestVertex> vertices,
+    std::span<const std::uint32_t> indices) const {
+    constexpr std::size_t maximum_vertices = 65'536U;
+    constexpr std::size_t maximum_indices = 196'608U;
+    static_assert(sizeof(VulkanTestVertex) == 6U * sizeof(float));
+    static_assert(offsetof(VulkanTestVertex, color) == 2U * sizeof(float));
+    if (vertices.empty() || indices.empty() || indices.size() % 3U != 0U) {
+        return {{}, {}, 0U, "Indexed triangle draw requires vertices and complete triangles"};
+    }
+    if (vertices.size() > maximum_vertices || indices.size() > maximum_indices ||
+        indices.size() > std::numeric_limits<std::uint32_t>::max()) {
+        return {{}, {}, 0U, "Indexed triangle draw exceeds the diagnostic buffer budget"};
+    }
+    for (const auto index : indices) {
+        if (index >= vertices.size()) {
+            return {{}, {}, 0U, "Indexed triangle references a missing vertex"};
+        }
+    }
+    for (const auto& vertex : vertices) {
+        for (const auto value : vertex.position) {
+            if (!std::isfinite(value)) {
+                return {{}, {}, 0U, "Indexed triangle has a non-finite vertex position"};
+            }
+        }
+        for (const auto value : vertex.color) {
+            if (!std::isfinite(value)) {
+                return {{}, {}, 0U, "Indexed triangle has a non-finite vertex color"};
+            }
+        }
+    }
     std::lock_guard queue_lock(impl_->graphics_queue_mutex);
 
     constexpr std::uint32_t image_width = 16U;
@@ -555,6 +678,20 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_test_triangle() con
     ClearResources resources;
     resources.device = impl_->device;
     resources.queue = impl_->graphics_queue;
+
+    std::string upload_error;
+    const auto vertex_bytes = std::as_bytes(vertices);
+    if (!create_host_uploaded_buffer(impl_->device, impl_->memory_properties, vertex_bytes,
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, resources.vertex_buffer,
+                                     resources.vertex_memory, upload_error)) {
+        return {{}, {}, 0U, std::move(upload_error)};
+    }
+    const auto index_bytes = std::as_bytes(indices);
+    if (!create_host_uploaded_buffer(impl_->device, impl_->memory_properties, index_bytes,
+                                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT, resources.index_buffer,
+                                     resources.index_memory, upload_error)) {
+        return {{}, {}, 0U, std::move(upload_error)};
+    }
 
     VkImageCreateInfo image_info{};
     image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -715,6 +852,19 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_test_triangle() con
     }};
     VkPipelineVertexInputStateCreateInfo vertex_input{};
     vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    const VkVertexInputBindingDescription vertex_binding{
+        0U, static_cast<std::uint32_t>(sizeof(VulkanTestVertex)), VK_VERTEX_INPUT_RATE_VERTEX};
+    const std::array<VkVertexInputAttributeDescription, 2> vertex_attributes{{
+        {0U, 0U, VK_FORMAT_R32G32_SFLOAT,
+         static_cast<std::uint32_t>(offsetof(VulkanTestVertex, position))},
+        {1U, 0U, VK_FORMAT_R32G32B32A32_SFLOAT,
+         static_cast<std::uint32_t>(offsetof(VulkanTestVertex, color))},
+    }};
+    vertex_input.vertexBindingDescriptionCount = 1U;
+    vertex_input.pVertexBindingDescriptions = &vertex_binding;
+    vertex_input.vertexAttributeDescriptionCount =
+        static_cast<std::uint32_t>(vertex_attributes.size());
+    vertex_input.pVertexAttributeDescriptions = vertex_attributes.data();
     VkPipelineInputAssemblyStateCreateInfo input_assembly{};
     input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -789,6 +939,25 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_test_triangle() con
     if (result != VK_SUCCESS) {
         return {{}, {}, 0U, result_message("vkBeginCommandBuffer(triangle)", result)};
     }
+    std::array<VkBufferMemoryBarrier, 2> upload_barriers{};
+    upload_barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    upload_barriers[0].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    upload_barriers[0].dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+    upload_barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    upload_barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    upload_barriers[0].buffer = resources.vertex_buffer;
+    upload_barriers[0].size = VK_WHOLE_SIZE;
+    upload_barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    upload_barriers[1].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    upload_barriers[1].dstAccessMask = VK_ACCESS_INDEX_READ_BIT;
+    upload_barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    upload_barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    upload_barriers[1].buffer = resources.index_buffer;
+    upload_barriers[1].size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_HOST_BIT,
+                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0U, 0U, nullptr,
+                         static_cast<std::uint32_t>(upload_barriers.size()),
+                         upload_barriers.data(), 0U, nullptr);
     VkClearValue clear_value{};
     clear_value.color = {{1.0F, 0.0F, 1.0F, 1.0F}};
     VkRenderPassBeginInfo render_begin{};
@@ -805,7 +974,10 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_test_triangle() con
     vkCmdSetViewport(command_buffer, 0U, 1U, &viewport);
     vkCmdSetScissor(command_buffer, 0U, 1U, &scissor);
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, resources.pipeline);
-    vkCmdDraw(command_buffer, 3U, 1U, 0U, 0U);
+    constexpr VkDeviceSize vertex_offset = 0U;
+    vkCmdBindVertexBuffers(command_buffer, 0U, 1U, &resources.vertex_buffer, &vertex_offset);
+    vkCmdBindIndexBuffer(command_buffer, resources.index_buffer, 0U, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(command_buffer, static_cast<std::uint32_t>(indices.size()), 1U, 0U, 0, 0U);
     vkCmdEndRenderPass(command_buffer);
 
     VkImageMemoryBarrier image_barrier{};
