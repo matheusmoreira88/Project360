@@ -648,15 +648,47 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
             return KernelDispatchStatus::invalid_guest_argument;
         }
 
+        constexpr std::size_t compare_chunk_size = 256U;
+        std::array<std::byte, compare_chunk_size> left_chunk{};
+        std::array<std::byte, compare_chunk_size> right_chunk{};
         std::uint64_t matching_bytes = 0U;
-        for (; matching_bytes < length; ++matching_bytes) {
-            std::uint8_t left = 0U;
-            std::uint8_t right = 0U;
-            if (!memory.read_u8(source1 + matching_bytes, left) ||
-                !memory.read_u8(source2 + matching_bytes, right)) {
-                return KernelDispatchStatus::guest_memory_fault;
+        while (matching_bytes < length) {
+            const auto chunk_size = static_cast<std::size_t>(
+                std::min<std::uint64_t>(length - matching_bytes, compare_chunk_size));
+            const auto left_span = std::span<std::byte>(left_chunk.data(), chunk_size);
+            const auto right_span = std::span<std::byte>(right_chunk.data(), chunk_size);
+            const bool left_read = memory.read_bytes(source1 + matching_bytes, left_span);
+            const bool right_read = memory.read_bytes(source2 + matching_bytes, right_span);
+
+            if (left_read && right_read) {
+                std::size_t index = 0U;
+                while (index < chunk_size && left_chunk[index] == right_chunk[index]) ++index;
+                matching_bytes += index;
+                if (index != chunk_size) break;
+                continue;
             }
-            if (left != right) break;
+
+            // Preserve the routine's stop-at-first-difference behavior when a
+            // later byte in this chunk is inaccessible. A mismatch before the
+            // fault is a valid result; reaching the inaccessible byte faults.
+            const auto prefix_before_chunk = matching_bytes;
+            bool mismatch_found = false;
+            for (std::size_t index = 0U; index < chunk_size; ++index) {
+                std::uint8_t left = 0U;
+                std::uint8_t right = 0U;
+                const auto address_offset = prefix_before_chunk + index;
+                if (!memory.read_u8(source1 + address_offset, left) ||
+                    !memory.read_u8(source2 + address_offset, right)) {
+                    return KernelDispatchStatus::guest_memory_fault;
+                }
+                if (left != right) {
+                    matching_bytes = address_offset;
+                    mismatch_found = true;
+                    break;
+                }
+            }
+            if (mismatch_found) break;
+            matching_bytes = prefix_before_chunk + chunk_size;
         }
 
         state.gpr[3] = matching_bytes;

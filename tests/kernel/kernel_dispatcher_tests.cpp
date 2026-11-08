@@ -157,6 +157,75 @@ int main() {
     check(differing == KernelDispatchStatus::handled && state.gpr[3] == 2U,
           "RtlCompareMemory returns the matching prefix length up to the first difference");
 
+    constexpr auto page_size = GuestMemory::page_size;
+    GuestMemory mapped_compare(4U * static_cast<std::size_t>(page_size));
+    const std::array<project360::memory::GuestPageMapping, 4> compare_mappings{{
+        {0x400000U, 0U, GuestPageAccess::read},
+        {0x401000U, 3U * page_size, GuestPageAccess::read},
+        {0x500000U, page_size, GuestPageAccess::read},
+        {0x501000U, 2U * page_size, GuestPageAccess::read},
+    }};
+    const std::array<std::byte, 8> compare_first_half{
+        std::byte{0}, std::byte{1}, std::byte{2}, std::byte{3},
+        std::byte{4}, std::byte{5}, std::byte{6}, std::byte{7}};
+    const std::array<std::byte, 8> compare_second_half{
+        std::byte{8}, std::byte{9}, std::byte{10}, std::byte{11},
+        std::byte{12}, std::byte{13}, std::byte{14}, std::byte{15}};
+    const std::array<std::byte, 1> compare_mismatch{std::byte{0xff}};
+    check(mapped_compare.map_pages(compare_mappings) &&
+              mapped_compare.load(page_size - compare_first_half.size(), compare_first_half) &&
+              mapped_compare.load(3U * page_size, compare_second_half) &&
+              mapped_compare.load(2U * page_size - compare_first_half.size(),
+                                  compare_first_half) &&
+              mapped_compare.load(2U * page_size, compare_second_half) &&
+              mapped_compare.load(2U * page_size + 4U, compare_mismatch),
+          "test fixture prepares matching prefixes across non-contiguous guest pages");
+    state.gpr[3] = 0x400ff8U;
+    state.gpr[4] = 0x500ff8U;
+    state.gpr[5] = 16U;
+    state.lr = 0x1027U;
+    const auto mapped_comparison = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state,
+        mapped_compare);
+    check(mapped_comparison == KernelDispatchStatus::handled && state.gpr[3] == 12U,
+          "RtlCompareMemory compares mapped data in blocks across discontinuous backing");
+    const std::array<std::byte, 1> equalized_byte{std::byte{12}};
+    check(mapped_compare.load(2U * page_size + 4U, equalized_byte) &&
+              mapped_compare.load(2U * page_size + 392U, compare_mismatch),
+          "test fixture seeds a later mismatch beyond the first compare chunk");
+    state.gpr[3] = 0x400ff8U;
+    state.gpr[4] = 0x500ff8U;
+    state.gpr[5] = 600U;
+    const auto multi_chunk_comparison = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state,
+        mapped_compare);
+    check(multi_chunk_comparison == KernelDispatchStatus::handled &&
+              state.gpr[3] == 400U,
+          "RtlCompareMemory continues across multiple bounded guest-memory chunks");
+
+    GuestMemory mismatch_before_fault(2U * static_cast<std::size_t>(page_size));
+    const std::array<project360::memory::GuestPageMapping, 2> end_page_mappings{{
+        {0x600000U, 0U, GuestPageAccess::read},
+        {0x700000U, page_size, GuestPageAccess::read},
+    }};
+    const std::array<std::byte, 2> end_page_left{std::byte{0x11}, std::byte{0x22}};
+    const std::array<std::byte, 2> end_page_right{std::byte{0x11}, std::byte{0x99}};
+    check(mismatch_before_fault.map_pages(end_page_mappings) &&
+              mismatch_before_fault.load(page_size - end_page_left.size(), end_page_left) &&
+              mismatch_before_fault.load(2U * page_size - end_page_right.size(),
+                                         end_page_right),
+          "test fixture seeds a mismatch before an unmapped next page");
+    state.gpr[3] = 0x600ffeU;
+    state.gpr[4] = 0x700ffeU;
+    state.gpr[5] = 4U;
+    state.pc = 0x800090U;
+    const auto early_mismatch = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state,
+        mismatch_before_fault);
+    check(early_mismatch == KernelDispatchStatus::handled && state.gpr[3] == 1U &&
+              state.pc == 0x1024U,
+          "RtlCompareMemory returns an earlier mismatch without touching a later invalid page");
+
     constexpr std::uint64_t ansi_left_descriptor = data_page + 0x100U;
     constexpr std::uint64_t ansi_right_descriptor = data_page + 0x110U;
     constexpr std::uint64_t ansi_left_buffer = data_page + 0x200U;
