@@ -309,6 +309,41 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr_field(state, 1U, (state.fpscr >> 28U) & 0xfU);
         break;
     }
+    case Opcode::floating_compare_unordered:
+    case Opcode::floating_compare_ordered: {
+        constexpr std::uint64_t kExponentMask = 0x7ff0000000000000ULL;
+        constexpr std::uint64_t kFractionMask = 0x000fffffffffffffULL;
+        constexpr std::uint64_t kQuietBit = 0x0008000000000000ULL;
+        constexpr std::uint32_t kFpscrFpccMask = 0x0000f000U;
+        const auto left_bits = state.fpr[ins.ra];
+        const auto right_bits = state.fpr[ins.rb];
+        const auto is_nan = [&](std::uint64_t bits) {
+            return (bits & kExponentMask) == kExponentMask && (bits & kFractionMask) != 0U;
+        };
+        const auto is_signaling_nan = [&](std::uint64_t bits) {
+            return is_nan(bits) && (bits & kQuietBit) == 0U;
+        };
+        const bool left_nan = is_nan(left_bits);
+        const bool right_nan = is_nan(right_bits);
+        if (left_nan || right_nan) {
+            if (ins.opcode == Opcode::floating_compare_ordered ||
+                is_signaling_nan(left_bits) || is_signaling_nan(right_bits)) {
+                return fault(FaultKind::unsupported_instruction, old_pc,
+                             "floating compare NaN exception behavior is unsupported", word);
+            }
+            constexpr std::uint32_t kUnordered = 0x1U;
+            set_cr_field(state, ins.bf, kUnordered);
+            state.fpscr = (state.fpscr & ~kFpscrFpccMask) | (kUnordered << 12U);
+            break;
+        }
+
+        const auto left = std::bit_cast<double>(left_bits);
+        const auto right = std::bit_cast<double>(right_bits);
+        const std::uint32_t fpcc = left < right ? 0x8U : (left > right ? 0x4U : 0x2U);
+        set_cr_field(state, ins.bf, fpcc);
+        state.fpscr = (state.fpscr & ~kFpscrFpccMask) | (fpcc << 12U);
+        break;
+    }
     case Opcode::addi:
         state.gpr[ins.rt] = base + static_cast<std::uint64_t>(ins.immediate);
         break;

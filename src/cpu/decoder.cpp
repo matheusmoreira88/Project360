@@ -161,6 +161,15 @@ DecodeResult decode(std::uint32_t word) {
     }
     case 63: {
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
+        if (xo10 == 0U || xo10 == 32U) {
+            if ((ins.rt & 0x3U) != 0U || (word & 1U) != 0U) {
+                return {{}, "floating-point compare has reserved fields set"};
+            }
+            ins.bf = static_cast<std::uint8_t>((word >> 23U) & 0x7U);
+            ins.opcode = xo10 == 0U ? Opcode::floating_compare_unordered
+                                    : Opcode::floating_compare_ordered;
+            return {ins, {}};
+        }
         switch (xo10) {
         case 72: ins.opcode = Opcode::floating_move_register; break;
         case 40: ins.opcode = Opcode::floating_negate; break;

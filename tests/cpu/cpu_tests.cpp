@@ -80,6 +80,14 @@ std::uint32_t fpr_unary(std::uint8_t fd, std::uint8_t fb, std::uint16_t xo,
            (static_cast<std::uint32_t>(xo) << 1U) | (record ? 1U : 0U);
 }
 
+std::uint32_t fpr_compare(std::uint8_t bf, std::uint8_t fra, std::uint8_t frb,
+                          std::uint16_t xo) {
+    return (63U << 26U) | (static_cast<std::uint32_t>(bf) << 23U) |
+           (static_cast<std::uint32_t>(fra) << 16U) |
+           (static_cast<std::uint32_t>(frb) << 11U) |
+           (static_cast<std::uint32_t>(xo) << 1U);
+}
+
 std::uint32_t add_xo(std::uint8_t rd, std::uint8_t ra, std::uint8_t rb, std::uint16_t xo,
                      bool overflow_enable = false, bool record = false) {
     return (31U << 26U) | (static_cast<std::uint32_t>(rd) << 21U) |
@@ -1297,6 +1305,53 @@ void test_floating_point_sign_and_move_instructions() {
     const auto unsupported = cpu::decode(fpr_unary(2, 1, 21));
     check(!reserved && !unsupported,
           "reserved unary FPR fields and unsupported arithmetic opcodes are diagnosed");
+}
+
+void test_floating_point_compare_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(32);
+    put_word(mem, 0, fpr_compare(2, 1, 2, 0));  // fcmpu cr2,f1,f2
+    put_word(mem, 4, fpr_compare(4, 3, 4, 32)); // fcmpo cr4,f3,f4
+    put_word(mem, 8, fpr_compare(6, 5, 6, 0));  // fcmpu cr6,f5,f6
+    put_word(mem, 12, fpr_compare(7, 7, 8, 0)); // fcmpu cr7,f7,f8
+
+    cpu::CpuState state{};
+    state.fpr[1] = std::bit_cast<std::uint64_t>(-2.0);
+    state.fpr[2] = std::bit_cast<std::uint64_t>(1.0);
+    state.fpr[3] = std::bit_cast<std::uint64_t>(9.0);
+    state.fpr[4] = std::bit_cast<std::uint64_t>(9.0);
+    state.fpr[5] = std::bit_cast<std::uint64_t>(-0.0);
+    state.fpr[6] = std::bit_cast<std::uint64_t>(0.0);
+    state.fpr[7] = 0x7ff8000000001234ULL; // quiet NaN
+    state.fpr[8] = std::bit_cast<std::uint64_t>(0.0);
+    state.fpscr = 0xa5a5a5a5U;
+    state.cr = 0x12345678U;
+
+    const auto result = cpu::Interpreter{}.run(state, mem, 4);
+    const auto expected_cr = (0x12345678U & ~0x00f0f0ffU) | 0x00802021U;
+    const auto expected_fpscr = (0xa5a5a5a5U & ~0x0000f000U) | 0x00001000U;
+    check(result.status == cpu::StepStatus::instruction_limit_reached &&
+              state.cr == expected_cr && state.fpscr == expected_fpscr,
+          "fcmpu/fcmpo set only their target CR field and update FPSCR FPCC for LT, EQ and FU");
+
+    const auto reserved_field = cpu::decode(fpr_compare(2, 2, 3, 0) | (1U << 21U));
+    const auto reserved_rc = cpu::decode(fpr_compare(2, 2, 3, 0) | 1U);
+    check(!reserved_field && !reserved_rc,
+          "floating compare reserved RT and Rc encodings are diagnosed");
+
+    memory::GuestMemory nan_memory(4);
+    put_word(nan_memory, 0, fpr_compare(0, 1, 2, 32)); // ordered compare with quiet NaN
+    cpu::CpuState nan_state{};
+    nan_state.fpr[1] = 0x7ff8000000000001ULL;
+    nan_state.fpr[2] = std::bit_cast<std::uint64_t>(1.0);
+    nan_state.cr = 0xabcdef01U;
+    nan_state.fpscr = 0x76543210U;
+    const auto nan_result = cpu::Interpreter{}.step(nan_state, nan_memory);
+    check(nan_result.status == cpu::StepStatus::fault && nan_result.fault_info &&
+              nan_result.fault_info->kind == cpu::FaultKind::unsupported_instruction &&
+              nan_state.pc == 0U && nan_state.cr == 0xabcdef01U &&
+              nan_state.fpscr == 0x76543210U,
+          "ordered NaN compare reports unsupported exception behavior without partial state changes");
 }
 
 void test_indexed_memory_instructions() {
@@ -2725,6 +2780,7 @@ int main() {
     test_doubleword_memory_instructions();
     test_floating_point_load_store_transfers();
     test_floating_point_sign_and_move_instructions();
+    test_floating_point_compare_instructions();
     test_indexed_memory_instructions();
     test_indexed_update_memory_instructions();
     test_byte_reversed_indexed_memory_instructions();

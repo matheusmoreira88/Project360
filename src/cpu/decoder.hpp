@@ -131,7 +131,9 @@ enum class Opcode {
     floating_move_register,
     floating_negate,
     floating_absolute,
-    floating_negative_absolute
+    floating_negative_absolute,
+    floating_compare_unordered,
+    floating_compare_ordered
 };
 
 struct DecodedInstruction {
