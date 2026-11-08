@@ -29,6 +29,7 @@ struct ShaderExecResult {
     std::uint8_t instructions_executed{};
     bool ended_shader{};
     std::string error;
+    float previous_scalar{};
 
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
@@ -48,6 +49,7 @@ struct ShaderExecResult {
     const memory::GuestMemory& memory,
     const ShaderAluTemporaryRegisterBank& initial_registers,
     const std::array<float, 4>& missing_component_values,
-    std::span<const std::array<float, 4>> float_constants = {});
+    std::span<const std::array<float, 4>> float_constants = {},
+    float initial_previous_scalar = 0.0F);
 
 } // namespace project360::gpu::xenos

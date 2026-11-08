@@ -111,6 +111,7 @@ struct ShaderAluExecutionResult {
 [[nodiscard]] ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     const ShaderAluInstruction& instruction,
     const ShaderAluTemporaryRegisterBank& initial_registers,
-    std::span<const std::array<float, 4>> float_constants = {});
+    std::span<const std::array<float, 4>> float_constants = {},
+    float initial_previous_scalar = 0.0F);
 
 } // namespace project360::gpu::xenos

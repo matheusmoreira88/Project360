@@ -291,10 +291,11 @@ ShaderVectorAluResult evaluate_shader_vector_alu_from_temporaries(
                                       previous_destination, source_3);
 }
 
-ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
-    const ShaderAluInstruction& instruction,
-    const ShaderAluTemporaryRegisterBank& initial_registers,
-    std::span<const std::array<float, 4>> float_constants) {
+ShaderAluExecutionResult
+execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
+                                const ShaderAluTemporaryRegisterBank& initial_registers,
+                                std::span<const std::array<float, 4>> float_constants,
+                                float initial_previous_scalar) {
     if (instruction.predicated) {
         return {{}, 0.0F, "Predicated Xenos ALU execution is not implemented"};
     }
@@ -307,23 +308,22 @@ ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     if (instruction.vector_clamp || instruction.scalar_clamp) {
         return {{}, 0.0F, "Clamped Xenos ALU results are not implemented"};
     }
-    if (!is_supported_vector_opcode(instruction.vector_opcode) ||
-        (instruction.scalar_opcode != 0U && instruction.scalar_opcode != 2U)) {
+    if (!is_supported_vector_opcode(instruction.vector_opcode) || instruction.scalar_opcode > 3U) {
         return {{}, 0.0F, "Unsupported Xenos vector/scalar ALU opcode pair"};
     }
 
-    const auto source_1 = resolve_shader_alu_source(
-        instruction, ShaderAluSource::source_1, initial_registers, float_constants);
+    const auto source_1 = resolve_shader_alu_source(instruction, ShaderAluSource::source_1,
+                                                    initial_registers, float_constants);
     if (!source_1) {
         return {{}, 0.0F, source_1.error};
     }
-    const auto source_2 = resolve_shader_alu_source(
-        instruction, ShaderAluSource::source_2, initial_registers, float_constants);
+    const auto source_2 = resolve_shader_alu_source(instruction, ShaderAluSource::source_2,
+                                                    initial_registers, float_constants);
     if (!source_2) {
         return {{}, 0.0F, source_2.error};
     }
-    const auto scalar_source = resolve_shader_alu_source(
-        instruction, ShaderAluSource::source_3, initial_registers, float_constants);
+    const auto scalar_source = resolve_shader_alu_source(instruction, ShaderAluSource::source_3,
+                                                         initial_registers, float_constants);
     if (!scalar_source) {
         return {{}, 0.0F, scalar_source.error};
     }
@@ -339,11 +339,24 @@ ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
         return {{}, 0.0F, "Overlapping vector/scalar writes to one Xenos register are unsupported"};
     }
 
-    // ADDS/MULS consume the W (`a`) and X (`b`) swizzles of src3.
-    const auto scalar_result = instruction.scalar_opcode == 0U
-                                   ? scalar_source.value[3] + scalar_source.value[0]
-                                   : multiply_xenos_legacy(scalar_source.value[3],
-                                                           scalar_source.value[0]);
+    // Scalar operations use the W (`a`) and X (`b`) swizzles of src3.
+    float scalar_result = 0.0F;
+    switch (instruction.scalar_opcode) {
+    case 0U: // ADDS: a + b
+        scalar_result = scalar_source.value[3] + scalar_source.value[0];
+        break;
+    case 1U: // ADDS_PREV: a + ps
+        scalar_result = scalar_source.value[3] + initial_previous_scalar;
+        break;
+    case 2U: // MULS: a * b
+        scalar_result = multiply_xenos_legacy(scalar_source.value[3], scalar_source.value[0]);
+        break;
+    case 3U: // MULS_PREV: a * ps
+        scalar_result = multiply_xenos_legacy(scalar_source.value[3], initial_previous_scalar);
+        break;
+    default:
+        return {{}, 0.0F, "Unsupported Xenos scalar ALU opcode"};
+    }
     ShaderAluExecutionResult result{initial_registers, scalar_result, {}};
     result.registers[instruction.vector_destination] = vector_result.destination;
     for (std::size_t lane = 0; lane < 4U; ++lane) {

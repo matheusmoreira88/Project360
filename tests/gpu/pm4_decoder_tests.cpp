@@ -388,6 +388,16 @@ void test_shader_alu_add_mul_pair_execution() {
               scalar_state.registers[5] == registers[5],
           "Xenos ADDS updates the previous-scalar state when its destination mask is empty");
 
+    const auto add_previous = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 1U, 4U, 5U, 0U, 0x0fU), registers, {}, 2.0F);
+    const auto multiply_previous = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 3U, 4U, 5U, 0U, 0x0fU), registers, {}, 2.0F);
+    check(add_previous && add_previous.previous_scalar == 10.0F &&
+              add_previous.registers[5] == std::array<float, 4>{10.0F, 10.0F, 10.0F, 10.0F} &&
+              multiply_previous && multiply_previous.previous_scalar == 16.0F &&
+              multiply_previous.registers[5] == std::array<float, 4>{16.0F, 16.0F, 16.0F, 16.0F},
+          "Xenos ADDS_PREV and MULS_PREV consume src3.w and the incoming ps value");
+
     const auto multiply_pair = encode_pair(1U, 2U, 1U, 1U, 0x03U, 0x0cU);
     const auto multiplied = execute_shader_alu_add_mul_pair(multiply_pair, registers);
     check(multiplied &&
@@ -435,7 +445,7 @@ void test_shader_alu_add_mul_pair_execution() {
               !std::signbit(special_multiply.previous_scalar),
           "Xenos scalar MULS flushes a subnormal operand to positive zero");
 
-    const auto unsupported_pair = encode_pair(0U, 1U, 4U, 5U, 0x0fU, 0x0fU);
+    const auto unsupported_pair = encode_pair(0U, 4U, 4U, 5U, 0x0fU, 0x0fU);
     const auto unsupported = execute_shader_alu_add_mul_pair(unsupported_pair, registers);
     const auto conflicting_pair = encode_pair(0U, 0U, 4U, 4U, 0x03U, 0x01U);
     const auto conflicting = execute_shader_alu_add_mul_pair(conflicting_pair, registers);
@@ -498,6 +508,22 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
               result.registers[4] == std::array<float, 4>{2.0F, 3.0F, 4.0F, 5.0F} &&
               result.registers[10] == std::array<float, 4>{4.0F, 9.0F, 16.0F, 25.0F},
           "Xenos EXEC sequence runs ALU, VFETCH and dependent ALU operations in order");
+
+    auto scalar_registers = initial_registers;
+    scalar_registers[3] = {5.0F, 0.0F, 0.0F, 8.0F};
+    const auto scalar_word2 = (7U << 29U) | (3U << 16U) | (2U << 8U) | 1U;
+    const std::array<std::array<std::uint32_t, 3>, 2> scalar_ucode{
+        std::array<std::uint32_t, 3>{(5U << 8U) | (0x0fU << 20U), 0U, scalar_word2},
+        std::array<std::uint32_t, 3>{(6U << 8U) | (0x0fU << 20U) | (1U << 26U), 0U, scalar_word2}};
+    constexpr std::uint32_t scalar_sequence = 0b10U | (0b10U << 2U);
+    const auto scalar_exec =
+        decode_shader_exec_instruction({scalar_sequence << 16U | (2U << 12U), 2U << 12U});
+    const auto scalar_result = execute_shader_exec_block(scalar_exec, scalar_ucode, fetch_constants,
+                                                         memory, scalar_registers, {});
+    check(scalar_result && scalar_result.previous_scalar == 21.0F &&
+              scalar_result.registers[5] == std::array<float, 4>{13.0F, 13.0F, 13.0F, 13.0F} &&
+              scalar_result.registers[6] == std::array<float, 4>{21.0F, 21.0F, 21.0F, 21.0F},
+          "Xenos EXEC carries scalar previous-result state between ordered ALU slots");
 
     auto invalid_ucode = ucode;
     invalid_ucode[2][2] = (invalid_ucode[2][2] & ~(0x1fU << 24U)) | (8U << 24U);
