@@ -26,7 +26,7 @@ This is a narrow PowerPC exception subset, not the Xenon exception system: data/
 
 ## Integer compare and branch references
 
-The `cmp`/`cmpl` and `cmpi`/`cmpli` implementations follow the architecture's signed/unsigned comparison, L-width, selected-CR-field, and XER summary-overflow behavior. `addc`/`adde` and `addic` forms update XER.CA; `addme` and `addze` add XER.CA as the carry-in, with `addme` also including minus one. `subfc`/`subfe`/`subfic` set CA to the subtraction carry-out (1 means no borrow), while ordinary `subf` leaves CA unchanged. OE forms update XER.OV and sticky XER.SO. Immediate `b`/`bc` instructions support relative and absolute targets; `bclr`/`bcctr` apply the decoded BO condition and use aligned LR/CTR targets. Unsupported BO/BH encodings and invalid `bcctr` counter-decrement forms fault explicitly.
+The `cmp`/`cmpl` and `cmpi`/`cmpli` implementations follow the architecture's signed/unsigned comparison, L-width, selected-CR-field, and XER summary-overflow behavior. `addc`/`adde` and `addic` forms update XER.CA; `addme` and `addze` add XER.CA as the carry-in, with `addme` also including minus one. `subfc`/`subfe`/`subfic` set CA to the subtraction carry-out (1 means no borrow), while ordinary `subf` leaves CA unchanged. `subfze` adds the one's complement of RA and the carry bit, updating CA on every form. OE forms update XER.OV and sticky XER.SO. Immediate `b`/`bc` instructions support relative and absolute targets; `bclr`/`bcctr` apply the decoded BO condition and use aligned LR/CTR targets. Unsupported BO/BH encodings and invalid `bcctr` counter-decrement forms fault explicitly.
 
 The register logical operations use full 64-bit GPR values and update CR0 only in record forms. `slw`/`srw` operate on the low word and zero-extend their result; `sraw` sign-extends the low-word result and updates XER.CA when a negative value loses one bits. `rlwinm` rotates the low word, uses PowerPC's MSB-numbered inclusive mask endpoints and zero-extends the masked word.
 
@@ -120,6 +120,7 @@ The data subset includes D-form accesses plus indexed `lbzx`, `lhzx`, `lhax`, `l
 - [IBM `srad` instruction reference](https://www.ibm.com/docs/en/aix/7.3.0?topic=set-srad-shift-right-algebraic-double-word-instruction)
 - [IBM `sradi` instruction reference](https://www.ibm.com/docs/en/aix/7.2.0?topic=is-sradi-shift-right-algebraic-double-word-immediate-instruction)
 - [IBM `addme` instruction reference](https://www.ibm.com/docs/en/aix/7.1.0?topic=set-addme-ame-add-minus-one-extended-instruction)
+- [IBM `subfze` instruction reference](https://www.ibm.com/docs/en/aix/7.1.0?topic=set-subfze-sfze-subtract-from-zero-extended-instruction)
 - [IBM `cntlzw` instruction reference](https://www.ibm.com/docs/en/aix/7.2.0?topic=set-cntlzw-cntlz-count-leading-zeros-word-instruction)
 - [IBM `cntlzd` instruction reference](https://www.ibm.com/docs/en/aix/7.2.0?topic=set-cntlzd-count-leading-zeros-double-word-instruction)
 - [IBM `srawi` instruction reference](https://www.ibm.com/docs/da/ssw_aix_71/assembler/idalangref_srawi_srai_instrs.html)

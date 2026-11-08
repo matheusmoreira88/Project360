@@ -374,6 +374,55 @@ void test_addme_arithmetic() {
           "addme rejects a nonzero reserved RB field");
 }
 
+void test_subfze_arithmetic() {
+    using namespace project360;
+    memory::GuestMemory mem(4);
+    const cpu::Interpreter interpreter{};
+
+    put_word(mem, 0, add_xo(3, 1, 0, 200, false, true)); // subfze. r3,r1
+    cpu::CpuState state{};
+    state.gpr[1] = 0x90003000U;
+    state.xer = 0x80000000U; // SO; CA starts clear.
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.gpr[3] == 0xffffffff6fffcfffULL && state.xer == 0x80000000U &&
+              (state.cr >> 28U) == 9U,
+          "subfze. adds the complemented source and incoming CA, then records CR0");
+
+    put_word(mem, 0, add_xo(3, 1, 0, 200));
+    cpu::CpuState carry_state{};
+    carry_state.gpr[1] = 0x90003000U;
+    carry_state.xer = 0x20000000U;
+    result = interpreter.step(carry_state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              carry_state.gpr[3] == 0xffffffff6fffd000ULL &&
+              carry_state.xer == 0U,
+          "subfze with CA set computes the two's-complement source");
+
+    put_word(mem, 0, add_xo(3, 1, 0, 200, true));
+    cpu::CpuState status_state{};
+    status_state.gpr[1] = 0x8000000000000000ULL;
+    status_state.xer = 0xc0000000U;
+    result = interpreter.step(status_state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              status_state.gpr[3] == 0x7fffffffffffffffULL &&
+              status_state.xer == 0x80000000U,
+          "subfzeo clears OV and CA on this non-overflowing input, retaining sticky SO");
+
+    put_word(mem, 0, add_xo(3, 1, 0, 200, true, true));
+    cpu::CpuState overflow_state{};
+    overflow_state.gpr[1] = 0x8000000000000000ULL;
+    overflow_state.xer = 0x20000000U; // CA set.
+    result = interpreter.step(overflow_state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              overflow_state.gpr[3] == 0x8000000000000000ULL &&
+              overflow_state.xer == 0xc0000000U && (overflow_state.cr >> 28U) == 9U,
+          "subfzeo. detects negation overflow for the signed minimum and records CR0");
+
+    check(!cpu::decode(add_xo(3, 1, 1, 200)),
+          "subfze rejects a nonzero reserved RB field");
+}
+
 void test_negate_arithmetic() {
     using namespace project360;
     memory::GuestMemory mem(16);
@@ -2263,6 +2312,7 @@ int main() {
     test_carry_and_overflow_arithmetic();
     test_addze_arithmetic();
     test_addme_arithmetic();
+    test_subfze_arithmetic();
     test_negate_arithmetic();
     test_carry_immediate_and_subtract_arithmetic();
     test_logical_shift_and_rotate_instructions();
