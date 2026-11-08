@@ -5,6 +5,7 @@
 #include "kernel/guest_executor.hpp"
 #include "memory/guest_memory.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -125,6 +126,26 @@ std::vector<std::byte> make_xbox_pe32() {
     return image;
 }
 
+std::vector<std::byte> make_basic_compressed_xex(std::span<const std::byte> xex) {
+    constexpr std::size_t header_size = 0x1000U;
+    constexpr std::size_t pe_headers_size = 0x200U;
+    constexpr std::size_t section_offset = 0x200U;
+    constexpr std::size_t section_size = 0x140U;
+    std::vector<std::byte> compressed(header_size + pe_headers_size + section_size);
+    std::copy_n(xex.begin(), header_size, compressed.begin());
+    std::copy_n(xex.begin() + header_size, pe_headers_size,
+                compressed.begin() + header_size);
+    std::copy_n(xex.begin() + header_size + section_offset, section_size,
+                compressed.begin() + header_size + pe_headers_size);
+    write_be32(compressed, 0x380U, 24U);
+    write_be16(compressed, 0x386U, 1U);
+    write_be32(compressed, 0x388U, 0x200U);
+    write_be32(compressed, 0x38cU, 0xe00U);
+    write_be32(compressed, 0x390U, 0x140U);
+    write_be32(compressed, 0x394U, 0xec0U);
+    return compressed;
+}
+
 } // namespace
 
 int main() {
@@ -153,6 +174,21 @@ int main() {
               parsed.metadata->encryption_type == 0U &&
               parsed.metadata->compression_type == 0U,
           "execution-info and entry-point headers are decoded as big-endian values");
+
+    auto basic_metadata = bytes;
+    write_be32(basic_metadata, 0x380U, 16U);
+    write_be16(basic_metadata, 0x386U, 1U);
+    write_be32(basic_metadata, 0x388U, 0x100U);
+    write_be32(basic_metadata, 0x38cU, 0x200U);
+    const auto parsed_basic = parse_xex2(basic_metadata);
+    check(parsed_basic && parsed_basic.metadata->basic_compression_blocks.size() == 1U &&
+              parsed_basic.metadata->basic_compression_blocks[0].data_size == 0x100U &&
+              parsed_basic.metadata->basic_compression_blocks[0].zero_size == 0x200U,
+          "XEX parser exposes bounded basic-compression data and zero-fill sizes");
+    auto malformed_basic_metadata = basic_metadata;
+    write_be32(malformed_basic_metadata, 0x380U, 15U);
+    check(!parse_xex2(malformed_basic_metadata),
+          "malformed basic-compression descriptor lengths are rejected");
 
     const std::vector<std::byte> truncated(bytes.begin(), bytes.begin() + 20);
     check(!parse_xex2(truncated), "truncated fixed headers are rejected");
@@ -688,13 +724,34 @@ int main() {
     check(!encrypted_result && !rejected_memory.page_mapping_enabled(),
           "encrypted XEX images are rejected without mapping or decrypting any bytes");
 
-    auto compressed_xex = loadable_xex;
-    write_be16(compressed_xex, 0x386U, 1U);
+    const auto compressed_xex = make_basic_compressed_xex(loadable_xex);
     project360::memory::GuestMemory compressed_memory(0x4000U);
-    const auto compressed_result = project360::loader::load_xex2_uncompressed(
+    const auto compressed_result = project360::loader::load_xex2(
         compressed_xex, compressed_memory, 0U);
-    check(!compressed_result && !compressed_memory.page_mapping_enabled(),
-          "compressed XEX images are rejected before changing guest mappings");
+    std::uint32_t compressed_entry_instruction = 0;
+    check(compressed_result && compressed_result.image->entry_point == 0x83000U &&
+              compressed_memory.fetch_u32_be(0x83000U, compressed_entry_instruction) &&
+              compressed_entry_instruction == ((14U << 26U) | (3U << 21U) | 0x5000U),
+          "basic-compressed XEX blocks reconstruct and map a valid PE memory image");
+    check(compressed_result &&
+              compressed_result.image->xex.import_libraries[0].import_ordinals.back() == 270U,
+          "basic-compressed XEX import thunks are decoded from guest image addresses");
+
+    auto invalid_compressed_xex = compressed_xex;
+    write_be32(invalid_compressed_xex, 0x388U, 0xffffffffU);
+    project360::memory::GuestMemory invalid_compressed_memory(0x4000U);
+    const auto invalid_compressed_result = project360::loader::load_xex2(
+        invalid_compressed_xex, invalid_compressed_memory, 0U);
+    check(!invalid_compressed_result && !invalid_compressed_memory.page_mapping_enabled(),
+          "oversized basic-compression blocks fail before changing guest mappings");
+
+    auto unsupported_compressed_xex = loadable_xex;
+    write_be16(unsupported_compressed_xex, 0x386U, 2U);
+    project360::memory::GuestMemory unsupported_compressed_memory(0x4000U);
+    const auto unsupported_compressed_result = project360::loader::load_xex2(
+        unsupported_compressed_xex, unsupported_compressed_memory, 0U);
+    check(!unsupported_compressed_result && !unsupported_compressed_memory.page_mapping_enabled(),
+          "unsupported normal-compressed XEX images fail before changing guest mappings");
 
     auto relocated_xex = loadable_xex;
     write_be32(relocated_xex, 0x34U, 0x84000U);

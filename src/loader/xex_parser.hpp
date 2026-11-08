@@ -15,6 +15,11 @@ class GuestMemory;
 
 namespace project360::loader {
 
+struct XexBasicCompressionBlock {
+    std::uint32_t data_size{};
+    std::uint32_t zero_size{};
+};
+
 struct XexImportLibrary {
     std::string name;
     std::uint8_t library_index{};
@@ -38,6 +43,7 @@ struct XexMetadata {
     std::optional<std::uint32_t> image_base_address;
     std::optional<std::uint16_t> encryption_type;
     std::optional<std::uint16_t> compression_type;
+    std::vector<XexBasicCompressionBlock> basic_compression_blocks;
     std::vector<XexImportLibrary> import_libraries;
 };
 
@@ -96,7 +102,11 @@ struct XexLoadResult {
     [[nodiscard]] explicit operator bool() const noexcept { return image.has_value(); }
 };
 
-// Loads only unencrypted, uncompressed XEX2 images into a caller-provided guest memory map.
+// Loads unencrypted XEX2 images using no compression or XEX basic zero-fill compression.
+[[nodiscard]] XexLoadResult load_xex2(std::span<const std::byte> file,
+                                      memory::GuestMemory& memory,
+                                      std::uint64_t physical_base);
+// Kept as a source-compatible alias; basic-compressed images are also supported.
 [[nodiscard]] XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
                                                    memory::GuestMemory& memory,
                                                    std::uint64_t physical_base);

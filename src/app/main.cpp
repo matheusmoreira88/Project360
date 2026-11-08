@@ -91,12 +91,10 @@ int run_xex(const std::filesystem::path& path) {
         return 1;
     }
     if (!metadata.metadata->encryption_type ||
-        *metadata.metadata->encryption_type != 0U ||
-        !metadata.metadata->compression_type ||
-        *metadata.metadata->compression_type != 0U) {
+        *metadata.metadata->encryption_type != 0U) {
         project360::common::log(
             project360::common::LogLevel::error, "loader",
-            "XEX execution supports only unencrypted, uncompressed images");
+            "XEX execution supports only unencrypted images");
         return 1;
     }
 

@@ -69,7 +69,8 @@ bool range_fits(std::uint64_t offset, std::uint64_t length, std::uint64_t limit)
 }
 
 bool decode_import_records(std::span<const std::byte> pe_bytes, const XboxPeMetadata& pe,
-                           std::uint64_t image_base, XexMetadata& xex,
+                           std::uint64_t image_base, bool image_is_memory_layout,
+                           XexMetadata& xex,
                            std::string& error) {
     for (auto& library : xex.import_libraries) {
         library.import_types.reserve(library.import_record_addresses.size());
@@ -84,7 +85,10 @@ bool decode_import_records(std::span<const std::byte> pe_bytes, const XboxPeMeta
             const auto rva = address - image_base;
             std::uint64_t raw_offset = 0;
             bool found_raw_data = false;
-            if (range_fits(rva, 4U, pe.headers_size)) {
+            if (image_is_memory_layout && range_fits(rva, 4U, pe_bytes.size())) {
+                raw_offset = rva;
+                found_raw_data = true;
+            } else if (range_fits(rva, 4U, pe.headers_size)) {
                 raw_offset = rva;
                 found_raw_data = true;
             } else {
@@ -356,6 +360,24 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
             }
             metadata.encryption_type = encryption_type;
             metadata.compression_type = compression_type;
+            if (compression_type == 1U) {
+                if (info_size == 8U || ((info_size - 8U) % 8U) != 0U) {
+                    return {{}, "XEX basic-compression block table has an invalid size"};
+                }
+                const auto block_count = (info_size - 8U) / 8U;
+                metadata.basic_compression_blocks.reserve(block_count);
+                for (std::uint32_t block = 0; block < block_count; ++block) {
+                    std::uint32_t data_size = 0;
+                    std::uint32_t zero_size = 0;
+                    const auto block_offset = static_cast<std::size_t>(value) + 8U +
+                                              static_cast<std::size_t>(block) * 8U;
+                    if (!read_be32(file, block_offset, data_size) ||
+                        !read_be32(file, block_offset + 4U, zero_size)) {
+                        return {{}, "XEX basic-compression block table is truncated"};
+                    }
+                    metadata.basic_compression_blocks.push_back({data_size, zero_size});
+                }
+            }
         } else if (key == kImportLibrariesKey) {
             if (found_import_libraries) {
                 return {{}, "duplicate XEX import-libraries header"};
@@ -548,9 +570,8 @@ PeParseResult parse_xbox_pe32(std::span<const std::byte> image) {
     return {metadata, {}};
 }
 
-XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
-                                     memory::GuestMemory& memory,
-                                     std::uint64_t physical_base) {
+XexLoadResult load_xex2(std::span<const std::byte> file, memory::GuestMemory& memory,
+                        std::uint64_t physical_base) {
     constexpr std::uint64_t kMaximumImageSize = 512ULL * 1024ULL * 1024ULL;
     constexpr std::size_t kPageSize = static_cast<std::size_t>(memory::GuestMemory::page_size);
     constexpr std::uint32_t kSectionExecutable = 0x20000000U;
@@ -566,12 +587,47 @@ XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
     if (*xex.encryption_type != 0U) {
         return {{}, "encrypted XEX2 images are unsupported; no decryption was attempted"};
     }
-    if (*xex.compression_type != 0U) {
-        return {{}, "compressed XEX2 images are unsupported by this loader"};
-    }
     if (xex.header_size >= file.size()) return {{}, "XEX2 image payload is empty"};
-
-    const auto pe_bytes = file.subspan(xex.header_size);
+    std::vector<std::byte> decoded_image;
+    std::span<const std::byte> pe_bytes;
+    const auto payload = file.subspan(xex.header_size);
+    const bool basic_compression = *xex.compression_type == 1U;
+    if (*xex.compression_type == 0U) {
+        pe_bytes = payload;
+    } else if (basic_compression) {
+        if (xex.image_size == 0U || xex.image_size > kMaximumImageSize ||
+            xex.basic_compression_blocks.empty()) {
+            return {{}, "XEX basic-compression image size or block table is invalid"};
+        }
+        std::uint64_t total_output_size = 0;
+        std::uint64_t total_input_size = 0;
+        for (const auto& block : xex.basic_compression_blocks) {
+            total_output_size += static_cast<std::uint64_t>(block.data_size) + block.zero_size;
+            total_input_size += block.data_size;
+            if (total_output_size > xex.image_size || total_input_size > payload.size()) {
+                return {{}, "XEX basic-compression blocks exceed declared image or payload bounds"};
+            }
+        }
+        if (total_output_size == 0U) {
+            return {{}, "XEX basic-compression blocks produce an empty image"};
+        }
+        try {
+            decoded_image.reserve(static_cast<std::size_t>(total_output_size));
+            std::size_t input_offset = 0;
+            for (const auto& block : xex.basic_compression_blocks) {
+                const auto data_size = static_cast<std::size_t>(block.data_size);
+                decoded_image.insert(decoded_image.end(), payload.begin() + input_offset,
+                                     payload.begin() + input_offset + data_size);
+                decoded_image.insert(decoded_image.end(), block.zero_size, std::byte{0});
+                input_offset += data_size;
+            }
+        } catch (const std::bad_alloc&) {
+            return {{}, "not enough host memory to decode XEX basic-compression blocks"};
+        }
+        pe_bytes = decoded_image;
+    } else {
+        return {{}, "XEX compression type is unsupported; only none and basic are implemented"};
+    }
     const auto pe_result = parse_xbox_pe32(pe_bytes);
     if (!pe_result) return {{}, pe_result.error};
     const auto& pe = *pe_result.metadata;
@@ -588,7 +644,8 @@ XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
     }
     std::string import_error;
     try {
-        if (!decode_import_records(pe_bytes, pe, image_base, loaded_xex, import_error)) {
+        if (!decode_import_records(pe_bytes, pe, image_base, basic_compression, loaded_xex,
+                                   import_error)) {
             return {{}, std::move(import_error)};
         }
     } catch (const std::bad_alloc&) {
@@ -695,7 +752,14 @@ XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
     }
     for (const auto& section : pe.sections) {
         if (section.raw_size == 0U) continue;
-        const auto source = pe_bytes.subspan(section.raw_offset, section.raw_size);
+        const auto source_offset = basic_compression ? section.virtual_address : section.raw_offset;
+        if (!range_fits(source_offset, section.raw_size, pe_bytes.size())) {
+            for (std::size_t page = 0; page < page_count; ++page) {
+                (void)memory.unmap_page(image_base + page * kPageSize);
+            }
+            return {{}, "PE section data exceeds the decoded XEX image"};
+        }
+        const auto source = pe_bytes.subspan(source_offset, section.raw_size);
         if (!memory.load(physical_base + section.virtual_address, source)) {
             for (std::size_t page = 0; page < page_count; ++page) {
                 (void)memory.unmap_page(image_base + page * kPageSize);
@@ -711,6 +775,12 @@ XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
     loaded.entry_point = entry_point;
     loaded.mapped_size = static_cast<std::size_t>(mapped_size);
     return {std::move(loaded), {}};
+}
+
+XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
+                                     memory::GuestMemory& memory,
+                                     std::uint64_t physical_base) {
+    return load_xex2(file, memory, physical_base);
 }
 
 XexLoadResult load_xex2_file(const std::filesystem::path& path, memory::GuestMemory& memory,
