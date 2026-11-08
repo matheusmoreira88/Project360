@@ -793,6 +793,29 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
               scalar_result.registers[6] == std::array<float, 4>{21.0F, 21.0F, 21.0F, 21.0F},
           "Xenos EXEC carries scalar previous-result state between ordered ALU slots");
 
+    const std::array<ShaderExecInstruction, 2> scalar_blocks{
+        decode_shader_exec_instruction({(0b10U << 16U) | (1U << 12U), 1U << 12U}),
+        decode_shader_exec_instruction({1U | (0b10U << 16U) | (1U << 12U), 2U << 12U}),
+    };
+    const auto scalar_program = execute_shader_exec_sequence(
+        scalar_blocks, scalar_ucode, fetch_constants, memory, scalar_registers, {});
+    check(scalar_program && scalar_program.ended_shader &&
+              scalar_program.blocks_executed == 2U && scalar_program.instructions_executed == 2U &&
+              scalar_program.previous_scalar == scalar_result.previous_scalar &&
+              scalar_program.registers[5] == scalar_result.registers[5] &&
+              scalar_program.registers[6] == scalar_result.registers[6],
+          "Xenos EXEC sequence carries register and scalar state across blocks to EXEC_END");
+
+    const std::array<ShaderExecInstruction, 1> unterminated_blocks{
+        decode_shader_exec_instruction({(0b10U << 16U) | (1U << 12U), 1U << 12U}),
+    };
+    const auto unterminated_program = execute_shader_exec_sequence(
+        unterminated_blocks, scalar_ucode, fetch_constants, memory, scalar_registers, {});
+    check(!unterminated_program && !unterminated_program.ended_shader &&
+              unterminated_program.registers == ShaderAluTemporaryRegisterBank{} &&
+              unterminated_program.error.find("without EXEC_END") != std::string::npos,
+          "Xenos EXEC sequence rejects missing shader termination without partial state");
+
     std::array<bool, 4> boolean_constants{false, false, false, true};
     const auto conditional_words = std::array<std::uint32_t, 2>{
         scalar_sequence << 16U | (2U << 12U), (3U << 12U) | (1U << 11U) | (1U << 8U) | 3U};

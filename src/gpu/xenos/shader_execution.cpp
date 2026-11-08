@@ -105,6 +105,53 @@ ShaderExecResult execute_shader_exec_block(
             previous_scalar, vertex_outputs};
 }
 
+ShaderExecSequenceResult execute_shader_exec_sequence(
+    std::span<const ShaderExecInstruction> blocks,
+    std::span<const std::array<std::uint32_t, 3>> ucode,
+    std::span<const VertexFetchDescriptor> fetch_constants,
+    const memory::GuestMemory& memory,
+    const ShaderAluTemporaryRegisterBank& initial_registers,
+    const std::array<float, 4>& missing_component_values,
+    std::span<const std::array<float, 4>> float_constants,
+    float initial_previous_scalar,
+    std::span<const bool> boolean_constants,
+    ShaderVertexOutputs initial_vertex_outputs) {
+    constexpr std::size_t maximum_block_count = 4096U;
+    if (blocks.empty()) {
+        return {{}, 0U, 0U, false, "Xenos shader EXEC sequence is empty"};
+    }
+    if (blocks.size() > maximum_block_count) {
+        return {{}, 0U, 0U, false, "Xenos shader EXEC sequence exceeds the 4,096-block limit"};
+    }
+
+    auto registers = initial_registers;
+    auto previous_scalar = initial_previous_scalar;
+    auto vertex_outputs = initial_vertex_outputs;
+    std::uint32_t instructions_executed = 0U;
+    std::uint16_t blocks_executed = 0U;
+    for (std::size_t block_index = 0U; block_index < blocks.size(); ++block_index) {
+        const auto block = execute_shader_exec_block(
+            blocks[block_index], ucode, fetch_constants, memory, registers,
+            missing_component_values, float_constants, previous_scalar,
+            boolean_constants, vertex_outputs);
+        if (!block) {
+            return {{}, 0U, 0U, false,
+                    "Xenos shader EXEC block " + std::to_string(block_index) + ": " + block.error};
+        }
+        instructions_executed += block.instructions_executed;
+        ++blocks_executed;
+        registers = block.registers;
+        previous_scalar = block.previous_scalar;
+        vertex_outputs = block.vertex_outputs;
+        if (block.ended_shader) {
+            return {registers, instructions_executed, blocks_executed, true, {},
+                    previous_scalar, vertex_outputs};
+        }
+    }
+    return {{}, 0U, 0U, false,
+            "Xenos shader EXEC sequence ended without EXEC_END or matching COND_EXEC_END"};
+}
+
 ShaderVertexBatchResult execute_shader_exec_vertex_batch(
     const ShaderExecInstruction& exec,
     std::span<const std::array<std::uint32_t, 3>> ucode,
@@ -115,11 +162,24 @@ ShaderVertexBatchResult execute_shader_exec_vertex_batch(
     const std::array<float, 4>& missing_component_values,
     std::span<const std::array<float, 4>> float_constants,
     std::span<const bool> boolean_constants) {
+    return execute_shader_exec_vertex_batch(
+        std::span<const ShaderExecInstruction>(&exec, 1U), ucode, fetch_constants,
+        memory, draw_vertex_indices, initial_registers, missing_component_values,
+        float_constants, boolean_constants);
+}
+
+ShaderVertexBatchResult execute_shader_exec_vertex_batch(
+    std::span<const ShaderExecInstruction> blocks,
+    std::span<const std::array<std::uint32_t, 3>> ucode,
+    std::span<const VertexFetchDescriptor> fetch_constants,
+    const memory::GuestMemory& memory,
+    std::span<const std::uint32_t> draw_vertex_indices,
+    const ShaderAluTemporaryRegisterBank& initial_registers,
+    const std::array<float, 4>& missing_component_values,
+    std::span<const std::array<float, 4>> float_constants,
+    std::span<const bool> boolean_constants) {
     constexpr std::size_t maximum_vertex_count = 65'536U;
     constexpr std::uint32_t maximum_xenos_vertex_index = 0x00ffffffU;
-    if (exec.opcode != 2U && exec.opcode != 4U) {
-        return {{}, "Xenos vertex batch requires a shader-ending EXEC_END block"};
-    }
     if (draw_vertex_indices.empty()) {
         return {{}, "Xenos vertex batch has no draw indexes"};
     }
@@ -139,8 +199,8 @@ ShaderVertexBatchResult execute_shader_exec_vertex_batch(
 
             auto vertex_registers = initial_registers;
             vertex_registers[0U][0U] = static_cast<float>(vertex_index);
-            const auto vertex = execute_shader_exec_block(
-                exec, ucode, fetch_constants, memory, vertex_registers,
+            const auto vertex = execute_shader_exec_sequence(
+                blocks, ucode, fetch_constants, memory, vertex_registers,
                 missing_component_values, float_constants, 0.0F, boolean_constants);
             if (!vertex) {
                 return {{}, "Xenos vertex batch item " + std::to_string(vertex_number) +

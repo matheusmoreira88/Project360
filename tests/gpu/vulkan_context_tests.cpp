@@ -99,10 +99,12 @@ int main() {
         std::array<std::uint32_t, 3>{(1U << 15U) | (0x0fU << 16U), 0U,
                                     0xe0030203U},
     };
-    constexpr std::uint32_t vertex_sequence = 0b10U << 6U | 0b10U << 4U |
-                                               0b11U << 2U | 0b11U;
-    const auto vertex_exec = decode_shader_exec_instruction(
-        {(vertex_sequence << 16U) | (4U << 12U), 2U << 12U});
+    const std::array<ShaderExecInstruction, 2> vertex_exec_blocks{
+        decode_shader_exec_instruction(
+            {(0b11U | (0b11U << 2U)) << 16U | (2U << 12U), 1U << 12U}),
+        decode_shader_exec_instruction(
+            {2U | ((0b10U | (0b10U << 2U)) << 16U) | (2U << 12U), 2U << 12U}),
+    };
 
     project360::gpu::xenos::DrawCommand draw_command{};
     draw_command.source = project360::gpu::xenos::DrawSource::dma;
@@ -117,15 +119,15 @@ int main() {
         project360::gpu::xenos::prepare_draw_geometry(draw_command, shader_memory,
                                                        draw_registers);
     const auto vertex_batch = execute_shader_exec_vertex_batch(
-        vertex_exec, vertex_ucode, fetch_constants, shader_memory, prepared_geometry.indices, {},
-        {});
+        vertex_exec_blocks, vertex_ucode, fetch_constants, shader_memory,
+        prepared_geometry.indices, {}, {});
     if (!vertex_batch) {
         std::cerr << "FAIL: synthetic Xenos vertex batch failed: " << vertex_batch.error << '\n';
         return 1;
     }
     constexpr std::array<std::uint32_t, 3> out_of_range_vertex_indices{0U, 1U, 3U};
     const auto failed_vertex_batch = execute_shader_exec_vertex_batch(
-        vertex_exec, vertex_ucode, fetch_constants, shader_memory,
+        vertex_exec_blocks, vertex_ucode, fetch_constants, shader_memory,
         out_of_range_vertex_indices, {}, {});
     if (failed_vertex_batch || !failed_vertex_batch.vertices.empty() ||
         failed_vertex_batch.error.find("item 2 (index 3)") == std::string::npos) {
@@ -134,7 +136,8 @@ int main() {
     }
     constexpr std::array<std::uint32_t, 1> invalid_vertex_index{0x01000000U};
     const auto rejected_vertex_index = execute_shader_exec_vertex_batch(
-        vertex_exec, vertex_ucode, fetch_constants, shader_memory, invalid_vertex_index, {}, {});
+        vertex_exec_blocks, vertex_ucode, fetch_constants, shader_memory,
+        invalid_vertex_index, {}, {});
     if (rejected_vertex_index || !rejected_vertex_index.vertices.empty()) {
         std::cerr << "FAIL: Xenos vertex batch accepted an index wider than 24 bits\n";
         return 1;
