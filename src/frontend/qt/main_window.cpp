@@ -3,12 +3,15 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
+#include <QAbstractItemView>
+#include <QComboBox>
 #include <QHBoxLayout>
+#include <QItemSelectionModel>
 #include <QLabel>
-#include <QListWidget>
-#include <QListWidgetItem>
+#include <QLineEdit>
+#include <QListView>
 #include <QPushButton>
-#include <QSize>
+#include <QSortFilterProxyModel>
 #include <QSizePolicy>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -97,11 +100,21 @@ QWidget* makeHero() {
 } // namespace
 
 MainWindow::MainWindow(std::filesystem::path library_file, QWidget* parent)
-    : QMainWindow(parent), library_store_(std::move(library_file)) {
+    : QMainWindow(parent) {
     setWindowTitle("Project360 — Biblioteca");
     resize(1180, 760);
     setMinimumSize(880, 600);
     applyTheme();
+    library_model_ = new GameLibraryModel(std::move(library_file), this);
+    library_proxy_ = new QSortFilterProxyModel(this);
+    library_proxy_->setSourceModel(library_model_);
+    library_proxy_->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    library_proxy_->setFilterRole(Qt::DisplayRole);
+    library_proxy_->setSortCaseSensitivity(Qt::CaseInsensitive);
+    library_proxy_->setSortLocaleAware(true);
+    library_proxy_->setSortRole(Qt::DisplayRole);
+    library_proxy_->setDynamicSortFilter(true);
+    library_proxy_->sort(0, Qt::AscendingOrder);
 
     auto* root = new QWidget;
     auto* rootLayout = new QHBoxLayout(root);
@@ -122,10 +135,19 @@ MainWindow::MainWindow(std::filesystem::path library_file, QWidget* parent)
     headingColumn->addWidget(makeLabel("Seus arquivos locais e o estado de suporte.", "mutedText"));
     topRow->addLayout(headingColumn);
     topRow->addStretch();
+    search_ = new QLineEdit;
+    search_->setObjectName("librarySearch");
+    search_->setPlaceholderText("Buscar na biblioteca");
+    search_->setAccessibleName("Buscar jogos pelo nome do arquivo");
+    search_->setClearButtonEnabled(true);
+    search_->setMinimumWidth(150);
+    search_->setMinimumHeight(40);
+    topRow->addWidget(search_);
     importButton_ = new QPushButton("＋  Adicionar jogo");
     importButton_->setObjectName("primaryButton");
     importButton_->setMinimumHeight(42);
     importButton_->setCursor(Qt::PointingHandCursor);
+    importButton_->setAccessibleName("Adicionar arquivo XEX à biblioteca");
     topRow->addWidget(importButton_);
     contentLayout->addLayout(topRow);
     hero_ = makeHero();
@@ -133,19 +155,31 @@ MainWindow::MainWindow(std::filesystem::path library_file, QWidget* parent)
 
     auto* libraryHeader = new QHBoxLayout;
     libraryHeader->addWidget(makeLabel("Adicionados", "sectionHeading"));
+    libraryCount_ = makeLabel("0 arquivos", "mutedText");
+    libraryHeader->addWidget(libraryCount_);
     libraryHeader->addStretch();
-    libraryHeader->addWidget(makeLabel("ARQUIVOS LOCAIS", "sectionLabel"));
+    libraryHeader->addWidget(makeLabel("ORDENAR", "sectionLabel"));
+    sortOrder_ = new QComboBox;
+    sortOrder_->setObjectName("sortOrder");
+    sortOrder_->addItem("Nome (A–Z)", static_cast<int>(Qt::AscendingOrder));
+    sortOrder_->addItem("Nome (Z–A)", static_cast<int>(Qt::DescendingOrder));
+    sortOrder_->setAccessibleName("Ordenar os arquivos por nome crescente ou decrescente");
+    libraryHeader->addWidget(sortOrder_);
     contentLayout->addLayout(libraryHeader);
 
     auto* libraryArea = new QHBoxLayout;
     libraryArea->setSpacing(18);
-    library_ = new QListWidget;
+    library_ = new QListView;
     library_->setObjectName("libraryList");
+    library_->setModel(library_proxy_);
     library_->setMinimumWidth(270);
     library_->setMaximumWidth(370);
     library_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     library_->setUniformItemSizes(true);
     library_->setSpacing(5);
+    library_->setSelectionMode(QAbstractItemView::SingleSelection);
+    library_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    library_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     library_->setAccessibleName("Arquivos adicionados à biblioteca");
     libraryArea->addWidget(library_);
 
@@ -173,6 +207,13 @@ MainWindow::MainWindow(std::filesystem::path library_file, QWidget* parent)
     launchButton_->setEnabled(false);
     launchButton_->setToolTip("Indisponível: CPU, kernel e loader necessários ainda estão em desenvolvimento.");
     detailsLayout->addWidget(launchButton_);
+    removeButton_ = new QPushButton("Remover da biblioteca");
+    removeButton_->setObjectName("removeButton");
+    removeButton_->setMinimumHeight(40);
+    removeButton_->setEnabled(false);
+    removeButton_->setToolTip("Remove apenas o caminho salvo; não apaga o arquivo XEX do disco.");
+    removeButton_->setAccessibleName("Remover o caminho selecionado da biblioteca sem apagar o arquivo");
+    detailsLayout->addWidget(removeButton_);
     libraryArea->addWidget(details, 1);
     contentLayout->addLayout(libraryArea, 1);
 
@@ -180,14 +221,27 @@ MainWindow::MainWindow(std::filesystem::path library_file, QWidget* parent)
     setCentralWidget(root);
 
     connect(importButton_, &QPushButton::clicked, this, &MainWindow::importExecutable);
-    connect(library_, &QListWidget::currentRowChanged, this, [this](int) { showSelection(); });
+    connect(removeButton_, &QPushButton::clicked, this, &MainWindow::removeSelectedExecutable);
+    connect(search_, &QLineEdit::textChanged, library_proxy_, &QSortFilterProxyModel::setFilterFixedString);
+    connect(search_, &QLineEdit::textChanged, this, [this](const QString&) {
+        updateLibraryCount();
+        if (!library_->currentIndex().isValid()) {
+            showSelection();
+        }
+    });
+    connect(sortOrder_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        const auto order = static_cast<Qt::SortOrder>(sortOrder_->itemData(index).toInt());
+        library_proxy_->sort(0, order);
+    });
+    connect(library_->selectionModel(), &QItemSelectionModel::currentChanged,
+            this, [this](const QModelIndex&, const QModelIndex&) { showSelection(); });
 
-    const auto load_result = library_store_.load();
+    const auto load_result = library_model_->loadResult();
     if (load_result == project360::frontend::LibraryLoadResult::io_error ||
         load_result == project360::frontend::LibraryLoadResult::invalid_data) {
         selectionStatus_->setText("Não foi possível ler a biblioteca salva. Os arquivos originais não foram alterados.");
     }
-    refreshLibrary();
+    updateLibraryCount();
 }
 
 void MainWindow::importExecutable() {
@@ -208,11 +262,12 @@ void MainWindow::importExecutable() {
         return;
     }
 
-    selectedExecutable_ = file.absoluteFilePath();
-    const auto result = library_store_.add(std::filesystem::path(selectedExecutable_.toStdWString()));
+    const QString selected_executable = file.absoluteFilePath();
+    const auto result = library_model_->addExecutable(
+        std::filesystem::path(selected_executable.toStdWString()));
     if (result == project360::frontend::LibraryAddResult::persistence_error) {
         selectedTitle_->setText("Não foi possível salvar a biblioteca");
-        selectedPath_->setText(selectedExecutable_);
+        selectedPath_->setText(selected_executable);
         selectionStatus_->setText("O caminho não foi adicionado. Verifique as permissões da pasta de dados do Project360.");
         return;
     }
@@ -223,40 +278,68 @@ void MainWindow::importExecutable() {
         selectionStatus_->setText("O arquivo não passou na validação local e não foi salvo na biblioteca.");
         return;
     }
-    refreshLibrary(selectedExecutable_);
+    search_->clear();
+    const auto source_index = library_model_->indexOfPath(selected_executable);
+    const auto visible_index = library_proxy_->mapFromSource(source_index);
+    if (visible_index.isValid()) {
+        library_->setCurrentIndex(visible_index);
+        library_->scrollTo(visible_index);
+    }
+    updateLibraryCount();
 }
 
-void MainWindow::refreshLibrary(const QString& selected_path) {
-    library_->clear();
-    for (const auto& path : library_store_.entries()) {
-        const QString path_text = QString::fromStdWString(path.native());
-        const QFileInfo file_info(path_text);
-        const bool exists = file_info.exists() && file_info.isFile();
-        const QString title = file_info.completeBaseName();
-        const QString state = exists ? "XEX • não carregado" : "Arquivo não encontrado";
-        auto* item = new QListWidgetItem(QStringLiteral("◈   %1\n     %2").arg(title, state));
-        item->setData(Qt::UserRole, path_text);
-        item->setToolTip(path_text);
-        item->setSizeHint(QSize(0, 62));
-        library_->addItem(item);
-        if (!selected_path.isEmpty() && path_text.compare(selected_path, Qt::CaseInsensitive) == 0) {
-            library_->setCurrentItem(item);
-        }
+void MainWindow::removeSelectedExecutable() {
+    const QModelIndex visible_index = library_->currentIndex();
+    if (!visible_index.isValid()) {
+        return;
     }
-    hero_->setVisible(library_->count() == 0);
-    showSelection();
+    const QModelIndex source_index = library_proxy_->mapToSource(visible_index);
+    const int row = source_index.row();
+    if (!library_model_->removeRows(row, 1)) {
+        selectionStatus_->setText("Não foi possível salvar a remoção da biblioteca.");
+        return;
+    }
+
+    library_->setCurrentIndex({});
+    updateLibraryCount();
+    if (library_proxy_->rowCount() > 0) {
+        library_->setCurrentIndex(library_proxy_->index(0, 0));
+    } else {
+        showSelection();
+    }
+}
+
+void MainWindow::updateLibraryCount() {
+    const int total = library_model_->rowCount();
+    const int visible = library_proxy_->rowCount();
+    if (visible == total) {
+        libraryCount_->setText(QStringLiteral("%1 arquivos").arg(total));
+    } else if (visible == 0) {
+        libraryCount_->setText("Nenhum resultado");
+    } else {
+        libraryCount_->setText(QStringLiteral("%1 de %2 arquivos").arg(visible).arg(total));
+    }
+    sortOrder_->setEnabled(total > 1);
+    hero_->setVisible(total == 0);
 }
 
 void MainWindow::showSelection() {
-    const auto* item = library_->currentItem();
-    if (item == nullptr) {
+    const QModelIndex visible_index = library_->currentIndex();
+    if (!visible_index.isValid()) {
+        selectedTitle_->setText(library_model_->rowCount() == 0 ? "Nenhum arquivo selecionado"
+                                                               : "Nenhum item selecionado");
+        selectedPath_->setText("Selecione um arquivo na biblioteca para ver o caminho.");
+        removeButton_->setEnabled(false);
         return;
     }
-    selectedExecutable_ = item->data(Qt::UserRole).toString();
-    const QFileInfo file(selectedExecutable_);
-    selectedTitle_->setText(file.completeBaseName());
-    selectedPath_->setText(file.absoluteFilePath());
-    if (!file.exists() || !file.isFile()) {
+    const QModelIndex source_index = library_proxy_->mapToSource(visible_index);
+    const QString selected_executable = library_model_->data(source_index, GameLibraryModel::PathRole).toString();
+    const QString title = library_model_->data(source_index, GameLibraryModel::TitleRole).toString();
+    const bool exists = library_model_->refreshAvailability(source_index.row());
+    selectedTitle_->setText(title);
+    selectedPath_->setText(selected_executable);
+    removeButton_->setEnabled(true);
+    if (!exists) {
         selectionStatus_->setText("Este caminho salvo não existe mais. O Project360 ainda não analisa nem executa arquivos XEX.");
     } else {
         selectionStatus_->setText(
@@ -290,13 +373,21 @@ void MainWindow::applyTheme() {
         QLabel[class="detailTitle"] { font-size: 16pt; font-weight: 700; }
         QLabel[class="noticeText"] { color: #f1c778; background: #302919; border: 1px solid #514326; border-radius: 8px; padding: 11px; }
         QFrame[class="separator"] { color: #293140; }
-        QListWidget#libraryList { background: #151a23; border: 1px solid #272f3d; border-radius: 11px; padding: 7px; outline: 0; }
-        QListWidget#libraryList::item { color: #bfc8d5; border-radius: 7px; padding: 8px; }
-        QListWidget#libraryList::item:selected { background: #213c3c; color: #83e3d4; }
-        QListWidget#libraryList::item:hover:!selected { background: #1d2430; }
+        QListView#libraryList { background: #151a23; border: 1px solid #272f3d; border-radius: 11px; padding: 7px; outline: 0; }
+        QListView#libraryList::item { color: #bfc8d5; border-radius: 7px; padding: 10px 8px; }
+        QListView#libraryList::item:selected { background: #213c3c; color: #83e3d4; }
+        QListView#libraryList::item:hover:!selected { background: #1d2430; }
+        QLineEdit#librarySearch { background: #171c26; color: #e8edf7; border: 1px solid #303949; border-radius: 8px; padding: 9px 12px; }
+        QLineEdit#librarySearch:focus { border: 1px solid #55d6be; }
+        QComboBox#sortOrder { background: #171c26; color: #c8d0dd; border: 1px solid #303949; border-radius: 7px; padding: 6px 9px; }
+        QComboBox#sortOrder::drop-down { border: 0; width: 20px; }
+        QComboBox#sortOrder QAbstractItemView { background: #171c26; selection-background-color: #213c3c; }
         QPushButton#primaryButton { background: #55d6be; color: #081714; font-weight: 750; padding: 10px 17px; }
         QPushButton#primaryButton:hover { background: #79e5d1; }
         QPushButton#secondaryButton { background: #27313d; color: #788598; font-weight: 700; text-align: center; }
         QPushButton#secondaryButton:disabled { background: #222832; color: #707a89; }
+        QPushButton#removeButton { background: #342329; color: #e8a7ac; font-weight: 650; text-align: center; }
+        QPushButton#removeButton:hover:enabled { background: #482b33; }
+        QPushButton#removeButton:disabled { background: #222832; color: #707a89; }
     )");
 }

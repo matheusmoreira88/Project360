@@ -1,14 +1,17 @@
 #pragma once
 
-#include "frontend/game_library_store.hpp"
+#include "game_library_model.hpp"
 
 #include <filesystem>
 #include <QMainWindow>
 #include <QString>
 
 class QLabel;
-class QListWidget;
+class QLineEdit;
+class QListView;
 class QPushButton;
+class QComboBox;
+class QSortFilterProxyModel;
 class QWidget;
 
 class MainWindow final : public QMainWindow {
@@ -19,17 +22,22 @@ public:
 
 private:
     void importExecutable();
-    void refreshLibrary(const QString& selected_path = {});
+    void removeSelectedExecutable();
+    void updateLibraryCount();
     void showSelection();
     void applyTheme();
 
-    QListWidget* library_ = nullptr;
+    GameLibraryModel* library_model_ = nullptr;
+    QSortFilterProxyModel* library_proxy_ = nullptr;
+    QListView* library_ = nullptr;
     QWidget* hero_ = nullptr;
+    QLineEdit* search_ = nullptr;
+    QComboBox* sortOrder_ = nullptr;
+    QLabel* libraryCount_ = nullptr;
     QLabel* selectedTitle_ = nullptr;
     QLabel* selectedPath_ = nullptr;
     QLabel* selectionStatus_ = nullptr;
     QPushButton* launchButton_ = nullptr;
     QPushButton* importButton_ = nullptr;
-    project360::frontend::GameLibraryStore library_store_;
-    QString selectedExecutable_;
+    QPushButton* removeButton_ = nullptr;
 };

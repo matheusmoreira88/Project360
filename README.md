@@ -16,7 +16,7 @@ This is not yet a complete PowerPC or Xenon implementation. Floating-point/SIMD 
 
 ## Desktop interface (early scaffold)
 
-A separate Qt 6 Widgets desktop target provides a Steam-inspired library shell with a local `.xex` file picker. Validated paths are stored in the user's application data folder and restored on later launches; the app does not parse executable metadata or run the file. The **Iniciar** action is intentionally disabled until the loader and required runtime subsystems exist. Qt 6.5 or newer with the Widgets module is needed to build this optional target. If Qt is not found, CMake still configures the core, smoke executable, and tests.
+A separate Qt 6 Widgets desktop target provides a Steam-inspired library shell with a local `.xex` file picker, persistent paths, search, name sorting, and removal from the library. It never deletes the original file, parses executable metadata, or runs the XEX. The **Iniciar** action is intentionally disabled until the loader and required runtime subsystems exist. Qt 6.5 or newer with the Widgets module is needed to build this optional target. If Qt is not found, CMake still configures the core, smoke executable, and tests.
 
 ## Build and run on Windows
 

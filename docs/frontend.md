@@ -7,7 +7,9 @@ The initial desktop frontend is a separate C++20/Qt Widgets executable called `p
 - Opens a native file picker filtered for `.xex` files.
 - Saves selected local XEX paths in the user's application data directory and restores them on the next launch.
 - Validates the `.xex` extension and that a selected path points to an existing regular file before adding it.
-- Keeps entries whose source file was later moved or deleted, and labels those paths as missing.
+- Keeps entries whose source file was later moved or deleted. It checks a path when selected, then labels it as missing; startup does not scan every saved file.
+- Displays the library through a `QListView` and a dedicated Qt list model, with fixed-string, case-insensitive name search and ascending/descending sorting.
+- Removes an entry from the saved library without deleting the original XEX file.
 - Shows the selected local path and a clear loader status.
 - Hides the introductory banner after a file is added so the library and details have more room.
 - Keeps **Iniciar** disabled because loading and execution are not implemented.
@@ -29,4 +31,4 @@ This target has not yet been compiled or visually validated on the current devel
 
 ## Next frontend work
 
-After the target is built and reviewed on Windows, move the widget list to a Qt model/view implementation and add search, sorting, and a real remove action. Keep unavailable actions visibly disabled until the corresponding backend is implemented.
+The Qt model/view layer and its conditional model tests have not been compiled or visually validated here because Qt is not installed. Next, validate those targets on a supported Qt/MSVC toolchain and review keyboard navigation, narrow-window layout, and accessibility behavior. Keep unavailable actions visibly disabled until the corresponding backend is implemented.

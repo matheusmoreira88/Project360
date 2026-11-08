@@ -37,12 +37,26 @@ if(PROJECT360_BUILD_GUI)
     find_package(Qt6 6.5 COMPONENTS Widgets QUIET)
     if(Qt6_FOUND)
         qt_standard_project_setup()
+
+        qt_add_library(project360_qt_frontend STATIC
+            src/frontend/qt/game_library_model.cpp
+            src/frontend/qt/game_library_model.hpp
+        )
+        target_include_directories(project360_qt_frontend PUBLIC src src/frontend/qt)
+        target_link_libraries(project360_qt_frontend PUBLIC Qt6::Widgets project360_frontend_core)
+        target_compile_features(project360_qt_frontend PUBLIC cxx_std_20)
+        if(MSVC)
+            target_compile_options(project360_qt_frontend PRIVATE /W4 /permissive- /EHsc /utf-8)
+        else()
+            target_compile_options(project360_qt_frontend PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+        endif()
+
         qt_add_executable(project360_gui
             src/frontend/qt/main.cpp
             src/frontend/qt/main_window.cpp
             src/frontend/qt/main_window.hpp
         )
-        target_link_libraries(project360_gui PRIVATE Qt6::Widgets project360_frontend_core)
+        target_link_libraries(project360_gui PRIVATE project360_qt_frontend)
         target_compile_features(project360_gui PRIVATE cxx_std_20)
         if(MSVC)
             target_compile_options(project360_gui PRIVATE /W4 /permissive- /EHsc /utf-8)
@@ -63,4 +77,16 @@ if(PROJECT360_BUILD_TESTS)
     add_executable(project360_library_tests tests/frontend/library_store_tests.cpp)
     target_link_libraries(project360_library_tests PRIVATE project360_frontend_core)
     add_test(NAME project360_library_tests COMMAND project360_library_tests)
+
+    if(PROJECT360_BUILD_GUI AND Qt6_FOUND)
+        add_executable(project360_qt_model_tests tests/frontend/qt_model_tests.cpp)
+        target_link_libraries(project360_qt_model_tests PRIVATE project360_qt_frontend Qt6::Core)
+        target_compile_features(project360_qt_model_tests PRIVATE cxx_std_20)
+        if(MSVC)
+            target_compile_options(project360_qt_model_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
+        else()
+            target_compile_options(project360_qt_model_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+        endif()
+        add_test(NAME project360_qt_model_tests COMMAND project360_qt_model_tests)
+    endif()
 endif()
