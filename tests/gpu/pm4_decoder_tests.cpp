@@ -3,6 +3,7 @@
 #include "gpu/xenos/pm4_registers.hpp"
 #include "gpu/xenos/registers.hpp"
 #include "gpu/xenos/shader_alu.hpp"
+#include "gpu/xenos/shader_execution.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
@@ -291,6 +292,76 @@ void test_shader_alu_add_mul_pair_execution() {
     check(!unsupported && unsupported.registers == ShaderAluTemporaryRegisterBank{} &&
               !conflicting && conflicting.registers == ShaderAluTemporaryRegisterBank{},
           "Xenos ALU pair rejects unsupported scalar state and overlapping paired writes atomically");
+}
+
+void test_shader_exec_block_ordered_alu_and_vfetch() {
+    using namespace project360::gpu::xenos;
+    project360::memory::GuestMemory memory(128U);
+    const std::array<std::byte, 32> vertex_data{
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0},
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0},
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0},
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0},
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0x40},
+        std::byte{0}, std::byte{0}, std::byte{0x40}, std::byte{0x40},
+        std::byte{0}, std::byte{0}, std::byte{0x80}, std::byte{0x40},
+        std::byte{0}, std::byte{0}, std::byte{0xa0}, std::byte{0x40}};
+    check(memory.load(64U, vertex_data), "shader EXEC fixture loads vertex data");
+
+    const auto descriptor = decode_vertex_fetch_descriptor((16U << 2U) | 3U, 8U << 2U);
+    std::array<VertexFetchDescriptor, 8> fetch_constants{};
+    if (descriptor) {
+        fetch_constants[7] = descriptor.descriptor;
+    }
+
+    const std::array<std::array<std::uint32_t, 3>, 3> ucode{
+        std::array<std::uint32_t, 3>{
+            3U | (0x0fU << 16U), 0U,
+            (1U << 31U) | (3U << 16U) | (1U << 30U) | (2U << 8U) |
+                (1U << 29U) | 1U},
+        std::array<std::uint32_t, 3>{
+            (3U << 5U) | (4U << 12U) | (1U << 19U) | (2U << 20U) | (1U << 25U) |
+                (2U << 27U) | (2U << 30U),
+            0x00000688U | (38U << 16U) | (1U << 15U) | (1U << 14U) |
+                (1U << 13U) | (1U << 12U),
+            4U},
+        std::array<std::uint32_t, 3>{
+            10U | (0x0fU << 16U), 0U,
+            (1U << 31U) | (3U << 16U) | (1U << 30U) | (4U << 8U) | 4U |
+                (1U << 29U) | (1U << 24U)}};
+
+    // Two sequence bits per instruction: ALU, VFETCH, ALU. The serialize bit
+    // is retained in metadata; this reference executor commits each operation
+    // synchronously in sequence order.
+    constexpr std::uint32_t sequence = 0b10U | (0b11U << 2U) | (0b10U << 4U);
+    const auto exec = decode_shader_exec_instruction(
+        {sequence << 16U | (3U << 12U), 2U << 12U});
+    ShaderAluTemporaryRegisterBank initial_registers{};
+    initial_registers[2][2] = 1.0F;
+    const auto result = descriptor
+                            ? execute_shader_exec_block(exec, ucode, fetch_constants, memory,
+                                                        initial_registers, {})
+                            : ShaderExecResult{{}, 0U, false, "Invalid descriptor fixture"};
+    check(result && result.instructions_executed == 3U && result.ended_shader &&
+              result.registers[3] == std::array<float, 4>{0.0F, 0.0F, 1.0F, 0.0F} &&
+              result.registers[4] == std::array<float, 4>{2.0F, 3.0F, 4.0F, 5.0F} &&
+              result.registers[10] == std::array<float, 4>{4.0F, 9.0F, 16.0F, 25.0F},
+          "Xenos EXEC sequence runs ALU, VFETCH and dependent ALU operations in order");
+
+    auto invalid_ucode = ucode;
+    invalid_ucode[2][2] |= 2U << 24U;
+    const auto rejected = execute_shader_exec_block(
+        exec, invalid_ucode, fetch_constants, memory, initial_registers, {});
+    const auto out_of_range = execute_shader_exec_block(
+        decode_shader_exec_instruction({(2U << 12U), 2U << 12U}), ucode,
+        fetch_constants, memory, initial_registers, {});
+    const auto unsupported_control_flow = execute_shader_exec_block(
+        decode_shader_exec_instruction({sequence << 16U | (3U << 12U), 0U}), ucode,
+        fetch_constants, memory, initial_registers, {});
+    check(!rejected && rejected.instructions_executed == 0U &&
+              rejected.registers == ShaderAluTemporaryRegisterBank{} && !out_of_range &&
+              !unsupported_control_flow,
+          "Xenos EXEC rejects unsupported operations, control flow and ranges without partial state");
 }
 
 void test_noops_and_malformed_streams() {
@@ -1162,6 +1233,7 @@ int main() {
     test_shader_alu_temporary_source_resolution();
     test_shader_vector_alu_from_encoded_temporaries();
     test_shader_alu_add_mul_pair_execution();
+    test_shader_exec_block_ordered_alu_and_vfetch();
     test_noops_and_malformed_streams();
     test_register_packet_application();
     test_type3_constant_uploads();
