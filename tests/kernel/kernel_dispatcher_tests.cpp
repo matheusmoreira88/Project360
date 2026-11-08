@@ -1,5 +1,6 @@
 #include "kernel/kernel_dispatcher.hpp"
 #include "kernel/guest_executor.hpp"
+#include "kernel/guest_thread_context.hpp"
 
 #include "memory/guest_memory.hpp"
 
@@ -937,6 +938,11 @@ int main() {
           "KeTlsAlloc reports protected TLS storage without changing guest state");
 
     project360::loader::LoadedXexImage tls_guest_image{};
+    tls_guest_image.image_base = 0x01000000U;
+    tls_guest_image.entry_point = 0x01000100U;
+    tls_guest_image.physical_base = 0U;
+    tls_guest_image.mapped_size = static_cast<std::size_t>(GuestMemory::page_size);
+    tls_guest_image.xex.tls_info = project360::loader::XexTlsInfo{2U, 0U, 8U, 0U};
     project360::loader::XexImportLibrary tls_import_library{};
     tls_import_library.name = "xboxkrnl.exe";
     tls_import_library.import_record_addresses = {0x5000U, 0x5004U, 0x5008U, 0x500cU};
@@ -949,35 +955,48 @@ int main() {
         KernelDispatcher::ke_tls_free_ordinal,
     };
     tls_guest_image.xex.import_libraries.push_back(std::move(tls_import_library));
-    constexpr std::uint32_t guest_tls_slots_address =
-        static_cast<std::uint32_t>(data_page + 0x600U);
+    GuestMemory tls_guest_memory(32U * static_cast<std::size_t>(GuestMemory::page_size));
+    check(tls_guest_memory.map_page(tls_guest_image.image_base,
+                                    tls_guest_image.physical_base,
+                                    GuestPageAccess::read | GuestPageAccess::write |
+                                        GuestPageAccess::execute),
+          "synthetic XEX code page is mapped before thread bootstrap");
+    CpuState tls_guest_state{};
+    const auto tls_thread = project360::kernel::initialize_main_thread_context(
+        tls_guest_image, tls_guest_memory, tls_guest_state);
+    const auto guest_tls_context = tls_thread.context.value_or(
+        project360::kernel::GuestMainThreadContext{});
+    check(static_cast<bool>(tls_thread) && tls_thread.context->tls_slot_count == 2U &&
+              tls_thread.context->tls_slot_address == tls_thread.context->tls_address + 8U,
+          "main-thread bootstrap exposes dynamic TLS slots after the static template");
     const project360::kernel::GuestExecutor tls_guest_executor(
-        tls_guest_image, {guest_tls_slots_address, 2U});
-    state = {};
-    state.pc = 0x5000U;
-    state.lr = 0x6004U;
-    const auto guest_tls_alloc = tls_guest_executor.step(state, memory);
-    state.pc = 0x5004U;
-    state.gpr[3] = 0U;
-    state.gpr[4] = 0xcafe1234U;
-    state.lr = 0x6008U;
-    const auto guest_tls_set = tls_guest_executor.step(state, memory);
-    state.pc = 0x5008U;
-    state.gpr[3] = 0U;
-    state.lr = 0x600cU;
-    const auto guest_tls_get = tls_guest_executor.step(state, memory);
+        tls_guest_image, {guest_tls_context.tls_slot_address, guest_tls_context.tls_slot_count});
+    tls_guest_state.pc = 0x5000U;
+    tls_guest_state.lr = 0x6004U;
+    const auto guest_tls_alloc = tls_guest_executor.step(tls_guest_state, tls_guest_memory);
+    tls_guest_state.pc = 0x5004U;
+    tls_guest_state.gpr[3] = 0U;
+    tls_guest_state.gpr[4] = 0xcafe1234U;
+    tls_guest_state.lr = 0x6008U;
+    const auto guest_tls_set = tls_guest_executor.step(tls_guest_state, tls_guest_memory);
+    tls_guest_state.pc = 0x5008U;
+    tls_guest_state.gpr[3] = 0U;
+    tls_guest_state.lr = 0x600cU;
+    const auto guest_tls_get = tls_guest_executor.step(tls_guest_state, tls_guest_memory);
     check(guest_tls_alloc.status == project360::cpu::StepStatus::executed &&
               guest_tls_set.status == project360::cpu::StepStatus::executed &&
               guest_tls_get.status == project360::cpu::StepStatus::executed &&
-              state.gpr[3] == 0xcafe1234U && state.pc == 0x600cU,
-          "GuestExecutor dispatches guest KeTls import thunks through the configured thread array");
-    state.pc = 0x500cU;
-    state.gpr[3] = 0U;
-    state.lr = 0x6010U;
-    const auto guest_tls_free = tls_guest_executor.step(state, memory);
+              tls_guest_state.gpr[3] == 0xcafe1234U && tls_guest_state.pc == 0x600cU,
+          "GuestExecutor dispatches KeTls import thunks through the bootstrapped thread array");
+    tls_guest_state.pc = 0x500cU;
+    tls_guest_state.gpr[3] = 0U;
+    tls_guest_state.lr = 0x6010U;
+    const auto guest_tls_free = tls_guest_executor.step(tls_guest_state, tls_guest_memory);
+    std::uint32_t guest_tls_value = 1U;
     check(guest_tls_free.status == project360::cpu::StepStatus::executed &&
-              state.gpr[3] == 1U && state.pc == 0x6010U &&
-              memory.read_u32_be(guest_tls_slots_address, word) && word == 0U,
+              tls_guest_state.gpr[3] == 1U && tls_guest_state.pc == 0x6010U &&
+              tls_guest_memory.read_u32_be(guest_tls_context.tls_slot_address, guest_tls_value) &&
+              guest_tls_value == 0U,
           "GuestExecutor returns through LR after a guest KeTlsFree import");
 
     if (failures != 0) {
