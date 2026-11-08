@@ -981,6 +981,37 @@ void test_leading_zero_instructions() {
           "cntlzw and cntlzd diagnose a nonzero reserved RB field");
 }
 
+void test_population_count_bytes_instruction() {
+    using namespace project360;
+    memory::GuestMemory mem(16);
+    put_word(mem, 0, logical_x(3, 1, 0, 122)); // popcntb r3,r1
+    put_word(mem, 4, logical_x(4, 2, 0, 122)); // popcntb r4,r2
+    put_word(mem, 8, logical_x(5, 5, 0, 122)); // popcntb r5,r5
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0x010300ff01020408ULL;
+    state.gpr[2] = 0xffffffffffffffffULL;
+    state.gpr[5] = 0x0001020304050607ULL;
+    state.cr = 0x12345678U;
+
+    const cpu::Interpreter interpreter{};
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 0x0102000801010101ULL &&
+              state.cr == 0x12345678U,
+          "popcntb counts set bits in all eight byte lanes without changing CR");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[4] == 0x0808080808080808ULL,
+          "popcntb returns eight for every all-ones source byte");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[5] == 0x0001010201020203ULL,
+          "popcntb supports the destination and source register being the same");
+
+    const auto reserved_rb = cpu::decode(logical_x(3, 1, 1, 122));
+    const auto reserved_rc = cpu::decode(logical_x(3, 1, 0, 122, true));
+    check(!reserved_rb && !reserved_rc,
+          "popcntb rejects nonzero reserved RB and Rc fields");
+}
+
 void test_memory_and_endianness() {
     using namespace project360;
     memory::GuestMemory mem(512);
@@ -3233,6 +3264,7 @@ int main() {
     test_doubleword_rotate_mask_instructions();
     test_variable_doubleword_rotate_mask_instructions();
     test_leading_zero_instructions();
+    test_population_count_bytes_instruction();
     test_memory_and_endianness();
     test_byte_and_halfword_memory_instructions();
     test_load_store_update_instructions();

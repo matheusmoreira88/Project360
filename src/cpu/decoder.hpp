@@ -74,6 +74,7 @@ enum class Opcode {
     rotate_left_doubleword_variable_clear_right,
     count_leading_zeros_word,
     count_leading_zeros_doubleword,
+    population_count_bytes,
     subf,
     subfc,
     subfe,

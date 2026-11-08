@@ -554,6 +554,13 @@ DecodeResult decode(std::uint32_t word) {
             ins.record = (word & 1U) != 0U;
             return {ins, {}};
         }
+        if (xo10 == 122U) {
+            if (ins.rb != 0U || (word & 1U) != 0U) {
+                return {{}, "popcntb reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::population_count_bytes;
+            return {ins, {}};
+        }
         if (xo == 0U || xo == 32U) {
             if ((word & (1U << 22U)) != 0U) return {{}, "compare register reserved bit is set"};
             if ((word & 1U) != 0U) return {{}, "compare register record bit is reserved"};

@@ -544,6 +544,16 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr0(state, value);
         break;
     }
+    case Opcode::population_count_bytes: {
+        const auto source = state.gpr[ins.rt];
+        std::uint64_t value = 0U;
+        for (unsigned byte = 0U; byte < 8U; ++byte) {
+            const auto lane = static_cast<std::uint8_t>(source >> (byte * 8U));
+            value |= static_cast<std::uint64_t>(std::popcount(lane)) << (byte * 8U);
+        }
+        state.gpr[ins.ra] = value;
+        break;
+    }
     case Opcode::shift_left_word:
     case Opcode::shift_right_word: {
         const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);

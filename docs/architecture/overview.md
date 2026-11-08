@@ -141,6 +141,7 @@ The data subset includes D-form accesses plus indexed `lbzx`, `lhzx`, `lhax`, `l
 - [IBM `subfme` instruction reference](https://www.ibm.com/docs/en/aix/7.1.0?topic=is-subfme-sfme-subtract-from-minus-one-extended-instruction)
 - [IBM `cntlzw` instruction reference](https://www.ibm.com/docs/en/aix/7.2.0?topic=set-cntlzw-cntlz-count-leading-zeros-word-instruction)
 - [IBM `cntlzd` instruction reference](https://www.ibm.com/docs/en/aix/7.2.0?topic=set-cntlzd-count-leading-zeros-double-word-instruction)
+- [PowerPC User Instruction Set Architecture, Version 2.02 (`popcntb` encoding and lane semantics)](https://powerpc.dev/general/PPC_Vers202_Book1_public.pdf)
 - [IBM `stfiwx` instruction reference](https://www.ibm.com/docs/en/aix/7.1.0?topic=is-stfiwx-store-floating-point-as-integer-word-indexed)
 - [IBM `srawi` instruction reference](https://www.ibm.com/docs/da/ssw_aix_71/assembler/idalangref_srawi_srai_instrs.html)
 - [IBM PowerPC instruction fields](https://www.ibm.com/docs/en/aix/7.3.0?topic=forms-instruction-fields)
