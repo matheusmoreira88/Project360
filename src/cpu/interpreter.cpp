@@ -470,6 +470,12 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
     case Opcode::move_from_condition_register:
         state.gpr[ins.rt] = state.cr;
         break;
+    case Opcode::move_condition_register_field: {
+        const auto source_shift = static_cast<unsigned>(28U - 4U * ins.bfa);
+        const auto source_field = (state.cr >> source_shift) & 0xfU;
+        set_cr_field(state, ins.bf, source_field);
+        break;
+    }
     case Opcode::move_to_condition_register_fields: {
         const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);
         for (std::uint8_t field = 0; field < 8U; ++field) {

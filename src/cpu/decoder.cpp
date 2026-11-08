@@ -174,6 +174,17 @@ DecodeResult decode(std::uint32_t word) {
     }
     case 19: {
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
+        if (xo10 == 0U) {
+            constexpr std::uint32_t reserved_mask = (0x3U << 21U) | (0x3U << 16U) |
+                                                    (0x1fU << 11U) | 1U;
+            if ((word & reserved_mask) != 0U) {
+                return {{}, "mcrf reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::move_condition_register_field;
+            ins.bf = static_cast<std::uint8_t>((word >> 23U) & 0x7U);
+            ins.bfa = static_cast<std::uint8_t>((word >> 18U) & 0x7U);
+            return {ins, {}};
+        }
         if (xo10 != 16U && xo10 != 528U) {
             return {{}, "unsupported branch-register extended opcode " + std::to_string(xo10)};
         }

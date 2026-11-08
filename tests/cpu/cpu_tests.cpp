@@ -65,6 +65,11 @@ std::uint32_t mfcr_form(std::uint8_t rt, bool record = false,
            (record ? 1U : 0U);
 }
 
+std::uint32_t mcrf_form(std::uint8_t bf, std::uint8_t bfa, std::uint32_t reserved = 0) {
+    return (19U << 26U) | (static_cast<std::uint32_t>(bf) << 23U) |
+           (static_cast<std::uint32_t>(bfa) << 18U) | reserved;
+}
+
 std::uint32_t mtcrf_form(std::uint8_t fxm, std::uint8_t rs, bool record = false,
                          std::uint8_t reserved_instruction_bit11 = 0,
                          std::uint8_t reserved_instruction_bit20 = 0) {
@@ -1306,6 +1311,38 @@ void test_condition_register_transfers() {
           "mtcrf record and reserved-field encodings are rejected");
 }
 
+void test_move_condition_register_field() {
+    using namespace project360;
+    memory::GuestMemory mem(12);
+    put_word(mem, 0, mcrf_form(0, 4)); // mcrf cr0,cr4
+    put_word(mem, 4, mcrf_form(7, 0)); // mcrf cr7,cr0
+    put_word(mem, 8, mcrf_form(7, 7)); // self-copy
+
+    cpu::CpuState state{};
+    state.cr = 0x12345678U;
+    state.xer = 0xe1234567U;
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.cr == 0x52345678U &&
+              state.xer == 0xe1234567U,
+          "mcrf copies the selected source field and preserves other CR fields and XER");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.cr == 0x52345675U,
+          "mcrf can copy a changed field to CR7");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.cr == 0x52345675U && state.pc == 12,
+          "mcrf self-copy leaves the condition register unchanged");
+
+    check(!cpu::decode(mcrf_form(2, 3, 1U << 21U)) &&
+              !cpu::decode(mcrf_form(2, 3, 1U << 16U)) &&
+              !cpu::decode(mcrf_form(2, 3, 1U << 11U)) &&
+              !cpu::decode(mcrf_form(2, 3, 1U)),
+          "mcrf reserved fields and record bit are rejected");
+}
+
 void test_move_condition_register_from_xer() {
     using namespace project360;
     memory::GuestMemory mem(8);
@@ -1491,6 +1528,7 @@ int main() {
     test_compare_immediates();
     test_compare_registers();
     test_condition_register_transfers();
+    test_move_condition_register_field();
     test_move_condition_register_from_xer();
     test_conditional_branches();
     test_absolute_and_register_branches();

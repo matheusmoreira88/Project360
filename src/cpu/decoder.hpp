@@ -59,6 +59,7 @@ enum class Opcode {
     cmpi,
     cmpli,
     move_from_condition_register,
+    move_condition_register_field,
     move_to_condition_register_fields,
     move_condition_register_from_xer,
     lbz,
@@ -88,6 +89,7 @@ struct DecodedInstruction {
     std::uint8_t ra{};
     std::uint8_t rb{};
     std::uint8_t bf{};
+    std::uint8_t bfa{};
     std::uint8_t bo{};
     std::uint8_t bi{};
     std::uint8_t branch_hint{};
