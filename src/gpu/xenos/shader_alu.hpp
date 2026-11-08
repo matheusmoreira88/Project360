@@ -93,9 +93,11 @@ struct ShaderAluExecutionResult {
 [[nodiscard]] ShaderVectorAluResult evaluate_shader_vector_alu(
     const ShaderAluInstruction& instruction, const std::array<float, 4>& source_1,
     const std::array<float, 4>& source_2,
-    const std::array<float, 4>& previous_destination);
+    const std::array<float, 4>& previous_destination,
+    const std::array<float, 4>& source_3 = {});
 
-// Resolves src1/src2 from the temporary bank and evaluates the vector half.
+// Resolves the vector operation's source operands from the temporary/constant
+// banks and evaluates the vector half.
 // The caller remains responsible for scalar pairing and destination storage.
 [[nodiscard]] ShaderVectorAluResult evaluate_shader_vector_alu_from_temporaries(
     const ShaderAluInstruction& instruction,

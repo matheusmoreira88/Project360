@@ -22,7 +22,7 @@ float select_xenos_operand(float lhs, float rhs, bool select_lhs) noexcept {
 }
 
 bool is_supported_vector_opcode(std::uint8_t opcode) noexcept {
-    return opcode <= 7U || opcode == 15U || opcode == 16U;
+    return opcode <= 7U || opcode == 15U || opcode == 16U || opcode == 17U;
 }
 
 float dot_product_xenos(const std::array<float, 4>& lhs, const std::array<float, 4>& rhs,
@@ -41,6 +41,16 @@ float dot_product_xenos(const std::array<float, 4>& lhs, const std::array<float,
     volatile float product_w = multiply_xenos_legacy(lhs[3], rhs[3]);
     volatile float sum_xyzw = sum_xyz + product_w;
     return sum_xyzw;
+}
+
+float dot2add_xenos(const std::array<float, 4>& lhs, const std::array<float, 4>& rhs,
+                    const std::array<float, 4>& addend) noexcept {
+    // DP2ADD uses only src3.x; products and additions round separately.
+    volatile float product_x = multiply_xenos_legacy(lhs[0], rhs[0]);
+    volatile float product_y = multiply_xenos_legacy(lhs[1], rhs[1]);
+    volatile float sum_xy = product_x + product_y;
+    volatile float result = sum_xy + addend[0];
+    return result;
 }
 
 } // namespace
@@ -171,10 +181,11 @@ ShaderAluSourceResult resolve_shader_alu_temporary_source(
     return resolve_shader_alu_source(instruction, source, temporary_registers, {});
 }
 
-ShaderVectorAluResult evaluate_shader_vector_alu(
-    const ShaderAluInstruction& instruction, const std::array<float, 4>& source_1,
-    const std::array<float, 4>& source_2,
-    const std::array<float, 4>& previous_destination) {
+ShaderVectorAluResult evaluate_shader_vector_alu(const ShaderAluInstruction& instruction,
+                                                 const std::array<float, 4>& source_1,
+                                                 const std::array<float, 4>& source_2,
+                                                 const std::array<float, 4>& previous_destination,
+                                                 const std::array<float, 4>& source_3) {
     if (instruction.predicated) {
         return {{}, "Predicated Xenos vector ALU execution is not implemented"};
     }
@@ -204,6 +215,8 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
         instruction.vector_opcode == 15U   ? dot_product_xenos(source_1, source_2, 4U)
         : instruction.vector_opcode == 16U ? dot_product_xenos(source_1, source_2, 3U)
                                            : 0.0F;
+    const float dot2add_result =
+        instruction.vector_opcode == 17U ? dot2add_xenos(source_1, source_2, source_3) : 0.0F;
     ShaderVectorAluResult result{previous_destination, {}};
     for (std::size_t lane = 0; lane < result.destination.size(); ++lane) {
         if ((instruction.vector_write_mask & (1U << lane)) == 0U) {
@@ -240,6 +253,9 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
         case 16U:
             result.destination[lane] = dot_result;
             break;
+        case 17U:
+            result.destination[lane] = dot2add_result;
+            break;
         default:
             return {{}, "Unsupported Xenos vector ALU opcode"};
         }
@@ -262,8 +278,17 @@ ShaderVectorAluResult evaluate_shader_vector_alu_from_temporaries(
     if (!source_2) {
         return {{}, source_2.error};
     }
+    std::array<float, 4> source_3{};
+    if (instruction.vector_opcode == 17U) {
+        const auto resolved_source_3 = resolve_shader_alu_source(
+            instruction, ShaderAluSource::source_3, temporary_registers, float_constants);
+        if (!resolved_source_3) {
+            return {{}, resolved_source_3.error};
+        }
+        source_3 = resolved_source_3.value;
+    }
     return evaluate_shader_vector_alu(instruction, source_1.value, source_2.value,
-                                      previous_destination);
+                                      previous_destination, source_3);
 }
 
 ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
@@ -304,7 +329,7 @@ ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     }
     const auto vector_result = evaluate_shader_vector_alu(
         instruction, source_1.value, source_2.value,
-        initial_registers[instruction.vector_destination]);
+        initial_registers[instruction.vector_destination], scalar_source.value);
     if (!vector_result) {
         return {{}, 0.0F, vector_result.error};
     }

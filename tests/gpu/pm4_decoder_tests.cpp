@@ -224,6 +224,17 @@ void test_shader_vector_alu_dot_products() {
     check(cancellation_dot3 &&
               cancellation_dot3.destination == std::array<float, 4>{0.0F, 0.0F, 0.0F, 0.0F},
           "Xenos DP3 rounds products before accumulation instead of fusing host multiply-adds");
+
+    ShaderAluTemporaryRegisterBank registers{};
+    ShaderAluFloatConstantBank constants{};
+    registers[1] = {2.0F, 3.0F, 50.0F, 100.0F};
+    registers[2] = {4.0F, 5.0F, 60.0F, 200.0F};
+    constants[7] = {6.0F, 1000.0F, -1000.0F, 50.0F};
+    const auto encoded_dp2add = decode_shader_alu_instruction({0x000f0004U, 0U, 0x71070201U});
+    const auto dp2add =
+        evaluate_shader_vector_alu_from_temporaries(encoded_dp2add, registers, previous, constants);
+    check(dp2add && dp2add.destination == std::array<float, 4>{29.0F, 29.0F, 29.0F, 29.0F},
+          "Xenos DP2ADD resolves src3 from an absolute float constant and uses only src3.x");
 }
 
 void test_shader_vector_alu_legacy_multiplication() {
@@ -400,6 +411,12 @@ void test_shader_alu_add_mul_pair_execution() {
     check(dotted && dotted.registers[4] == std::array<float, 4>{140.0F, 140.0F, 140.0F, 140.0F} &&
               dotted.previous_scalar == 13.0F,
           "Xenos ALU pair executes DP3 alongside scalar ADDS");
+
+    const auto dot2add_pair = encode_pair(17U, 0U, 4U, 5U, 0x0fU, 0x0fU);
+    const auto dot2added = execute_shader_alu_add_mul_pair(dot2add_pair, registers);
+    check(dot2added && dot2added.registers[4] == std::array<float, 4>{55.0F, 55.0F, 55.0F, 55.0F} &&
+              dot2added.previous_scalar == 13.0F,
+          "Xenos ALU pair executes DP2ADD with its src3.x addend alongside scalar ADDS");
 
     auto unordered_registers = registers;
     unordered_registers[2][1] = std::numeric_limits<float>::quiet_NaN();
