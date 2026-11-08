@@ -438,6 +438,11 @@ DecodeResult decode(std::uint32_t word) {
             ins.record = (word & 1U) != 0U;
             return {ins, {}};
         }
+        if (xo == 73U || xo == 9U) {
+            ins.opcode = xo == 73U ? Opcode::mulhd : Opcode::mulhdu;
+            ins.record = (word & 1U) != 0U;
+            return {ins, {}};
+        }
         if (xo == 491U || xo == 459U || xo == 489U || xo == 457U) {
             ins.opcode = xo == 491U ? Opcode::divw
                          : xo == 459U ? Opcode::divwu

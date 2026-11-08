@@ -1411,6 +1411,32 @@ void test_integer_high_word_multiply_instructions() {
           "mulhwu. returns the unsigned high word, handles RT=RA and records signed CR0");
 }
 
+void test_integer_high_doubleword_multiply_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(8);
+    put_word(mem, 0, add_xo(3, 1, 2, 73, false, true)); // mulhd. r3,r1,r2
+    put_word(mem, 4, add_xo(4, 4, 5, 9, false, true)); // mulhdu. r4,r4,r5
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0xfffffffffffffffeULL; // -2
+    state.gpr[2] = 3;
+    state.gpr[4] = 0xffffffffffffffffULL;
+    state.gpr[5] = 0xffffffffffffffffULL;
+    state.xer = 0x80000000U;
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.gpr[3] == 0xffffffffffffffffULL && (state.cr >> 28U) == 9U &&
+              state.xer == 0x80000000U,
+          "mulhd. produces the signed high half and preserves XER");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.gpr[4] == 0xfffffffffffffffeULL && (state.cr >> 28U) == 9U &&
+              state.xer == 0x80000000U,
+          "mulhdu. produces the unsigned high half with RT=RA and records CR0");
+}
+
 void test_sign_extension_instructions() {
     using namespace project360;
     memory::GuestMemory mem(128);
@@ -2123,6 +2149,7 @@ int main() {
     test_integer_divide_instructions();
     test_integer_multiply_instructions();
     test_integer_high_word_multiply_instructions();
+    test_integer_high_doubleword_multiply_instructions();
     test_sign_extension_instructions();
     test_immediate_logic_instructions();
     test_xor_and_immediate_logic_instructions();

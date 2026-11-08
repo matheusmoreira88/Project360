@@ -144,6 +144,30 @@ bool signed_multiply_overflow(std::int64_t left, std::int64_t right) {
     return right > 0 ? left < minimum / right : right < maximum / left;
 }
 
+std::uint64_t multiply_high_unsigned(std::uint64_t left, std::uint64_t right) {
+    constexpr std::uint64_t kLowWordMask = 0xffffffffULL;
+    const auto left_low = left & kLowWordMask;
+    const auto left_high = left >> 32U;
+    const auto right_low = right & kLowWordMask;
+    const auto right_high = right >> 32U;
+
+    const auto low_product = left_low * right_low;
+    const auto low_cross_product = left_low * right_high;
+    const auto high_cross_product = left_high * right_low;
+    const auto high_product = left_high * right_high;
+    const auto middle = (low_product >> 32U) + (low_cross_product & kLowWordMask) +
+                        (high_cross_product & kLowWordMask);
+    return high_product + (low_cross_product >> 32U) + (high_cross_product >> 32U) +
+           (middle >> 32U);
+}
+
+std::uint64_t multiply_high_signed(std::uint64_t left, std::uint64_t right) {
+    auto high = multiply_high_unsigned(left, right);
+    if ((left & 0x8000000000000000ULL) != 0U) high -= right;
+    if ((right & 0x8000000000000000ULL) != 0U) high -= left;
+    return high;
+}
+
 void set_cr_field(CpuState& state, std::uint8_t bf, std::uint32_t field) {
     const auto shift = static_cast<unsigned>(28U - 4U * bf);
     const auto mask = 0xfU << shift;
@@ -531,6 +555,15 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
             const auto signed_result = std::bit_cast<std::int32_t>(high_word);
             set_cr0(state, static_cast<std::uint64_t>(static_cast<std::int64_t>(signed_result)));
         }
+        break;
+    }
+    case Opcode::mulhd:
+    case Opcode::mulhdu: {
+        const auto result = ins.opcode == Opcode::mulhd
+                                ? multiply_high_signed(state.gpr[ins.ra], state.gpr[ins.rb])
+                                : multiply_high_unsigned(state.gpr[ins.ra], state.gpr[ins.rb]);
+        state.gpr[ins.rt] = result;
+        if (ins.record) set_cr0(state, result);
         break;
     }
     case Opcode::divw:
