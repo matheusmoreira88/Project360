@@ -164,6 +164,11 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
         state.pc = state.lr & ~std::uint64_t{3U};
         return KernelDispatchStatus::handled;
     }
+    if (import.ordinal == ke_query_performance_frequency_ordinal) {
+        state.gpr[3] = xbox_360_performance_frequency;
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
+    }
     if (import.ordinal == ke_tls_alloc_ordinal) {
         std::lock_guard lock(tls_mutex_);
         std::uint32_t slot = 0U;

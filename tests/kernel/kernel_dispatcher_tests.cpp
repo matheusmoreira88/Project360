@@ -1182,6 +1182,24 @@ int main() {
               state.pc == 0x8003f8U,
           "KeGetCurrentThread rejects a PCR pointer outside the 32-bit guest address space");
 
+    state.gpr[3] = 0xdeadbeefU;
+    state.lr = 0x4107U;
+    state.pc = 0x800410U;
+    const auto performance_frequency = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_query_performance_frequency_ordinal},
+        state, memory);
+    check(performance_frequency == KernelDispatchStatus::handled &&
+              state.gpr[3] == KernelDispatcher::xbox_360_performance_frequency &&
+              state.pc == 0x4104U,
+          "KeQueryPerformanceFrequency returns the Xbox 360 ticks-per-second value in r3 and returns through LR");
+    state.pc = 0x800418U;
+    const auto wrong_frequency_library = KernelDispatcher{}.dispatch(
+        {"xam.xex", KernelDispatcher::ke_query_performance_frequency_ordinal}, state,
+        memory);
+    check(wrong_frequency_library == KernelDispatchStatus::unsupported_library &&
+              state.pc == 0x800418U,
+          "KeQueryPerformanceFrequency is not dispatched from a different import library");
+
     constexpr std::uint32_t tls_slots_address = static_cast<std::uint32_t>(data_page + 0x400U);
     constexpr auto tls_storage = project360::kernel::KernelTlsStorage{tls_slots_address, 2U};
     const KernelDispatcher tls_dispatcher(tls_storage);
