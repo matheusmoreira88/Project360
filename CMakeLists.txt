@@ -74,7 +74,7 @@ if(PROJECT360_BUILD_VULKAN)
     configure_file(src/gpu/vulkan/shaders/offscreen_triangle.frag.spv
         "${CMAKE_CURRENT_BINARY_DIR}/shaders/offscreen_triangle.frag.spv" COPYONLY)
     target_include_directories(project360_vulkan PUBLIC src)
-    target_link_libraries(project360_vulkan PRIVATE volk)
+    target_link_libraries(project360_vulkan PUBLIC project360_core PRIVATE volk)
     target_compile_features(project360_vulkan PUBLIC cxx_std_20)
     target_compile_definitions(project360_vulkan PRIVATE
         PROJECT360_VULKAN_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders"

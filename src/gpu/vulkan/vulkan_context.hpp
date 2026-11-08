@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gpu/xenos/shader_alu.hpp"
+
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -76,6 +78,10 @@ class VulkanContext final {
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_test_triangle() const;
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_indexed_triangles(
         std::span<const VulkanTestVertex> vertices,
+        std::span<const std::uint32_t> indices) const;
+    [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_xenos_triangles(
+        std::span<const xenos::ShaderVertexOutputs> vertices,
+        std::uint8_t color_interpolator,
         std::span<const std::uint32_t> indices) const;
 
   private:

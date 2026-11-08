@@ -59,30 +59,43 @@ int main() {
         {{0.0F, 1.6F, 0.0F, 2.0F}},
     }};
     constexpr std::array<float, 4> green{0.0F, 1.0F, 0.0F, 1.0F};
-    std::array<project360::gpu::vulkan::VulkanTestVertex, 3> xenos_vertices{};
+    std::array<ShaderVertexOutputs, 3> xenos_vertices{};
     for (std::size_t vertex_index = 0U; vertex_index < xenos_vertices.size(); ++vertex_index) {
         ShaderAluTemporaryRegisterBank registers{};
         registers[1] = clip_positions[vertex_index];
         registers[3] = green;
         const auto shader = execute_shader_exec_block(
             vertex_exec, vertex_ucode, {}, shader_memory, registers, {});
-        if (!shader || shader.vertex_outputs.position_write_mask != 0x0fU ||
-            shader.vertex_outputs.interpolator_write_masks[0] != 0x0fU) {
-            std::cerr << "FAIL: Xenos vertex EXEC did not produce complete position/color outputs"
-                      << (shader ? "" : ": " + shader.error) << '\n';
+        if (!shader) {
+            std::cerr << "FAIL: Xenos vertex EXEC did not complete: " << shader.error << '\n';
             return 1;
         }
-        xenos_vertices[vertex_index] = {shader.vertex_outputs.position,
-                                        shader.vertex_outputs.interpolators[0]};
+        xenos_vertices[vertex_index] = shader.vertex_outputs;
     }
     const auto xenos_triangle =
-        result.context->render_offscreen_indexed_triangles(xenos_vertices, indices);
+        result.context->render_offscreen_xenos_triangles(xenos_vertices, 0U, indices);
     if (!xenos_triangle ||
         xenos_triangle.center_rgba != std::array<std::uint8_t, 4>{0U, 255U, 0U, 255U} ||
         xenos_triangle.corner_rgba != std::array<std::uint8_t, 4>{255U, 0U, 255U, 255U} ||
         xenos_triangle.green_pixel_count != triangle.green_pixel_count) {
         std::cerr << "FAIL: CPU Xenos exports did not survive Vulkan vertex upload and rasterization"
                   << (xenos_triangle ? "" : ": " + xenos_triangle.error) << '\n';
+        return 1;
+    }
+    auto incomplete_xenos_vertex = xenos_vertices;
+    incomplete_xenos_vertex[0].position_write_mask = 0x07U;
+    const auto incomplete_xenos_draw =
+        result.context->render_offscreen_xenos_triangles(incomplete_xenos_vertex, 0U, indices);
+    if (incomplete_xenos_draw ||
+        incomplete_xenos_draw.error.find("missing position") == std::string::npos) {
+        std::cerr << "FAIL: Xenos draw adapter accepted an incomplete vertex export\n";
+        return 1;
+    }
+    const auto invalid_color_export =
+        result.context->render_offscreen_xenos_triangles(xenos_vertices, 16U, indices);
+    if (invalid_color_export || invalid_color_export.error.find("interpolator 0..15") ==
+                                    std::string::npos) {
+        std::cerr << "FAIL: Xenos draw adapter accepted an out-of-range color interpolator\n";
         return 1;
     }
 

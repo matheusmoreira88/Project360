@@ -1072,4 +1072,39 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
     return readback;
 }
 
+VulkanTriangleReadbackResult VulkanContext::render_offscreen_xenos_triangles(
+    std::span<const xenos::ShaderVertexOutputs> vertices,
+    std::uint8_t color_interpolator,
+    std::span<const std::uint32_t> indices) const {
+    constexpr std::size_t maximum_vertices = 65'536U;
+    constexpr std::size_t maximum_indices = 196'608U;
+    if (color_interpolator >= 16U) {
+        return {{}, {}, 0U, "Xenos color export must select interpolator 0..15"};
+    }
+    if (vertices.empty() || indices.empty() || indices.size() % 3U != 0U) {
+        return {{}, {}, 0U, "Xenos triangle draw requires vertices and complete triangles"};
+    }
+    if (vertices.size() > maximum_vertices || indices.size() > maximum_indices) {
+        return {{}, {}, 0U, "Xenos triangle draw exceeds the diagnostic buffer budget"};
+    }
+    for (const auto index : indices) {
+        if (index >= vertices.size()) {
+            return {{}, {}, 0U, "Xenos triangle references a missing vertex"};
+        }
+    }
+
+    std::vector<VulkanTestVertex> backend_vertices;
+    backend_vertices.reserve(vertices.size());
+    for (const auto& vertex : vertices) {
+        if (vertex.position_write_mask != 0x0fU ||
+            vertex.interpolator_write_masks[color_interpolator] != 0x0fU) {
+            return {{}, {}, 0U,
+                    "Xenos triangle vertex is missing position or selected color components"};
+        }
+        backend_vertices.push_back(
+            {vertex.position, vertex.interpolators[color_interpolator]});
+    }
+    return render_offscreen_indexed_triangles(backend_vertices, indices);
+}
+
 } // namespace project360::gpu::vulkan
