@@ -16,6 +16,7 @@ constexpr std::uint32_t kXerSummaryOverflow = 0x80000000U;
 constexpr std::uint32_t kXerOverflow = 0x40000000U;
 constexpr std::uint32_t kXerCarry = 0x20000000U;
 constexpr std::uint64_t kProgramExceptionVector = 0x700U;
+constexpr std::uint64_t kXenonDataCacheBlockSize = 128U;
 
 constexpr std::uint64_t powerpc_bit(unsigned bit) {
     return std::uint64_t{1} << (63U - bit);
@@ -281,6 +282,17 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         // GuestMemory is coherent and has no CPU or translated-code cache.
         // Cache maintenance and prefetch hints therefore have no state to change.
         break;
+    case Opcode::data_cache_block_set_to_zero: {
+        const auto effective_address = base + state.gpr[ins.rb];
+        const auto block_address = effective_address & ~(kXenonDataCacheBlockSize - 1U);
+        if (!memory.fill(block_address, static_cast<std::size_t>(kXenonDataCacheBlockSize),
+                         std::byte{0})) {
+            return fault(FaultKind::data_access, old_pc,
+                         "dcbz target cache block is not writable guest memory", word,
+                         block_address);
+        }
+        break;
+    }
     case Opcode::floating_move_register:
     case Opcode::floating_negate:
     case Opcode::floating_absolute:

@@ -2074,6 +2074,74 @@ void test_cache_control_instructions() {
           "cache-control operations leave guest data and status registers unchanged");
 }
 
+void test_dcbz_instruction() {
+    using namespace project360;
+    const auto decoded = cpu::decode(cache_control_form(1014U, 1U, 2U));
+    check(decoded && decoded.instruction.opcode == cpu::Opcode::data_cache_block_set_to_zero &&
+              !cpu::decode(cache_control_form(1014U, 1U, 2U, 1U)) &&
+              !cpu::decode(cache_control_form(1014U, 1U, 2U, 0U, true)),
+          "dcbz decodes and rejects its reserved fields");
+
+    memory::GuestMemory mem(static_cast<std::size_t>(memory::GuestMemory::page_size));
+    check(mem.fill(0x80U, 0x180U, std::byte{0xa5}), "seed dcbz cache-line neighborhood");
+    put_word(mem, 0U, cache_control_form(1014U, 1U, 2U));
+    cpu::CpuState state{};
+    state.gpr[1] = 0x100U;
+    state.gpr[2] = 0x23U;
+    const auto result = cpu::Interpreter{}.step(state, mem);
+    bool block_cleared = true;
+    for (std::uint64_t address = 0x100U; address < 0x180U; ++address) {
+        std::uint8_t value = 0xffU;
+        block_cleared = block_cleared && mem.read_u8(address, value) && value == 0U;
+    }
+    std::uint8_t before = 0U;
+    std::uint8_t after = 0U;
+    check(result.status == cpu::StepStatus::executed && state.pc == 4U && block_cleared &&
+              mem.read_u8(0xffU, before) && before == 0xa5U &&
+              mem.read_u8(0x180U, after) && after == 0xa5U,
+          "dcbz clears the aligned 128-byte Xenon block and preserves adjacent bytes");
+
+    memory::GuestMemory reservation_mem(
+        static_cast<std::size_t>(memory::GuestMemory::page_size));
+    check(reservation_mem.fill(0x100U, 0x80U, std::byte{0x5a}),
+          "seed reserved word and dcbz block");
+    put_word(reservation_mem, 0U, indexed_memory(3U, 0U, 2U, 20U)); // lwarx r3,0,r2
+    put_word(reservation_mem, 4U, cache_control_form(1014U, 0U, 1U)); // dcbz 0,r1
+    put_word(reservation_mem, 8U, indexed_memory(4U, 0U, 2U, 150U, true)); // stwcx. r4,0,r2
+    cpu::CpuState reservation_state{};
+    reservation_state.gpr[1] = 0x124U;
+    reservation_state.gpr[2] = 0x124U;
+    reservation_state.gpr[4] = 0xdeadbeefU;
+    const auto reserve_result = cpu::Interpreter{}.step(reservation_state, reservation_mem);
+    reservation_state.pc = 4U;
+    const auto zero_result = cpu::Interpreter{}.step(reservation_state, reservation_mem);
+    reservation_state.pc = 8U;
+    const auto conditional_result = cpu::Interpreter{}.step(reservation_state, reservation_mem);
+    std::uint32_t reserved_word = 1U;
+    check(reserve_result.status == cpu::StepStatus::executed &&
+              zero_result.status == cpu::StepStatus::executed &&
+              conditional_result.status == cpu::StepStatus::executed &&
+              reservation_mem.read_u32_be(0x124U, reserved_word) && reserved_word == 0U &&
+              !reservation_state.reservation_valid &&
+              ((reservation_state.cr >> 28U) & 0x2U) == 0U,
+          "dcbz clears the block and invalidates a reservation through GuestMemory writes");
+
+    memory::GuestMemory short_mem(0x110U);
+    check(short_mem.fill(0x100U, 0x10U, std::byte{0x6b}),
+          "seed incomplete dcbz block");
+    put_word(short_mem, 0U, cache_control_form(1014U, 0U, 1U));
+    cpu::CpuState short_state{};
+    short_state.gpr[1] = 0x120U;
+    const auto short_result = cpu::Interpreter{}.step(short_state, short_mem);
+    std::uint8_t first = 0U;
+    std::uint8_t last = 0U;
+    check(short_result.status == cpu::StepStatus::fault && short_result.fault_info &&
+              short_result.fault_info->kind == cpu::FaultKind::data_access &&
+              short_state.pc == 0U && short_mem.read_u8(0x100U, first) && first == 0x6bU &&
+              short_mem.read_u8(0x10fU, last) && last == 0x6bU,
+          "dcbz faults without partially clearing an incomplete guest cache block");
+}
+
 void test_cpu_fetch_from_mapped_executable_page() {
     using namespace project360;
     memory::GuestMemory mem(2U * static_cast<std::size_t>(memory::GuestMemory::page_size));
@@ -2673,6 +2741,7 @@ int main() {
     test_system_call_exception_and_return();
     test_storage_barrier_instructions();
     test_cache_control_instructions();
+    test_dcbz_instruction();
     test_cpu_fetch_from_mapped_executable_page();
     test_compare_immediates();
     test_compare_registers();

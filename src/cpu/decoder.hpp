@@ -109,6 +109,7 @@ enum class Opcode {
     data_cache_block_flush,
     data_cache_block_touch,
     data_cache_block_touch_store,
+    data_cache_block_set_to_zero,
     instruction_cache_block_invalidate,
     std,
     stw,

@@ -358,6 +358,13 @@ DecodeResult decode(std::uint32_t word) {
                                       : Opcode::data_cache_block_touch;
             return {ins, {}};
         }
+        if (xo10 == 1014U) {
+            if (ins.rt != 0U || (word & 1U) != 0U) {
+                return {{}, "dcbz reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::data_cache_block_set_to_zero;
+            return {ins, {}};
+        }
         if (xo10 == 21U || xo10 == 53U || xo10 == 149U || xo10 == 181U ||
             xo10 == 23U || xo10 == 55U || xo10 == 87U || xo10 == 119U ||
             xo10 == 279U || xo10 == 331U || xo10 == 343U || xo10 == 375U ||
