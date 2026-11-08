@@ -230,6 +230,38 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr0(state, value);
         break;
     }
+    case Opcode::shift_left_doubleword:
+    case Opcode::shift_right_doubleword: {
+        const auto source = state.gpr[ins.rt];
+        const auto amount = static_cast<unsigned>(state.gpr[ins.rb] & 0x7fU);
+        std::uint64_t value = 0;
+        if (amount < 64U) {
+            value = ins.opcode == Opcode::shift_left_doubleword ? source << amount : source >> amount;
+        }
+        state.gpr[ins.ra] = value;
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
+    case Opcode::shift_right_algebraic_doubleword: {
+        const auto source = state.gpr[ins.rt];
+        const auto amount = static_cast<unsigned>(state.gpr[ins.rb] & 0x7fU);
+        const bool negative = (source & 0x8000000000000000ULL) != 0U;
+        std::uint64_t value = source;
+        bool carry = false;
+        if (amount >= 64U) {
+            value = negative ? std::numeric_limits<std::uint64_t>::max() : 0U;
+            carry = negative;
+        } else if (amount != 0U) {
+            value = source >> amount;
+            if (negative) value |= std::numeric_limits<std::uint64_t>::max() << (64U - amount);
+            const auto discarded_mask = (std::uint64_t{1} << amount) - 1U;
+            carry = negative && (source & discarded_mask) != 0U;
+        }
+        state.gpr[ins.ra] = value;
+        set_xer_carry(state, carry);
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
     case Opcode::add:
     case Opcode::addc:
     case Opcode::adde: {

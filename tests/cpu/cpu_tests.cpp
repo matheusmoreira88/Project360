@@ -311,6 +311,68 @@ void test_logical_shift_and_rotate_instructions() {
           "sraw handles shift amounts of 32 or more without undefined shifts");
 }
 
+void test_doubleword_shift_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(64);
+    put_word(mem, 0, logical_x(3, 1, 2, 27, true)); // sld. r3,r1,r2
+    put_word(mem, 4, logical_x(4, 5, 6, 539, true)); // srd. r4,r5,r6
+    put_word(mem, 8, logical_x(7, 1, 8, 27)); // sld r7,r1,r8
+    put_word(mem, 12, logical_x(10, 5, 9, 539)); // srd r10,r5,r9
+    put_word(mem, 16, logical_x(13, 11, 12, 794, true)); // srad. r13,r11,r12
+    put_word(mem, 20, logical_x(16, 14, 15, 794)); // srad r16,r14,r15
+    put_word(mem, 24, logical_x(19, 17, 18, 794)); // srad r19,r17,r18
+    put_word(mem, 28, logical_x(22, 20, 21, 794)); // srad r22,r20,r21
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0x4000000000000001ULL;
+    state.gpr[2] = 1;
+    state.gpr[5] = 0x8000000000000001ULL;
+    state.gpr[6] = 1;
+    state.gpr[8] = 64;
+    state.gpr[9] = 127;
+    state.gpr[11] = 0xfffffffffffffffdULL; // -3
+    state.gpr[12] = 1;
+    state.gpr[14] = 0xfffffffffffffffdULL; // -3
+    state.gpr[15] = 64;
+    state.gpr[17] = 1;
+    state.gpr[18] = 127;
+    state.gpr[20] = 0xffffffffffffffffULL; // -1
+    state.gpr[21] = 0;
+    state.xer = 0xe0000000U; // SO, OV, CA
+
+    const cpu::Interpreter interpreter{};
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 0x8000000000000002ULL &&
+              (state.cr >> 28U) == 9U && state.xer == 0xe0000000U,
+          "sld shifts 64-bit values, records CR0 and leaves XER unchanged");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[4] == 0x4000000000000000ULL &&
+              (state.cr >> 28U) == 5U && state.xer == 0xe0000000U,
+          "srd uses RB low seven bits, records CR0 and leaves XER unchanged");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[7] == 0,
+          "sld returns zero for shift amounts 64 through 127");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[10] == 0,
+          "srd returns zero for shift amounts 64 through 127");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[13] == 0xfffffffffffffffeULL &&
+              (state.xer & 0x20000000U) != 0U && (state.cr >> 28U) == 9U,
+          "srad sign-fills, sets CA for discarded one bits and records CR0");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[16] == 0xffffffffffffffffULL &&
+              (state.xer & 0x20000000U) != 0U,
+          "srad shifts by 64 or more to the sign fill and sets CA from the sign");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[19] == 0 &&
+              (state.xer & 0x20000000U) == 0U,
+          "srad clears CA when a positive source shifts without discarded negative bits");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[22] == 0xffffffffffffffffULL &&
+              (state.xer & 0x20000000U) == 0U && state.pc == 32,
+          "zero-count srad copies its source and clears CA");
+}
+
 void test_memory_and_endianness() {
     using namespace project360;
     memory::GuestMemory mem(512);
@@ -1102,6 +1164,7 @@ int main() {
     test_carry_and_overflow_arithmetic();
     test_carry_immediate_and_subtract_arithmetic();
     test_logical_shift_and_rotate_instructions();
+    test_doubleword_shift_instructions();
     test_memory_and_endianness();
     test_byte_and_halfword_memory_instructions();
     test_load_store_update_instructions();

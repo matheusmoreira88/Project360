@@ -228,6 +228,13 @@ DecodeResult decode(std::uint32_t word) {
             ins.record = (word & 1U) != 0U;
             return {ins, {}};
         }
+        if (xo10 == 27U || xo10 == 539U || xo10 == 794U) {
+            ins.opcode = xo10 == 27U ? Opcode::shift_left_doubleword
+                         : xo10 == 539U ? Opcode::shift_right_doubleword
+                                        : Opcode::shift_right_algebraic_doubleword;
+            ins.record = (word & 1U) != 0U;
+            return {ins, {}};
+        }
         if (xo == 0U || xo == 32U) {
             if ((word & (1U << 22U)) != 0U) return {{}, "compare register reserved bit is set"};
             if ((word & 1U) != 0U) return {{}, "compare register record bit is reserved"};
