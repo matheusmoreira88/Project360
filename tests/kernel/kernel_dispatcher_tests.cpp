@@ -41,6 +41,33 @@ int main() {
 
     CpuState state{};
     state.gpr[3] = data_page;
+    state.gpr[4] = initial.size() * 2U;
+    state.gpr[5] = 0xaabbccddU;
+    state.lr = 0x1037U;
+    state.pc = 0x800070U;
+    const auto matching_words = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ulong_ordinal}, state, memory);
+    check(matching_words == KernelDispatchStatus::handled && state.gpr[3] == 8U &&
+              state.pc == 0x1034U,
+          "xboxkrnl ordinal 269 returns the byte count for repeated matching ULONGs");
+    state.gpr[3] = data_page + 1U;
+    state.gpr[4] = 8U;
+    state.gpr[5] = 0xaabbccddU;
+    const auto unaligned_words = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ulong_ordinal}, state, memory);
+    check(unaligned_words == KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              state.pc == 0x1034U,
+          "RtlCompareMemoryUlong returns zero for an unaligned source");
+    state.gpr[3] = data_page;
+    state.gpr[4] = 6U;
+    state.gpr[5] = 0xaabbccddU;
+    const auto partial_word_length = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ulong_ordinal}, state, memory);
+    check(partial_word_length == KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              state.pc == 0x1034U,
+          "RtlCompareMemoryUlong returns zero for a length not divisible by four");
+
+    state.gpr[3] = data_page;
     state.gpr[4] = data_page + initial.size();
     state.gpr[5] = initial.size();
     state.lr = 0x1027U;
@@ -60,6 +87,14 @@ int main() {
         {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ordinal}, state, memory);
     check(differing == KernelDispatchStatus::handled && state.gpr[3] == 2U,
           "RtlCompareMemory returns the matching prefix length up to the first difference");
+
+    state.gpr[3] = data_page;
+    state.gpr[4] = 8U;
+    state.gpr[5] = 0xaabbccddU;
+    const auto differing_word = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_compare_memory_ulong_ordinal}, state, memory);
+    check(differing_word == KernelDispatchStatus::handled && state.gpr[3] == 4U,
+          "RtlCompareMemoryUlong stops at the first mismatching word");
 
     state.gpr[3] = data_page;
     state.gpr[4] = 0x300000U;

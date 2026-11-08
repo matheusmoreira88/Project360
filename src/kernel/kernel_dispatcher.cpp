@@ -58,6 +58,31 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
         state.pc = state.lr & ~std::uint64_t{3};
         return KernelDispatchStatus::handled;
     }
+    if (import.ordinal == rtl_compare_memory_ulong_ordinal) {
+        const auto source = state.gpr[3];
+        const auto length = state.gpr[4];
+        const auto pattern = static_cast<std::uint32_t>(state.gpr[5]);
+        constexpr auto guest_address_limit = std::uint64_t{0xffff'ffffU};
+        if (source > guest_address_limit || length > guest_address_limit ||
+            (length != 0U && length - 1U > guest_address_limit - source)) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+
+        std::uint64_t matching_bytes = 0U;
+        if ((source & 3U) == 0U && (length & 3U) == 0U) {
+            for (; matching_bytes < length; matching_bytes += 4U) {
+                std::uint32_t value = 0U;
+                if (!memory.read_u32_be(source + matching_bytes, value)) {
+                    return KernelDispatchStatus::guest_memory_fault;
+                }
+                if (value != pattern) break;
+            }
+        }
+
+        state.gpr[3] = matching_bytes;
+        state.pc = state.lr & ~std::uint64_t{3};
+        return KernelDispatchStatus::handled;
+    }
     if (import.ordinal != rtl_fill_memory_ordinal &&
         import.ordinal != rtl_fill_memory_ulong_ordinal &&
         import.ordinal != rtl_zero_memory_ordinal) {
