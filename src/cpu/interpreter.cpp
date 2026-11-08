@@ -273,6 +273,14 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         // across this instruction; Xenon-specific weak ordering is not modeled.
         std::atomic_thread_fence(std::memory_order_seq_cst);
         break;
+    case Opcode::data_cache_block_store:
+    case Opcode::data_cache_block_flush:
+    case Opcode::data_cache_block_touch:
+    case Opcode::data_cache_block_touch_store:
+    case Opcode::instruction_cache_block_invalidate:
+        // GuestMemory is coherent and has no CPU or translated-code cache.
+        // Cache maintenance and prefetch hints therefore have no state to change.
+        break;
     case Opcode::floating_move_register:
     case Opcode::floating_negate:
     case Opcode::floating_absolute:

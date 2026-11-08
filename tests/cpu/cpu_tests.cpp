@@ -63,6 +63,15 @@ std::uint32_t isync_form(std::uint8_t reserved_rt = 0U, std::uint8_t reserved_ra
            (record ? 1U : 0U);
 }
 
+std::uint32_t cache_control_form(std::uint16_t xo, std::uint8_t ra = 0U,
+                                 std::uint8_t rb = 0U, std::uint8_t hint = 0U,
+                                 bool record = false) {
+    return (31U << 26U) | (static_cast<std::uint32_t>(hint) << 21U) |
+           (static_cast<std::uint32_t>(ra) << 16U) |
+           (static_cast<std::uint32_t>(rb) << 11U) | (static_cast<std::uint32_t>(xo) << 1U) |
+           (record ? 1U : 0U);
+}
+
 std::uint32_t fpr_unary(std::uint8_t fd, std::uint8_t fb, std::uint16_t xo,
                         bool record = false, std::uint8_t reserved_fra = 0) {
     return (63U << 26U) | (static_cast<std::uint32_t>(fd) << 21U) |
@@ -2020,6 +2029,51 @@ void test_storage_barrier_instructions() {
           "isync is followed by a fresh fetch of the code written to guest memory");
 }
 
+void test_cache_control_instructions() {
+    using namespace project360;
+    const std::array<std::pair<std::uint16_t, cpu::Opcode>, 5> supported{{
+        {54U, cpu::Opcode::data_cache_block_store},
+        {86U, cpu::Opcode::data_cache_block_flush},
+        {246U, cpu::Opcode::data_cache_block_touch_store},
+        {278U, cpu::Opcode::data_cache_block_touch},
+        {982U, cpu::Opcode::instruction_cache_block_invalidate},
+    }};
+    for (const auto& [xo, expected] : supported) {
+        const auto decoded = cpu::decode(cache_control_form(xo, 1U, 2U));
+        check(decoded && decoded.instruction.opcode == expected,
+              "cache-control instruction decodes to its supported operation");
+    }
+    check(cpu::decode(cache_control_form(246U, 1U, 2U, 10U)) &&
+              cpu::decode(cache_control_form(278U, 1U, 2U, 8U)) &&
+              !cpu::decode(cache_control_form(278U, 1U, 2U, 2U)) &&
+              !cpu::decode(cache_control_form(54U, 1U, 2U, 1U)) &&
+              !cpu::decode(cache_control_form(86U, 1U, 2U, 0U, true)) &&
+              !cpu::decode(cache_control_form(982U, 1U, 2U, 1U)),
+          "cache hints accept documented values and maintenance forms reject reserved fields");
+
+    memory::GuestMemory mem(32U);
+    for (std::size_t index = 0U; index < supported.size(); ++index) {
+        put_word(mem, index * 4U, cache_control_form(supported[index].first, 1U, 2U));
+    }
+    put_word(mem, 20U, d_form(14U, 3U, 0U, 9U));
+    cpu::CpuState state{};
+    state.gpr[1] = 8U;
+    state.gpr[2] = 12U;
+    const auto original_gpr = state.gpr;
+    const auto original_cr = state.cr;
+    const auto original_xer = state.xer;
+    cpu::Interpreter interpreter{};
+    for (std::uint32_t step = 0U; step < 6U; ++step) {
+        const auto result = interpreter.step(state, mem);
+        check(result.status == cpu::StepStatus::executed,
+              "cache-control instruction executes in the cacheless interpreter model");
+    }
+    check(state.pc == 24U && state.gpr[3] == 9U && state.cr == original_cr &&
+              state.xer == original_xer && state.gpr[1] == original_gpr[1] &&
+              state.gpr[2] == original_gpr[2],
+          "cache-control operations leave guest data and status registers unchanged");
+}
+
 void test_cpu_fetch_from_mapped_executable_page() {
     using namespace project360;
     memory::GuestMemory mem(2U * static_cast<std::size_t>(memory::GuestMemory::page_size));
@@ -2618,6 +2672,7 @@ int main() {
     test_program_exception_and_rfid_return();
     test_system_call_exception_and_return();
     test_storage_barrier_instructions();
+    test_cache_control_instructions();
     test_cpu_fetch_from_mapped_executable_page();
     test_compare_immediates();
     test_compare_registers();

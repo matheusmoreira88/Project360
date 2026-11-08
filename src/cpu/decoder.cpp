@@ -335,6 +335,29 @@ DecodeResult decode(std::uint32_t word) {
             ins.record = true;
             return {ins, {}};
         }
+        if (xo10 == 54U || xo10 == 86U || xo10 == 982U) {
+            if (ins.rt != 0U || (word & 1U) != 0U) {
+                return {{}, "cache-maintenance instruction has reserved fields set"};
+            }
+            ins.opcode = xo10 == 54U ? Opcode::data_cache_block_store
+                         : xo10 == 86U ? Opcode::data_cache_block_flush
+                                       : Opcode::instruction_cache_block_invalidate;
+            return {ins, {}};
+        }
+        if (xo10 == 246U || xo10 == 278U) {
+            if ((word & 1U) != 0U) {
+                return {{}, "cache-touch instruction record bit is reserved"};
+            }
+            const auto touch_hint = ins.rt;
+            if (touch_hint != 0U && touch_hint != 1U && touch_hint != 3U &&
+                touch_hint != 8U && touch_hint != 10U) {
+                return {{}, "unsupported data-cache touch hint " +
+                                 std::to_string(touch_hint)};
+            }
+            ins.opcode = xo10 == 246U ? Opcode::data_cache_block_touch_store
+                                      : Opcode::data_cache_block_touch;
+            return {ins, {}};
+        }
         if (xo10 == 21U || xo10 == 53U || xo10 == 149U || xo10 == 181U ||
             xo10 == 23U || xo10 == 55U || xo10 == 87U || xo10 == 119U ||
             xo10 == 279U || xo10 == 331U || xo10 == 343U || xo10 == 375U ||
