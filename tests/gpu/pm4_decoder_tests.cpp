@@ -2,6 +2,7 @@
 #include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/pm4_registers.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <vector>
@@ -282,6 +283,24 @@ void test_draw_packet_metadata_decoding() {
         check(!automatic.has_viz_query_condition && automatic.source == DrawSource::auto_index &&
                   automatic.primitive_type == 2U && automatic.index_count == 2U,
               "DRAW_INDX_2 decodes auto-index metadata without a query prefix");
+
+        std::vector<std::uint32_t> registers(0x2200U, 0U);
+        const auto applied = apply_draw_command_state(draws.commands, registers);
+        check(static_cast<bool>(applied) && registers[0x21fcU] == automatic.initiator &&
+                  registers[0x21faU] == 0x00123456U && registers[0x21fbU] == 3U,
+              "draw state updates initiator and DMA registers while preserving DMA state for auto-index");
+
+        std::vector<std::uint32_t> too_small(0x21fcU, 0xccccccccU);
+        const auto rejected = apply_draw_command_state(draws.commands, too_small);
+        check(!rejected && too_small.back() == 0xccccccccU,
+              "out-of-range draw state rejects the command list without partial writes");
+
+        auto forged = draws.commands;
+        forged[1].index_count++;
+        std::fill(registers.begin(), registers.end(), 0xccccccccU);
+        const auto inconsistent = apply_draw_command_state(forged, registers);
+        check(!inconsistent && registers[0x21fcU] == 0xccccccccU,
+              "inconsistent decoded draw metadata fails before changing register state");
     }
 
     std::vector<std::uint8_t> truncated;
