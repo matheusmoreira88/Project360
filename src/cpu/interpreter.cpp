@@ -17,6 +17,19 @@ constexpr std::uint32_t kXerSummaryOverflow = 0x80000000U;
 constexpr std::uint32_t kXerOverflow = 0x40000000U;
 constexpr std::uint32_t kXerCarry = 0x20000000U;
 constexpr std::uint32_t kXerByteCountMask = 0x7fU;
+constexpr std::uint32_t kFpscrFx = 0x80000000U;
+constexpr std::uint32_t kFpscrFex = 0x40000000U;
+constexpr std::uint32_t kFpscrVx = 0x20000000U;
+constexpr std::uint32_t kFpscrOe = 0x00000040U;
+constexpr std::uint32_t kFpscrUe = 0x00000020U;
+constexpr std::uint32_t kFpscrZe = 0x00000010U;
+constexpr std::uint32_t kFpscrXe = 0x00000008U;
+constexpr std::uint32_t kFpscrVe = 0x00000080U;
+constexpr std::uint32_t kFpscrOx = 0x10000000U;
+constexpr std::uint32_t kFpscrUx = 0x08000000U;
+constexpr std::uint32_t kFpscrZx = 0x04000000U;
+constexpr std::uint32_t kFpscrXx = 0x02000000U;
+constexpr std::uint32_t kFpscrInvalidFlags = 0x01f80700U;
 constexpr std::uint64_t kProgramExceptionVector = 0x700U;
 constexpr std::uint64_t kXenonDataCacheBlockSize = 128U;
 
@@ -72,6 +85,7 @@ bool is_floating_point_instruction(Opcode opcode) {
     switch (opcode) {
     case Opcode::floating_move_register:
     case Opcode::floating_move_from_fpscr:
+    case Opcode::floating_move_condition_register_from_fpscr:
     case Opcode::floating_negate:
     case Opcode::floating_absolute:
     case Opcode::floating_negative_absolute:
@@ -85,6 +99,20 @@ bool is_floating_point_instruction(Opcode opcode) {
     case Opcode::stfiwx: return true;
     default: return false;
     }
+}
+
+void update_fpscr_exception_summaries(CpuState& state) {
+    auto fpscr = state.fpscr & ~(kFpscrFex | kFpscrVx);
+    if ((fpscr & kFpscrInvalidFlags) != 0U) fpscr |= kFpscrVx;
+
+    const bool enabled_exception =
+        ((fpscr & kFpscrOx) != 0U && (fpscr & kFpscrOe) != 0U) ||
+        ((fpscr & kFpscrUx) != 0U && (fpscr & kFpscrUe) != 0U) ||
+        ((fpscr & kFpscrZx) != 0U && (fpscr & kFpscrZe) != 0U) ||
+        ((fpscr & kFpscrXx) != 0U && (fpscr & kFpscrXe) != 0U) ||
+        ((fpscr & kFpscrInvalidFlags) != 0U && (fpscr & kFpscrVe) != 0U);
+    if (enabled_exception) fpscr |= kFpscrFex;
+    state.fpscr = fpscr;
 }
 
 StepResult take_program_exception(CpuState& state, FaultKind cause, unsigned syndrome_bit,
@@ -980,6 +1008,26 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto source_shift = static_cast<unsigned>(28U - 4U * ins.bfa);
         const auto source_field = (state.cr >> source_shift) & 0xfU;
         set_cr_field(state, ins.bf, source_field);
+        break;
+    }
+    case Opcode::floating_move_condition_register_from_fpscr: {
+        const auto source_shift = static_cast<unsigned>(28U - 4U * ins.bfa);
+        const auto source_field = (state.fpscr >> source_shift) & 0xfU;
+        set_cr_field(state, ins.bf, source_field);
+
+        // The ISA only clears sticky exception bits in the selected field.
+        // FEX and VX are derived summaries and are recalculated below.
+        std::uint32_t clear_mask = 0U;
+        switch (ins.bfa) {
+        case 0U: clear_mask = kFpscrFx | kFpscrOx; break;
+        case 1U: clear_mask = 0x0f000000U; break;
+        case 2U: clear_mask = 0x00f00000U; break;
+        case 3U: clear_mask = 0x00080000U; break;
+        case 5U: clear_mask = 0x00000700U; break;
+        default: break;
+        }
+        state.fpscr &= ~clear_mask;
+        update_fpscr_exception_summaries(state);
         break;
     }
     case Opcode::condition_register_logical: {

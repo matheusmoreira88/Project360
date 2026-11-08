@@ -173,6 +173,12 @@ std::uint32_t mcrf_form(std::uint8_t bf, std::uint8_t bfa, std::uint32_t reserve
            (static_cast<std::uint32_t>(bfa) << 18U) | reserved;
 }
 
+std::uint32_t mcrfs_form(std::uint8_t bf, std::uint8_t bfa,
+                         std::uint32_t reserved = 0) {
+    return (63U << 26U) | (static_cast<std::uint32_t>(bf) << 23U) |
+           (static_cast<std::uint32_t>(bfa) << 18U) | (64U << 1U) | reserved;
+}
+
 std::uint32_t cr_logical_form(std::uint8_t bt, std::uint8_t ba, std::uint8_t bb,
                               std::uint16_t xo, bool record = false) {
     return (19U << 26U) | (static_cast<std::uint32_t>(bt) << 21U) |
@@ -2898,6 +2904,69 @@ void test_move_condition_register_field() {
           "mcrf reserved fields and record bit are rejected");
 }
 
+void test_move_condition_register_from_fpscr() {
+    using namespace project360;
+    memory::GuestMemory mem(20);
+    put_word(mem, 0, mcrfs_form(2, 0));
+    put_word(mem, 4, mcrfs_form(5, 1));
+    put_word(mem, 8, mcrfs_form(6, 2));
+    put_word(mem, 12, mcrfs_form(7, 3));
+    put_word(mem, 16, mcrfs_form(0, 5));
+
+    cpu::CpuState state{};
+    state.cr = 0x12345678U;
+    state.msr = 1ULL << 50U; // MSR[FP]
+    // FX/FEX/VX/OX, UX/ZX/XX/VXSNAN, VXVC, and the three field-5
+    // invalid-operation flags are all set. Enables keep FEX derived.
+    state.fpscr = 0xf9c80700U | 0x000000f8U;
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              ((state.cr >> 20U) & 0xfU) == 0xfU &&
+              (state.fpscr & 0x90000000U) == 0U &&
+              (state.fpscr & 0x60000000U) == 0x60000000U,
+          "mcrfs field 0 copies its nibble, clears FX/OX, and retains derived summaries");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              ((state.cr >> 8U) & 0xfU) == 0x9U &&
+              (state.fpscr & 0x0f000000U) == 0U &&
+              (state.fpscr & 0x20000000U) != 0U,
+          "mcrfs field 1 copies and clears UX/ZX/XX/VXSNAN while retaining other invalid flags");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              ((state.cr >> 4U) & 0xfU) == 0xcU &&
+              (state.fpscr & 0x00f00000U) == 0U &&
+              (state.fpscr & 0x20000000U) != 0U,
+          "mcrfs field 2 clears VXISI, VXIDI, VXZDZ, and VXIMZ");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              (state.cr & 0xfU) == 0x8U &&
+              (state.fpscr & 0x00080000U) == 0U,
+          "mcrfs field 3 clears only VXVC and preserves unrelated FPSCR bits");
+
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              ((state.cr >> 28U) & 0xfU) == 0x7U &&
+              (state.fpscr & 0x00000700U) == 0U &&
+              (state.fpscr & 0x60000000U) == 0U,
+          "mcrfs field 5 clears VXSOFT, VXSQRT, and VXCVI flags");
+
+    constexpr auto golden = 0xfc000080U;
+    const auto decoded = cpu::decode(golden);
+    check(decoded && decoded.instruction.opcode ==
+                         cpu::Opcode::floating_move_condition_register_from_fpscr,
+          "mcrfs decoder matches the architectural zero-field encoding");
+    check(!cpu::decode(mcrfs_form(2, 3, 1U << 21U)) &&
+              !cpu::decode(mcrfs_form(2, 3, 1U << 16U)) &&
+              !cpu::decode(mcrfs_form(2, 3, 1U << 11U)) &&
+              !cpu::decode(mcrfs_form(2, 3, 1U)),
+          "mcrfs rejects reserved fields and nonzero Rc");
+}
+
 void test_condition_register_logical_operations() {
     using namespace project360;
     constexpr std::uint8_t target_bit = 9;
@@ -3455,6 +3524,7 @@ int main() {
     test_move_from_machine_state_register();
     test_move_to_machine_state_register_doubleword();
     test_move_condition_register_field();
+    test_move_condition_register_from_fpscr();
     test_condition_register_logical_operations();
     test_special_register_transfers();
     test_move_condition_register_from_xer();

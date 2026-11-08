@@ -177,6 +177,17 @@ DecodeResult decode(std::uint32_t word) {
     case 63: {
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
         const auto xo5 = static_cast<std::uint8_t>((word >> 1U) & 0x1fU);
+        if (xo10 == 64U) {
+            constexpr std::uint32_t reserved_mask = (0x3U << 21U) | (0x3U << 16U) |
+                                                    (0x1fU << 11U) | 1U;
+            if ((word & reserved_mask) != 0U) {
+                return {{}, "mcrfs reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::floating_move_condition_register_from_fpscr;
+            ins.bf = static_cast<std::uint8_t>((word >> 23U) & 0x7U);
+            ins.bfa = static_cast<std::uint8_t>((word >> 18U) & 0x7U);
+            return {ins, {}};
+        }
         if (xo5 == 23U) {
             ins.opcode = Opcode::floating_select;
             ins.frc = static_cast<std::uint8_t>((word >> 6U) & 0x1fU);
