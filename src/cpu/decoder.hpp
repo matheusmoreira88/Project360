@@ -46,6 +46,8 @@ enum class Opcode {
     rotate_left_doubleword_clear_right,
     rotate_left_doubleword_clear,
     rotate_left_doubleword_mask_insert,
+    rotate_left_doubleword_variable_clear_left,
+    rotate_left_doubleword_variable_clear_right,
     count_leading_zeros_word,
     count_leading_zeros_doubleword,
     subf,

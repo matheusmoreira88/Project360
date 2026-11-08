@@ -222,17 +222,26 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
     case Opcode::rotate_left_doubleword_clear_left:
     case Opcode::rotate_left_doubleword_clear_right:
     case Opcode::rotate_left_doubleword_clear:
-    case Opcode::rotate_left_doubleword_mask_insert: {
-        const auto rotated = std::rotl(state.gpr[ins.rt], static_cast<int>(ins.shift));
+    case Opcode::rotate_left_doubleword_mask_insert:
+    case Opcode::rotate_left_doubleword_variable_clear_left:
+    case Opcode::rotate_left_doubleword_variable_clear_right: {
+        const bool variable_shift =
+            ins.opcode == Opcode::rotate_left_doubleword_variable_clear_left ||
+            ins.opcode == Opcode::rotate_left_doubleword_variable_clear_right;
+        const auto shift = variable_shift ? static_cast<int>(state.gpr[ins.rb] & 0x3fU)
+                                          : static_cast<int>(ins.shift);
+        const auto rotated = std::rotl(state.gpr[ins.rt], shift);
         std::uint8_t begin = 0;
         std::uint8_t end = 63;
-        if (ins.opcode == Opcode::rotate_left_doubleword_clear_left) {
+        if (ins.opcode == Opcode::rotate_left_doubleword_clear_left ||
+            ins.opcode == Opcode::rotate_left_doubleword_variable_clear_left) {
             begin = ins.mask_begin;
-        } else if (ins.opcode == Opcode::rotate_left_doubleword_clear_right) {
+        } else if (ins.opcode == Opcode::rotate_left_doubleword_clear_right ||
+                   ins.opcode == Opcode::rotate_left_doubleword_variable_clear_right) {
             end = ins.mask_end;
         } else {
             begin = ins.mask_begin;
-            end = static_cast<std::uint8_t>(63U - ins.shift);
+            end = static_cast<std::uint8_t>(63U - shift);
         }
         const auto mask = rotate_mask_doubleword(begin, end);
         const auto selected = rotated & mask;

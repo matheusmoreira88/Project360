@@ -55,6 +55,16 @@ DecodeResult decode(std::uint32_t word) {
         ins.record = (word & 1U) != 0U;
         return {ins, {}};
     case 30: {
+        const auto mds_xo = static_cast<std::uint8_t>((word >> 1U) & 0xfU);
+        if (mds_xo == 8U || mds_xo == 9U) {
+            ins.opcode = mds_xo == 8U ? Opcode::rotate_left_doubleword_variable_clear_left
+                                      : Opcode::rotate_left_doubleword_variable_clear_right;
+            ins.mask_begin = static_cast<std::uint8_t>((word >> 5U) & 0x3fU);
+            ins.mask_end = ins.mask_begin;
+            ins.record = (word & 1U) != 0U;
+            return {ins, {}};
+        }
+
         const auto md_xo = static_cast<std::uint8_t>((word >> 2U) & 0x7U);
         switch (md_xo) {
         case 0: ins.opcode = Opcode::rotate_left_doubleword_clear_left; break;

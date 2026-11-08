@@ -94,6 +94,16 @@ std::uint32_t rotate_doubleword_form(std::uint8_t ra, std::uint8_t rs, std::uint
            (static_cast<std::uint32_t>(shift & 0x20U) >> 4U) | (record ? 1U : 0U);
 }
 
+std::uint32_t rotate_doubleword_variable_form(std::uint8_t ra, std::uint8_t rs,
+                                              std::uint8_t rb, std::uint8_t mask,
+                                              std::uint8_t xo, bool record = false) {
+    return (30U << 26U) | (static_cast<std::uint32_t>(rs) << 21U) |
+           (static_cast<std::uint32_t>(ra) << 16U) |
+           (static_cast<std::uint32_t>(rb) << 11U) |
+           (static_cast<std::uint32_t>(mask & 0x3fU) << 5U) |
+           (static_cast<std::uint32_t>(xo & 0xfU) << 1U) | (record ? 1U : 0U);
+}
+
 std::uint32_t compare_immediate(std::uint8_t op, std::uint8_t bf, bool wide,
                                 std::uint8_t ra, std::uint16_t immediate) {
     return (static_cast<std::uint32_t>(op) << 26U) |
@@ -500,8 +510,34 @@ void test_doubleword_rotate_mask_instructions() {
     }
     check(state.pc == 24, "all doubleword rotate-mask program instructions execute");
 
-    const auto reserved = cpu::decode(rotate_doubleword_form(1, 2, 3, 4, 4));
+    const auto reserved = cpu::decode(rotate_doubleword_form(1, 2, 3, 4, 5));
     check(!reserved, "reserved MD-form rotate-mask subopcodes are diagnosed");
+}
+
+void test_variable_doubleword_rotate_mask_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(12);
+    put_word(mem, 0, rotate_doubleword_variable_form(3, 1, 2, 8, 8, true)); // rldcl. r3,r1,r2,8
+    put_word(mem, 4, rotate_doubleword_variable_form(4, 1, 2, 39, 9)); // rldcr r4,r1,r2,39
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0x0123456789abcdefULL;
+    state.gpr[2] = 0x41U; // low six bits select shift one
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 0x00468acf13579bdeULL &&
+              (state.cr >> 28U) == 4U,
+          "rldcl rotates by RB low six bits, clears left bits and records CR0");
+
+    state.gpr[2] = 0x7fU; // low six bits select shift 63
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[4] == 0x8091a2b3c4000000ULL &&
+              state.pc == 8,
+          "rldcr uses a wrapped six-bit register shift and clears right bits");
+
+    const auto reserved = cpu::decode(rotate_doubleword_variable_form(1, 2, 3, 4, 10));
+    check(!reserved, "reserved MDS-form rotate-mask subopcodes are diagnosed");
 }
 
 void test_leading_zero_instructions() {
@@ -1344,6 +1380,7 @@ int main() {
     test_word_shift_immediate_instruction();
     test_word_rotate_insert_and_variable_mask();
     test_doubleword_rotate_mask_instructions();
+    test_variable_doubleword_rotate_mask_instructions();
     test_leading_zero_instructions();
     test_memory_and_endianness();
     test_byte_and_halfword_memory_instructions();
