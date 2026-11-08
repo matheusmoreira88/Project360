@@ -113,6 +113,12 @@ int main() {
         bytes.push_back(static_cast<std::uint8_t>(value));
     };
     std::vector<std::uint8_t> pm4_draw_stream;
+    append_pm4_u32(pm4_draw_stream, (1U << 16U) | 0x200eU); // Screen scissor TL/BR.
+    append_pm4_u32(pm4_draw_stream, 0U);
+    append_pm4_u32(pm4_draw_stream, 16U | (16U << 16U));
+    append_pm4_u32(pm4_draw_stream, (1U << 16U) | 0x2081U); // Window scissor TL/BR.
+    append_pm4_u32(pm4_draw_stream, 1U << 31U); // Disable window offset.
+    append_pm4_u32(pm4_draw_stream, 8U | (16U << 16U));
     append_pm4_u32(pm4_draw_stream, (2U << 16U) | 0x2100U); // VGT_MAX/MIN/INDX_OFFSET.
     append_pm4_u32(pm4_draw_stream, 0x00ffffffU);
     append_pm4_u32(pm4_draw_stream, 0U);
@@ -141,6 +147,13 @@ int main() {
         return 1;
     }
     const auto& prepared_geometry = draw_dispatch.draws[0].geometry;
+    const auto scissor = read_xenos_scissor_rectangle(
+        draw_dispatch.draws[0].register_snapshot, 16U, 16U);
+    if (!scissor || scissor.rectangle != XenosScissorRectangle{0U, 0U, 8U, 16U}) {
+        std::cerr << "FAIL: PM4 draw did not resolve its Xenos scissor state"
+                  << (scissor ? "" : ": " + scissor.error) << '\n';
+        return 1;
+    }
     constexpr std::array<std::uint8_t, 1> required_fetch_slots{7U};
     const auto fetch_bank = decode_vertex_fetch_descriptor_bank(
         draw_dispatch.draws[0].register_snapshot, required_fetch_slots);
@@ -194,11 +207,12 @@ int main() {
         return 1;
     }
     const auto xenos_triangle = result.context->render_offscreen_xenos_geometry(
-        vertex_batch.vertices, 0U, prepared_geometry);
+        vertex_batch.vertices, 0U, prepared_geometry, scissor.rectangle);
     if (!xenos_triangle ||
-        xenos_triangle.center_rgba != std::array<std::uint8_t, 4>{0U, 255U, 0U, 255U} ||
+        xenos_triangle.center_rgba != std::array<std::uint8_t, 4>{255U, 0U, 255U, 255U} ||
         xenos_triangle.corner_rgba != std::array<std::uint8_t, 4>{255U, 0U, 255U, 255U} ||
-        xenos_triangle.green_pixel_count != triangle.green_pixel_count) {
+        xenos_triangle.green_pixel_count == 0U ||
+        xenos_triangle.green_pixel_count >= triangle.green_pixel_count) {
         std::cerr << "FAIL: CPU Xenos exports did not survive Vulkan vertex upload and rasterization"
                   << (xenos_triangle ? "" : ": " + xenos_triangle.error) << '\n';
         return 1;
@@ -278,7 +292,7 @@ int main() {
         std::cerr << "FAIL: concurrent Vulkan queue submissions were not serialized correctly\n";
         return 1;
     }
-    std::cout << "Vulkan offscreen clear/readback, indexed triangle and Xenos EXEC output passed on "
+    std::cout << "Vulkan offscreen clear/readback, indexed triangle, PM4 scissor and Xenos EXEC output passed on "
               << device.name << " (" << triangle.green_pixel_count << " green pixels)\n";
     return 0;
 }

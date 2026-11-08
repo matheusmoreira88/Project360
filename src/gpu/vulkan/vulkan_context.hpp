@@ -1,11 +1,13 @@
 #pragma once
 
 #include "gpu/xenos/pm4_draw.hpp"
+#include "gpu/xenos/raster_state.hpp"
 #include "gpu/xenos/shader_alu.hpp"
 
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -79,15 +81,18 @@ class VulkanContext final {
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_test_triangle() const;
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_indexed_triangles(
         std::span<const VulkanTestVertex> vertices,
-        std::span<const std::uint32_t> indices) const;
+        std::span<const std::uint32_t> indices,
+        std::optional<xenos::XenosScissorRectangle> scissor = std::nullopt) const;
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_xenos_triangles(
         std::span<const xenos::ShaderVertexOutputs> vertices,
         std::uint8_t color_interpolator,
-        std::span<const std::uint32_t> indices) const;
+        std::span<const std::uint32_t> indices,
+        std::optional<xenos::XenosScissorRectangle> scissor = std::nullopt) const;
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_xenos_geometry(
         std::span<const xenos::ShaderVertexOutputs> vertices,
         std::uint8_t color_interpolator,
-        const xenos::PrimitiveAssemblyResult& geometry) const;
+        const xenos::PrimitiveAssemblyResult& geometry,
+        std::optional<xenos::XenosScissorRectangle> scissor = std::nullopt) const;
 
   private:
     struct Impl;

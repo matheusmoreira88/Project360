@@ -9,6 +9,12 @@
 namespace project360::gpu::xenos {
 
 namespace register_index {
+inline constexpr std::size_t rb_surface_info = 0x2000U;
+inline constexpr std::size_t pa_sc_screen_scissor_tl = 0x200eU;
+inline constexpr std::size_t pa_sc_screen_scissor_br = 0x200fU;
+inline constexpr std::size_t pa_sc_window_offset = 0x2080U;
+inline constexpr std::size_t pa_sc_window_scissor_tl = 0x2081U;
+inline constexpr std::size_t pa_sc_window_scissor_br = 0x2082U;
 inline constexpr std::size_t vgt_max_vtx_indx = 0x2100U;
 inline constexpr std::size_t vgt_min_vtx_indx = 0x2101U;
 inline constexpr std::size_t vgt_indx_offset = 0x2102U;
@@ -28,7 +34,13 @@ struct XenosRegisterDescriptor {
 // addresses remain opaque in the generic PM4 register file.
 [[nodiscard]] constexpr std::optional<XenosRegisterDescriptor> find_xenos_register(
     std::size_t index) noexcept {
-    constexpr std::array<XenosRegisterDescriptor, 7> registers{{
+    constexpr std::array<XenosRegisterDescriptor, 13> registers{{
+        {register_index::rb_surface_info, "RB_SURFACE_INFO", 0xffff3fffU},
+        {register_index::pa_sc_screen_scissor_tl, "PA_SC_SCREEN_SCISSOR_TL", 0x7fff7fffU},
+        {register_index::pa_sc_screen_scissor_br, "PA_SC_SCREEN_SCISSOR_BR", 0x7fff7fffU},
+        {register_index::pa_sc_window_offset, "PA_SC_WINDOW_OFFSET", 0x7fff7fffU},
+        {register_index::pa_sc_window_scissor_tl, "PA_SC_WINDOW_SCISSOR_TL", 0xbfff3fffU},
+        {register_index::pa_sc_window_scissor_br, "PA_SC_WINDOW_SCISSOR_BR", 0x3fff3fffU},
         {register_index::vgt_max_vtx_indx, "VGT_MAX_VTX_INDX", 0x00ffffffU},
         {register_index::vgt_min_vtx_indx, "VGT_MIN_VTX_INDX", 0x00ffffffU},
         {register_index::vgt_indx_offset, "VGT_INDX_OFFSET", 0x00ffffffU},

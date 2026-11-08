@@ -1,6 +1,7 @@
 #include "gpu/xenos/pm4_decoder.hpp"
 #include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/pm4_registers.hpp"
+#include "gpu/xenos/raster_state.hpp"
 #include "gpu/xenos/registers.hpp"
 #include "gpu/xenos/shader_alu.hpp"
 #include "gpu/xenos/shader_execution.hpp"
@@ -1276,6 +1277,34 @@ void test_pm4_sequential_draw_dispatch() {
           "PM4 draw dispatch rejects unsupported later commands without partial output");
 }
 
+void test_xenos_scissor_register_resolution() {
+    using namespace project360::gpu::xenos;
+    std::vector<std::uint32_t> registers(register_index::pa_sc_window_scissor_br + 1U, 0U);
+    registers[register_index::pa_sc_screen_scissor_tl] =
+        (0x7ffeU) | (1U << 16U); // (-2, 1) signed 15-bit screen origin.
+    registers[register_index::pa_sc_screen_scissor_br] = 15U | (14U << 16U);
+    registers[register_index::pa_sc_window_offset] = 1U | (0x7fffU << 16U); // (+1, -1).
+    registers[register_index::pa_sc_window_scissor_tl] = 2U | (3U << 16U);
+    registers[register_index::pa_sc_window_scissor_br] = 14U | (15U << 16U);
+
+    const auto offset_scissor = read_xenos_scissor_rectangle(registers, 12U, 10U);
+    check(offset_scissor &&
+              offset_scissor.rectangle == XenosScissorRectangle{3U, 2U, 9U, 8U},
+          "Xenos scissor intersects screen bounds, applies signed window offsets and clamps target");
+
+    registers[register_index::pa_sc_window_scissor_tl] |= 1U << 31U;
+    const auto offset_disabled_scissor = read_xenos_scissor_rectangle(registers, 12U, 10U);
+    check(offset_disabled_scissor &&
+              offset_disabled_scissor.rectangle == XenosScissorRectangle{2U, 3U, 10U, 7U},
+          "Xenos window-scissor offset-disable bit preserves unshifted bounds");
+
+    const auto truncated = read_xenos_scissor_rectangle(
+        std::span<const std::uint32_t>(registers.data(), register_index::pa_sc_window_scissor_br),
+        12U, 10U);
+    check(!truncated && truncated.rectangle.width == 0U,
+          "truncated Xenos scissor register files fail without a partial rectangle");
+}
+
 void test_dma_index_fetch() {
     using namespace project360::gpu::xenos;
     project360::memory::GuestMemory memory(0x4000U);
@@ -1874,6 +1903,7 @@ int main() {
     test_unimplemented_commands_fail_explicitly();
     test_draw_packet_metadata_decoding();
     test_pm4_sequential_draw_dispatch();
+    test_xenos_scissor_register_resolution();
     test_dma_index_fetch();
     test_primitive_assembly();
     test_vertex_shader_index_transform();
