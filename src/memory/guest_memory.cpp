@@ -275,6 +275,54 @@ bool GuestMemory::write_conditional_u32_be(std::uint64_t address, std::uint32_t 
     return true;
 }
 
+bool GuestMemory::read_reserve_u64_be(std::uint64_t address, std::uint64_t& value,
+                                      std::uint64_t& reserved_address,
+                                      std::uint64_t& granule,
+                                      std::uint64_t& generation) const noexcept {
+    const std::shared_lock lock(access_mutex_);
+    std::uint64_t physical = 0U;
+    if ((address & 7U) != 0U || !resolve(address, 8U, GuestPageAccess::read, physical)) {
+        return false;
+    }
+    const auto start = static_cast<std::size_t>(physical);
+    std::uint64_t result = 0U;
+    for (std::size_t i = 0U; i < 8U; ++i) {
+        result = (result << 8U) | std::to_integer<std::uint64_t>(bytes_[start + i]);
+    }
+    value = result;
+    reserved_address = physical;
+    granule = physical / page_size;
+    generation = write_generations_[static_cast<std::size_t>(granule)];
+    return true;
+}
+
+bool GuestMemory::write_conditional_u64_be(std::uint64_t address, std::uint64_t value,
+                                           std::uint64_t reserved_address,
+                                           std::uint64_t granule,
+                                           std::uint64_t generation,
+                                           bool& stored) noexcept {
+    const std::unique_lock lock(access_mutex_);
+    stored = false;
+    std::uint64_t physical = 0U;
+    if ((address & 7U) != 0U || !resolve(address, 8U, GuestPageAccess::write, physical)) {
+        return false;
+    }
+    const auto current_granule = physical / page_size;
+    if (physical != reserved_address || current_granule != granule ||
+        write_generations_[static_cast<std::size_t>(current_granule)] != generation) {
+        return true;
+    }
+
+    const auto start = static_cast<std::size_t>(physical);
+    for (std::size_t i = 0U; i < 8U; ++i) {
+        const auto shift = static_cast<unsigned>((7U - static_cast<unsigned>(i)) * 8U);
+        bytes_[start + i] = static_cast<std::byte>((value >> shift) & 0xffU);
+    }
+    mark_write(physical, 8U);
+    stored = true;
+    return true;
+}
+
 bool GuestMemory::read_u64_be(std::uint64_t address, std::uint64_t& value) const noexcept {
     const std::shared_lock lock(access_mutex_);
     std::uint64_t physical = 0;

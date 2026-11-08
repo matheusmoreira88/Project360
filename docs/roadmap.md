@@ -17,7 +17,7 @@ The roadmap tracks evidence rather than estimated completion percentages.
 | 10 — Performance | Not started | Reproducible benchmarks and profiling. |
 | 11 — Expansion | Not started | Depends on prior compatibility evidence. |
 
-The CPU subset also now executes the optional indexed PowerPC `stfiwx` transfer. Tests verify raw low-word storage, state preservation, reserved encoding rejection and alignment faults; support for this optional instruction is an emulator capability, not evidence that a particular Xenon revision implements it. Concurrent interpreter contexts now execute `lwarx`/`stwcx.` against shared GuestMemory with locked conditional stores, 4 KiB backing-page generations and a two-context increment test. `sync` and `lwsync` execute as conservative host fences, but Xenon thread scheduling, weak-memory outcomes, GPU coherence, `eieio`/MMIO ordering and measured Xenon reservation-granule behavior remain open.
+The CPU subset also now executes the optional indexed PowerPC `stfiwx` transfer. Tests verify raw low-word storage, state preservation, reserved encoding rejection and alignment faults; support for this optional instruction is an emulator capability, not evidence that a particular Xenon revision implements it. Concurrent interpreter contexts execute `lwarx`/`stwcx.` and `ldarx`/`stdcx.` against shared GuestMemory with locked conditional stores and 4 KiB backing-page generations; two-context word and doubleword increment tests verify exact results. `sync` and `lwsync` execute as conservative host fences, but Xenon thread scheduling, weak-memory outcomes, GPU coherence, `eieio`/MMIO ordering and measured Xenon reservation-granule behavior remain open.
 
 ## Frontend status
 

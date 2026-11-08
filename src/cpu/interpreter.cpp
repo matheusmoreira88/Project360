@@ -1081,6 +1081,24 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         state.reservation_valid = true;
         break;
     }
+    case Opcode::load_doubleword_and_reserve_indexed: {
+        state.reservation_valid = false;
+        const auto address = base + state.gpr[ins.rb];
+        std::uint64_t value = 0U;
+        std::uint64_t reserved_address = 0U;
+        std::uint64_t granule = 0U;
+        std::uint64_t generation = 0U;
+        if (!memory.read_reserve_u64_be(address, value, reserved_address, granule,
+                                        generation)) {
+            return data_fault(address, 8U, "ldarx alignment or address fault");
+        }
+        state.gpr[ins.rt] = value;
+        state.reservation_address = reserved_address;
+        state.reservation_granule = granule;
+        state.reservation_generation = generation;
+        state.reservation_valid = true;
+        break;
+    }
     case Opcode::store_word_conditional_indexed: {
         const auto address = base + state.gpr[ins.rb];
         bool stored = false;
@@ -1095,6 +1113,26 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
                                              static_cast<std::uint32_t>(state.gpr[ins.rt]),
                                              reserved_address, granule, generation, stored)) {
             return data_fault(address, 4U, "stwcx. alignment or address fault");
+        }
+        const auto summary_overflow = (state.xer & kXerSummaryOverflow) != 0U;
+        const auto condition_field = (stored ? 0x2U : 0U) |
+                                     (summary_overflow ? 0x1U : 0U);
+        set_cr_field(state, 0U, condition_field);
+        break;
+    }
+    case Opcode::store_doubleword_conditional_indexed: {
+        const auto address = base + state.gpr[ins.rb];
+        bool stored = false;
+        const auto reserved_address = state.reservation_valid
+                                          ? state.reservation_address
+                                          : std::numeric_limits<std::uint64_t>::max();
+        const auto granule = state.reservation_valid ? state.reservation_granule
+                                                     : std::numeric_limits<std::uint64_t>::max();
+        const auto generation = state.reservation_generation;
+        state.reservation_valid = false;
+        if (!memory.write_conditional_u64_be(address, state.gpr[ins.rt], reserved_address,
+                                             granule, generation, stored)) {
+            return data_fault(address, 8U, "stdcx. alignment or address fault");
         }
         const auto summary_overflow = (state.xer & kXerSummaryOverflow) != 0U;
         const auto condition_field = (stored ? 0x2U : 0U) |

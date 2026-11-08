@@ -345,6 +345,12 @@ DecodeResult decode(std::uint32_t word) {
             ins.indexed = true;
             return {ins, {}};
         }
+        if (xo10 == 84U) {
+            if ((word & 1U) != 0U) return {{}, "ldarx reserved record bit is set"};
+            ins.opcode = Opcode::load_doubleword_and_reserve_indexed;
+            ins.indexed = true;
+            return {ins, {}};
+        }
         if (xo10 == 598U) {
             if ((ins.rt > 1U) || ins.ra != 0U || ins.rb != 0U || (word & 1U) != 0U) {
                 return {{}, "sync reserved fields are nonzero or L is reserved"};
@@ -355,6 +361,13 @@ DecodeResult decode(std::uint32_t word) {
         if (xo10 == 150U) {
             if ((word & 1U) == 0U) return {{}, "stwcx. requires its record bit"};
             ins.opcode = Opcode::store_word_conditional_indexed;
+            ins.indexed = true;
+            ins.record = true;
+            return {ins, {}};
+        }
+        if (xo10 == 214U) {
+            if ((word & 1U) == 0U) return {{}, "stdcx. requires its record bit"};
+            ins.opcode = Opcode::store_doubleword_conditional_indexed;
             ins.indexed = true;
             ins.record = true;
             return {ins, {}};

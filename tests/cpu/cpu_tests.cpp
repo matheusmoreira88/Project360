@@ -2742,6 +2742,46 @@ void test_reservation_instructions() {
               fault.fault_info->kind == cpu::FaultKind::data_alignment &&
               !fault_state.reservation_valid && fault_state.pc == 0U,
           "misaligned lwarx faults without establishing a reservation");
+
+    memory::GuestMemory doubleword_mem(
+        2U * static_cast<std::size_t>(memory::GuestMemory::page_size));
+    check(doubleword_mem.write_u64_be(0x100U, 0x0123456789abcdefULL),
+          "seed ldarx target doubleword");
+    put_word(doubleword_mem, 0U, indexed_memory(3U, 0U, 2U, 84U)); // ldarx r3,0,r2
+    put_word(doubleword_mem, 4U, indexed_memory(4U, 0U, 2U, 214U, true)); // stdcx. r4,0,r2
+    cpu::CpuState doubleword_state{};
+    doubleword_state.gpr[2] = 0x100U;
+    doubleword_state.gpr[4] = 0xfedcba9876543210ULL;
+    const auto doubleword_run = cpu::Interpreter{}.run(doubleword_state, doubleword_mem, 2U);
+    std::uint64_t doubleword = 0U;
+    check(doubleword_run.status == cpu::StepStatus::instruction_limit_reached &&
+              doubleword_state.gpr[3] == 0x0123456789abcdefULL &&
+              doubleword_mem.read_u64_be(0x100U, doubleword) &&
+              doubleword == 0xfedcba9876543210ULL &&
+              !doubleword_state.reservation_valid && (doubleword_state.cr >> 28U) == 2U,
+          "ldarx/stdcx. atomically exchange a reserved doubleword and record success");
+    check(!cpu::decode(indexed_memory(3U, 0U, 2U, 84U, true)) &&
+              !cpu::decode(indexed_memory(4U, 0U, 2U, 214U, false)),
+          "doubleword reservation forms validate their record-bit encodings");
+
+    cpu::CpuState unreserved_doubleword{};
+    unreserved_doubleword.pc = 4U;
+    unreserved_doubleword.gpr[2] = 0x100U;
+    unreserved_doubleword.gpr[4] = 0U;
+    check(cpu::Interpreter{}.step(unreserved_doubleword, doubleword_mem).status ==
+                  cpu::StepStatus::executed &&
+              doubleword_mem.read_u64_be(0x100U, doubleword) &&
+              doubleword == 0xfedcba9876543210ULL &&
+              (unreserved_doubleword.cr >> 28U) == 0U,
+          "stdcx. without ldarx leaves a doubleword unchanged and clears CR0.EQ");
+
+    put_word(doubleword_mem, 0U, indexed_memory(3U, 0U, 2U, 84U));
+    cpu::CpuState misaligned_doubleword{};
+    misaligned_doubleword.gpr[2] = 0x104U;
+    check(cpu::Interpreter{}.step(misaligned_doubleword, doubleword_mem).status ==
+                  cpu::StepStatus::fault &&
+              !misaligned_doubleword.reservation_valid && misaligned_doubleword.pc == 0U,
+          "misaligned ldarx faults without creating a reservation");
 }
 
 void test_concurrent_reservation_instructions() {
@@ -2793,6 +2833,53 @@ void test_concurrent_reservation_instructions() {
               mem.read_u32_be(0x100U, counter) &&
               counter == increments_per_thread * 2U,
           "two concurrent PPC contexts increment one word without lost updates");
+
+    memory::GuestMemory doubleword_mem(static_cast<std::size_t>(memory::GuestMemory::page_size));
+    check(doubleword_mem.write_u64_be(0x100U, 0U),
+          "initialize shared 64-bit atomic counter");
+    put_word(doubleword_mem, 0U, indexed_memory(3U, 0U, 2U, 84U)); // ldarx r3,0,r2
+    put_word(doubleword_mem, 4U, d_form(14U, 4U, 3U, 1U)); // addi r4,r3,1
+    put_word(doubleword_mem, 8U,
+             indexed_memory(4U, 0U, 2U, 214U, true)); // stdcx. r4,0,r2
+    worker_failed.store(false, std::memory_order_relaxed);
+    const auto increment_doubleword = [&] {
+        cpu::Interpreter interpreter{};
+        cpu::CpuState state{};
+        state.gpr[2] = 0x100U;
+        for (std::uint32_t completed = 0U; completed < increments_per_thread;) {
+            bool stored = false;
+            for (std::uint32_t attempt = 0U; attempt < 10000U && !stored; ++attempt) {
+                state.pc = 0U;
+                const auto load = interpreter.step(state, doubleword_mem);
+                state.pc = 4U;
+                const auto add_result = interpreter.step(state, doubleword_mem);
+                state.pc = 8U;
+                const auto store = interpreter.step(state, doubleword_mem);
+                if (load.status != cpu::StepStatus::executed ||
+                    add_result.status != cpu::StepStatus::executed ||
+                    store.status != cpu::StepStatus::executed) {
+                    worker_failed.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                stored = ((state.cr >> 28U) & 0x2U) != 0U;
+            }
+            if (!stored) {
+                worker_failed.store(true, std::memory_order_relaxed);
+                return;
+            }
+            ++completed;
+        }
+    };
+
+    std::thread first_doubleword(increment_doubleword);
+    std::thread second_doubleword(increment_doubleword);
+    first_doubleword.join();
+    second_doubleword.join();
+    std::uint64_t doubleword_counter = 0U;
+    check(!worker_failed.load(std::memory_order_relaxed) &&
+              doubleword_mem.read_u64_be(0x100U, doubleword_counter) &&
+              doubleword_counter == static_cast<std::uint64_t>(increments_per_thread) * 2U,
+          "two concurrent PPC contexts increment one doubleword without lost updates");
 }
 
 void test_memory_bounds_and_alignment() {

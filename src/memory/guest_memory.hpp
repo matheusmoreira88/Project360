@@ -47,6 +47,15 @@ public:
                                                 std::uint64_t granule,
                                                 std::uint64_t generation,
                                                 bool& stored) noexcept;
+    [[nodiscard]] bool read_reserve_u64_be(std::uint64_t address, std::uint64_t& value,
+                                           std::uint64_t& reserved_address,
+                                           std::uint64_t& granule,
+                                           std::uint64_t& generation) const noexcept;
+    [[nodiscard]] bool write_conditional_u64_be(std::uint64_t address, std::uint64_t value,
+                                                std::uint64_t reserved_address,
+                                                std::uint64_t granule,
+                                                std::uint64_t generation,
+                                                bool& stored) noexcept;
     [[nodiscard]] bool read_u64_be(std::uint64_t address, std::uint64_t& value) const noexcept;
     [[nodiscard]] bool write_u64_be(std::uint64_t address, std::uint64_t value) noexcept;
     // Reads raw physical backing bytes without applying CPU virtual mappings.
