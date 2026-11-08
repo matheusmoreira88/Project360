@@ -3,6 +3,7 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace project360::gpu::xenos {
 namespace {
@@ -52,6 +53,27 @@ float dot2add_xenos(const std::array<float, 4>& lhs, const std::array<float, 4>&
     volatile float sum_xy = product_x + product_y;
     volatile float result = sum_xy + addend[0];
     return result;
+}
+
+struct VertexExportTarget {
+    std::array<float, 4>* value{};
+    std::uint8_t* write_mask{};
+};
+
+bool find_vertex_export_target(ShaderVertexOutputs& outputs, std::uint8_t export_register,
+                               VertexExportTarget& target, std::string& error) {
+    if (export_register <= 15U) {
+        target = {&outputs.interpolators[export_register],
+                  &outputs.interpolator_write_masks[export_register]};
+        return true;
+    }
+    if (export_register == 62U) {
+        target = {&outputs.position, &outputs.position_write_mask};
+        return true;
+    }
+    error = "Unsupported Xenos vertex shader export register " +
+            std::to_string(export_register);
+    return false;
 }
 
 } // namespace
@@ -194,7 +216,7 @@ ShaderVectorAluResult evaluate_shader_vector_alu(const ShaderAluInstruction& ins
         return {{}, "Relative Xenos vector destinations are not implemented"};
     }
     if (instruction.export_result) {
-        return {{}, "Xenos ALU export writes are not implemented"};
+        return {{}, "Xenos ALU export writes require paired instruction execution"};
     }
     if (instruction.vector_clamp) {
         return {{}, "Clamped Xenos vector ALU results are not implemented"};
@@ -315,15 +337,21 @@ ShaderAluExecutionResult
 execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
                                 const ShaderAluTemporaryRegisterBank& initial_registers,
                                 std::span<const std::array<float, 4>> float_constants,
-                                float initial_previous_scalar) {
+                                float initial_previous_scalar,
+                                ShaderVertexOutputs initial_vertex_outputs) {
     if (instruction.predicated) {
         return {{}, 0.0F, "Predicated Xenos ALU execution is not implemented"};
     }
-    if (instruction.vector_destination_relative || instruction.scalar_destination_relative) {
+    if (!instruction.export_result &&
+        (instruction.vector_destination_relative || instruction.scalar_destination_relative)) {
         return {{}, 0.0F, "Relative Xenos ALU destinations are not implemented"};
     }
-    if (instruction.export_result) {
-        return {{}, 0.0F, "Xenos ALU export writes are not implemented"};
+    VertexExportTarget export_target;
+    std::string export_error;
+    if (instruction.export_result &&
+        !find_vertex_export_target(initial_vertex_outputs, instruction.vector_destination,
+                                   export_target, export_error)) {
+        return {{}, 0.0F, std::move(export_error)};
     }
     if (instruction.vector_clamp || instruction.scalar_clamp) {
         return {{}, 0.0F, "Clamped Xenos ALU results are not implemented"};
@@ -347,16 +375,27 @@ execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
     if (!scalar_source) {
         return {{}, 0.0F, scalar_source.error};
     }
+    const auto& previous_destination =
+        instruction.export_result ? *export_target.value
+                                  : initial_registers[instruction.vector_destination];
+    auto vector_instruction = instruction;
+    vector_instruction.export_result = false;
+    vector_instruction.vector_destination_relative = false;
     const auto vector_result = evaluate_shader_vector_alu(
-        instruction, source_1.value, source_2.value,
-        initial_registers[instruction.vector_destination], scalar_source.value);
+        vector_instruction, source_1.value, source_2.value, previous_destination,
+        scalar_source.value);
     if (!vector_result) {
         return {{}, 0.0F, vector_result.error};
     }
 
-    if (instruction.vector_destination == instruction.scalar_destination &&
+    if (!instruction.export_result &&
+        instruction.vector_destination == instruction.scalar_destination &&
         (instruction.vector_write_mask & instruction.scalar_write_mask) != 0U) {
         return {{}, 0.0F, "Overlapping vector/scalar writes to one Xenos register are unsupported"};
+    }
+    if (instruction.export_result &&
+        (instruction.vector_write_mask & instruction.scalar_write_mask) != 0U) {
+        return {{}, 0.0F, "Overlapping vector/scalar writes to one Xenos export are unsupported"};
     }
 
     // Scalar operations use the W (`a`) and X (`b`) swizzles of src3.
@@ -439,11 +478,26 @@ execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
     default:
         return {{}, 0.0F, "Unsupported Xenos scalar ALU opcode"};
     }
-    ShaderAluExecutionResult result{initial_registers, scalar_result, {}};
-    result.registers[instruction.vector_destination] = vector_result.destination;
-    for (std::size_t lane = 0; lane < 4U; ++lane) {
-        if ((instruction.scalar_write_mask & (1U << lane)) != 0U) {
-            result.registers[instruction.scalar_destination][lane] = scalar_result;
+    ShaderAluExecutionResult result{initial_registers, scalar_result, {},
+                                    initial_vertex_outputs};
+    if (instruction.export_result) {
+        for (std::size_t lane = 0; lane < 4U; ++lane) {
+            if ((instruction.vector_write_mask & (1U << lane)) != 0U) {
+                (*export_target.value)[lane] = vector_result.destination[lane];
+            }
+            if ((instruction.scalar_write_mask & (1U << lane)) != 0U) {
+                (*export_target.value)[lane] = scalar_result;
+            }
+        }
+        *export_target.write_mask = static_cast<std::uint8_t>(
+            *export_target.write_mask | instruction.vector_write_mask | instruction.scalar_write_mask);
+        result.vertex_outputs = initial_vertex_outputs;
+    } else {
+        result.registers[instruction.vector_destination] = vector_result.destination;
+        for (std::size_t lane = 0; lane < 4U; ++lane) {
+            if ((instruction.scalar_write_mask & (1U << lane)) != 0U) {
+                result.registers[instruction.scalar_destination][lane] = scalar_result;
+            }
         }
     }
     return result;

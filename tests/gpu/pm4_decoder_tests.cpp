@@ -440,6 +440,35 @@ void test_shader_alu_add_mul_pair_execution() {
               added.previous_scalar == 13.0F,
           "Xenos vector ADD and scalar ADDS compute from original sources and commit masked outputs");
 
+    auto initial_outputs = ShaderVertexOutputs{};
+    initial_outputs.interpolators[3] = {10.0F, 20.0F, 30.0F, 40.0F};
+    initial_outputs.interpolator_write_masks[3] = 0x02U;
+    auto position_export = encode_pair(0U, 0U, 62U, 5U, 0x0fU, 0U);
+    position_export.export_result = true;
+    const auto position = execute_shader_alu_add_mul_pair(
+        position_export, registers, {}, 0.0F, initial_outputs);
+    auto interpolator_export = encode_pair(0U, 0U, 3U, 5U, 0x05U, 0U);
+    interpolator_export.export_result = true;
+    const auto interpolator = execute_shader_alu_add_mul_pair(
+        interpolator_export, registers, {}, 0.0F, initial_outputs);
+    const auto standalone_export_rejected = evaluate_shader_vector_alu(
+        position_export, registers[1], registers[2], {}, registers[3]);
+    auto unsupported_export = position_export;
+    unsupported_export.vector_destination = 63U;
+    const auto rejected_export = execute_shader_alu_add_mul_pair(
+        unsupported_export, registers, {}, 0.0F, initial_outputs);
+    check(position && position.vertex_outputs.position ==
+                          std::array<float, 4>{11.0F, 22.0F, 33.0F, 44.0F} &&
+              position.vertex_outputs.position_write_mask == 0x0fU &&
+              position.registers[62] == registers[62] && interpolator &&
+              interpolator.vertex_outputs.interpolators[3] ==
+                  std::array<float, 4>{11.0F, 20.0F, 33.0F, 40.0F} &&
+              interpolator.vertex_outputs.interpolator_write_masks[3] == 0x07U &&
+              !standalone_export_rejected &&
+              !rejected_export &&
+              rejected_export.error == "Unsupported Xenos vertex shader export register 63",
+          "Xenos vertex exports commit position/interpolator lanes and reject unknown targets");
+
     const auto scalar_state_only = encode_pair(0U, 0U, 4U, 5U, 0x0fU, 0U);
     const auto scalar_state = execute_shader_alu_add_mul_pair(scalar_state_only, registers);
     check(scalar_state && scalar_state.previous_scalar == 13.0F &&
@@ -732,6 +761,21 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
               result.registers[4] == std::array<float, 4>{2.0F, 3.0F, 4.0F, 5.0F} &&
               result.registers[10] == std::array<float, 4>{4.0F, 9.0F, 16.0F, 25.0F},
           "Xenos EXEC sequence runs ALU, VFETCH and dependent ALU operations in order");
+
+    const std::array<std::array<std::uint32_t, 3>, 1> export_ucode{
+        std::array<std::uint32_t, 3>{62U | (1U << 15U) | (0x0fU << 16U), 0U,
+                                    0xe0030000U | (2U << 8U) | 1U}};
+    const auto export_exec = decode_shader_exec_instruction({1U << 12U, 2U << 12U});
+    auto export_registers = initial_registers;
+    export_registers[1] = {1.0F, 2.0F, 3.0F, 4.0F};
+    export_registers[2] = {10.0F, 20.0F, 30.0F, 40.0F};
+    const auto exported = execute_shader_exec_block(
+        export_exec, export_ucode, fetch_constants, memory, export_registers, {});
+    check(exported && exported.ended_shader && exported.instructions_executed == 1U &&
+              exported.vertex_outputs.position ==
+                  std::array<float, 4>{11.0F, 22.0F, 33.0F, 44.0F} &&
+              exported.vertex_outputs.position_write_mask == 0x0fU,
+          "Xenos EXEC propagates ALU position exports to the vertex-output result");
 
     auto scalar_registers = initial_registers;
     scalar_registers[3] = {5.0F, 0.0F, 0.0F, 8.0F};

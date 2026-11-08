@@ -34,7 +34,8 @@ ShaderExecResult execute_shader_exec_block(
     const std::array<float, 4>& missing_component_values,
     std::span<const std::array<float, 4>> float_constants,
     float initial_previous_scalar,
-    std::span<const bool> boolean_constants) {
+    std::span<const bool> boolean_constants,
+    ShaderVertexOutputs initial_vertex_outputs) {
     const bool unconditional = exec.opcode == 1U || exec.opcode == 2U;
     const bool conditional = exec.opcode == 3U || exec.opcode == 4U;
     if (!unconditional && !conditional) {
@@ -50,7 +51,8 @@ ShaderExecResult execute_shader_exec_block(
         const bool condition_met =
             boolean_constants[exec.boolean_constant_address] == exec.condition;
         if (!condition_met) {
-            return {initial_registers, 0U, false, {}, initial_previous_scalar};
+            return {initial_registers, 0U, false, {}, initial_previous_scalar,
+                    initial_vertex_outputs};
         }
     }
     if (exec.instruction_count > 7U) {
@@ -64,19 +66,21 @@ ShaderExecResult execute_shader_exec_block(
 
     auto registers = initial_registers;
     auto previous_scalar = initial_previous_scalar;
+    auto vertex_outputs = initial_vertex_outputs;
     for (std::size_t slot = 0U; slot < count; ++slot) {
         const auto& words = ucode[start + slot];
         const auto operation_kind = (exec.sequence >> (slot * 2U)) & 1U;
         if (operation_kind == 0U) {
             const auto instruction = decode_shader_alu_instruction(words);
             const auto executed = execute_shader_alu_add_mul_pair(
-                instruction, registers, float_constants, previous_scalar);
+                instruction, registers, float_constants, previous_scalar, vertex_outputs);
             if (!executed) {
                 return {{}, 0U, false,
                         "Xenos EXEC ALU slot " + std::to_string(slot) + ": " + executed.error};
             }
             registers = executed.registers;
             previous_scalar = executed.previous_scalar;
+            vertex_outputs = executed.vertex_outputs;
             continue;
         }
 
@@ -96,7 +100,7 @@ ShaderExecResult execute_shader_exec_block(
     }
 
     return {registers, exec.instruction_count, exec.opcode == 2U || exec.opcode == 4U, {},
-            previous_scalar};
+            previous_scalar, vertex_outputs};
 }
 
 } // namespace project360::gpu::xenos

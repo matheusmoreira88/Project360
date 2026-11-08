@@ -51,6 +51,13 @@ enum class ShaderAluSource : std::uint8_t { source_1, source_2, source_3 };
 using ShaderAluTemporaryRegisterBank = std::array<std::array<float, 4>, 64>;
 using ShaderAluFloatConstantBank = std::array<std::array<float, 4>, 256>;
 
+struct ShaderVertexOutputs {
+    std::array<float, 4> position{};
+    std::uint8_t position_write_mask{};
+    std::array<std::array<float, 4>, 16> interpolators{};
+    std::array<std::uint8_t, 16> interpolator_write_masks{};
+};
+
 struct ShaderAluSourceResult {
     std::array<float, 4> value{};
     std::string error;
@@ -62,6 +69,7 @@ struct ShaderAluExecutionResult {
     ShaderAluTemporaryRegisterBank registers{};
     float previous_scalar{};
     std::string error;
+    ShaderVertexOutputs vertex_outputs{};
 
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
@@ -106,12 +114,14 @@ struct ShaderAluExecutionResult {
     std::span<const std::array<float, 4>> float_constants = {});
 
 // Executes the vector ADD/MUL and scalar ADDS/MULS pair for one instruction.
-// Both results read the original register bank; writes are committed together.
-// Unsupported addressing, exports, clamp and operation pairs fail atomically.
+// Both results read original state; register/output writes commit together.
+// The validated vertex exports are interpolators 0..15 and position 62;
+// other export targets, unsupported addressing, clamp and opcode pairs fail.
 [[nodiscard]] ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     const ShaderAluInstruction& instruction,
     const ShaderAluTemporaryRegisterBank& initial_registers,
     std::span<const std::array<float, 4>> float_constants = {},
-    float initial_previous_scalar = 0.0F);
+    float initial_previous_scalar = 0.0F,
+    ShaderVertexOutputs initial_vertex_outputs = {});
 
 } // namespace project360::gpu::xenos
