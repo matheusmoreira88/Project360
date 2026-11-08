@@ -148,7 +148,7 @@ if(PROJECT360_BUILD_TESTS)
 
     if(PROJECT360_BUILD_VULKAN)
         add_executable(project360_vulkan_tests tests/gpu/vulkan_context_tests.cpp)
-        target_link_libraries(project360_vulkan_tests PRIVATE project360_vulkan Threads::Threads)
+        target_link_libraries(project360_vulkan_tests PRIVATE project360_vulkan project360_core Threads::Threads)
         target_compile_features(project360_vulkan_tests PRIVATE cxx_std_20)
         if(MSVC)
             target_compile_options(project360_vulkan_tests PRIVATE /W4 /permissive- /EHsc)

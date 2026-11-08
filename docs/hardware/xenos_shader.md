@@ -14,14 +14,14 @@ The field map, MAX/MIN compare-select expressions, DP3/DP4/DP2ADD, FRC/TRUNC/FLO
 
 ## Straight-line EXEC reference path
 
-`shader_execution` decodes `EXEC`, `EXEC_END`, `COND_EXEC` and `COND_EXEC_END` headers, then reads the two-bit-per-instruction sequence to choose ALU or fetch execution. Its synchronous CPU reference path commits supported ALU pairs and full VFETCH operations in sequence order to one temporary-register bank and vertex-output state. Boolean conditionals read a caller-provided bool-constant bank and require absolute instruction addressing; a nonmatching block executes no slots, and `COND_EXEC_END` ends the shader only when its condition matches. Synthetic programs verify ALU-produced vertex-index input, a memory-backed VFETCH result, a following ALU result, and propagation of an ALU position export; conditional tests cover matching and skipped blocks plus conditional termination. Malformed ranges, missing constants, relative addresses and unsupported instructions fail without exposing partial register state. It does not model shader timing, texture fetches, mini/predicated VFETCH, predicate-based control flow, loops, calls, exports outside the implemented vertex outputs, relative constants, or Vulkan, and it does not render a frame.
+`shader_execution` decodes `EXEC`, `EXEC_END`, `COND_EXEC` and `COND_EXEC_END` headers, then reads the two-bit-per-instruction sequence to choose ALU or fetch execution. Its synchronous CPU reference path commits supported ALU pairs and full VFETCH operations in sequence order to one temporary-register bank and vertex-output state. Boolean conditionals read a caller-provided bool-constant bank and require absolute instruction addressing; a nonmatching block executes no slots, and `COND_EXEC_END` ends the shader only when its condition matches. Synthetic programs verify ALU-produced vertex-index input, a memory-backed VFETCH result, a following ALU result, and propagation of an ALU position export; conditional tests cover matching and skipped blocks plus conditional termination. A Vulkan hardware smoke test also executes a two-slot synthetic vertex block per vertex, transfers exported position and interpolator-0 values into a homogeneous vertex buffer and verifies the rasterized readback. Malformed ranges, missing constants, relative addresses and unsupported instructions fail without exposing partial register state. This test does not model shader timing, texture fetches, mini/predicated VFETCH, predicate-based control flow, loops, calls, exports outside the implemented vertex outputs, relative constants, guest draw state, viewport/clipping, translated SPIR-V, or a game frame.
 
 ## Next 3D milestones
 
 1. Expand the ALU operations against documented encodings, keeping scalar and vector semantics explicit.
 2. Extend the sequence runner with conditional control flow, predicates, and loop behavior only as each state transition is validated.
-3. Connect vertex exports to clipping, viewport conversion and triangle setup.
-4. Build the Vulkan pipeline and pixel-shader path after CPU-side stage behavior is testable.
+3. Replace the test-only Vulkan vertex adapter with reusable clipping, viewport conversion and triangle setup driven by Xenos draw state.
+4. Translate guest vertex/pixel shaders to SPIR-V and validate them differentially against the CPU reference before broader Vulkan submission.
 5. Test with an authorized simple 3D homebrew/title only when its startup and rendering dependencies are known.
 
 No 3D title or rendered Xenos frame has been confirmed yet.

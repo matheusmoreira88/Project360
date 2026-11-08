@@ -37,7 +37,7 @@ struct VulkanTriangleReadbackResult {
 };
 
 struct VulkanTestVertex {
-    std::array<float, 2> position{};
+    std::array<float, 4> position{};
     std::array<float, 4> color{};
 };
 

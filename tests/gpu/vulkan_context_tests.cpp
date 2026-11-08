@@ -1,4 +1,6 @@
 #include "gpu/vulkan/vulkan_context.hpp"
+#include "gpu/xenos/shader_execution.hpp"
+#include "memory/guest_memory.hpp"
 
 #include <array>
 #include <iostream>
@@ -31,9 +33,9 @@ int main() {
         return 1;
     }
     constexpr std::array<project360::gpu::vulkan::VulkanTestVertex, 3> vertices{{
-        {{{-0.8F, -0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
-        {{{0.8F, -0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
-        {{{0.0F, 0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{-0.8F, -0.8F, 0.0F, 1.0F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{0.8F, -0.8F, 0.0F, 1.0F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{0.0F, 0.8F, 0.0F, 1.0F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
     }};
     constexpr std::array<std::uint32_t, 3> indices{0U, 1U, 2U};
     const auto triangle = result.context->render_offscreen_indexed_triangles(vertices, indices);
@@ -41,6 +43,49 @@ int main() {
         std::cerr << "FAIL: " << triangle.error << '\n';
         return 1;
     }
+
+    using namespace project360::gpu::xenos;
+    project360::memory::GuestMemory shader_memory(1U);
+    const std::array<std::array<std::uint32_t, 3>, 2> vertex_ucode{
+        std::array<std::uint32_t, 3>{62U | (1U << 15U) | (0x0fU << 16U), 0U,
+                                    0xe0030201U},
+        std::array<std::uint32_t, 3>{(1U << 15U) | (0x0fU << 16U), 0U,
+                                    0xe0030403U}};
+    const auto vertex_exec = decode_shader_exec_instruction(
+        {(0b1010U << 16U) | (2U << 12U), 2U << 12U});
+    constexpr std::array<std::array<float, 4>, 3> clip_positions{{
+        {{-1.6F, -1.6F, 0.0F, 2.0F}},
+        {{0.8F, -0.8F, 0.0F, 1.0F}},
+        {{0.0F, 1.6F, 0.0F, 2.0F}},
+    }};
+    constexpr std::array<float, 4> green{0.0F, 1.0F, 0.0F, 1.0F};
+    std::array<project360::gpu::vulkan::VulkanTestVertex, 3> xenos_vertices{};
+    for (std::size_t vertex_index = 0U; vertex_index < xenos_vertices.size(); ++vertex_index) {
+        ShaderAluTemporaryRegisterBank registers{};
+        registers[1] = clip_positions[vertex_index];
+        registers[3] = green;
+        const auto shader = execute_shader_exec_block(
+            vertex_exec, vertex_ucode, {}, shader_memory, registers, {});
+        if (!shader || shader.vertex_outputs.position_write_mask != 0x0fU ||
+            shader.vertex_outputs.interpolator_write_masks[0] != 0x0fU) {
+            std::cerr << "FAIL: Xenos vertex EXEC did not produce complete position/color outputs"
+                      << (shader ? "" : ": " + shader.error) << '\n';
+            return 1;
+        }
+        xenos_vertices[vertex_index] = {shader.vertex_outputs.position,
+                                        shader.vertex_outputs.interpolators[0]};
+    }
+    const auto xenos_triangle =
+        result.context->render_offscreen_indexed_triangles(xenos_vertices, indices);
+    if (!xenos_triangle ||
+        xenos_triangle.center_rgba != std::array<std::uint8_t, 4>{0U, 255U, 0U, 255U} ||
+        xenos_triangle.corner_rgba != std::array<std::uint8_t, 4>{255U, 0U, 255U, 255U} ||
+        xenos_triangle.green_pixel_count != triangle.green_pixel_count) {
+        std::cerr << "FAIL: CPU Xenos exports did not survive Vulkan vertex upload and rasterization"
+                  << (xenos_triangle ? "" : ": " + xenos_triangle.error) << '\n';
+        return 1;
+    }
+
     if (triangle.center_rgba != std::array<std::uint8_t, 4>{0U, 255U, 0U, 255U} ||
         triangle.corner_rgba != std::array<std::uint8_t, 4>{255U, 0U, 255U, 255U} ||
         triangle.green_pixel_count == 0U || triangle.green_pixel_count >= 16U * 16U) {
@@ -80,7 +125,7 @@ int main() {
         std::cerr << "FAIL: concurrent Vulkan queue submissions were not serialized correctly\n";
         return 1;
     }
-    std::cout << "Vulkan offscreen clear/readback and triangle passed on " << device.name
-              << " (" << triangle.green_pixel_count << " green pixels)\n";
+    std::cout << "Vulkan offscreen clear/readback, indexed triangle and Xenos EXEC output passed on "
+              << device.name << " (" << triangle.green_pixel_count << " green pixels)\n";
     return 0;
 }

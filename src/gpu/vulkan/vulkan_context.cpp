@@ -613,9 +613,9 @@ VulkanPixelReadbackResult VulkanContext::readback_clear_color_pixel() const {
 
 VulkanTriangleReadbackResult VulkanContext::render_offscreen_test_triangle() const {
     constexpr std::array<VulkanTestVertex, 3> vertices{{
-        {{{-0.8F, -0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
-        {{{0.8F, -0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
-        {{{0.0F, 0.8F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{-0.8F, -0.8F, 0.0F, 1.0F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{0.8F, -0.8F, 0.0F, 1.0F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
+        {{{0.0F, 0.8F, 0.0F, 1.0F}}, {{0.0F, 1.0F, 0.0F, 1.0F}}},
     }};
     constexpr std::array<std::uint32_t, 3> indices{0U, 1U, 2U};
     return render_offscreen_indexed_triangles(vertices, indices);
@@ -626,8 +626,8 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
     std::span<const std::uint32_t> indices) const {
     constexpr std::size_t maximum_vertices = 65'536U;
     constexpr std::size_t maximum_indices = 196'608U;
-    static_assert(sizeof(VulkanTestVertex) == 6U * sizeof(float));
-    static_assert(offsetof(VulkanTestVertex, color) == 2U * sizeof(float));
+    static_assert(sizeof(VulkanTestVertex) == 8U * sizeof(float));
+    static_assert(offsetof(VulkanTestVertex, color) == 4U * sizeof(float));
     if (vertices.empty() || indices.empty() || indices.size() % 3U != 0U) {
         return {{}, {}, 0U, "Indexed triangle draw requires vertices and complete triangles"};
     }
@@ -855,7 +855,7 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
     const VkVertexInputBindingDescription vertex_binding{
         0U, static_cast<std::uint32_t>(sizeof(VulkanTestVertex)), VK_VERTEX_INPUT_RATE_VERTEX};
     const std::array<VkVertexInputAttributeDescription, 2> vertex_attributes{{
-        {0U, 0U, VK_FORMAT_R32G32_SFLOAT,
+        {0U, 0U, VK_FORMAT_R32G32B32A32_SFLOAT,
          static_cast<std::uint32_t>(offsetof(VulkanTestVertex, position))},
         {1U, 0U, VK_FORMAT_R32G32B32A32_SFLOAT,
          static_cast<std::uint32_t>(offsetof(VulkanTestVertex, color))},
