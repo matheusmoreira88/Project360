@@ -11,6 +11,8 @@
 #include <iostream>
 #include <limits>
 #include <span>
+#include <sstream>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -73,9 +75,10 @@ int main() {
     std::uint32_t word = 0U;
 
     check(KernelDispatcher::ex_allocate_pool_ordinal == 9U &&
+              KernelDispatcher::dbg_print_ordinal == 3U &&
               KernelDispatcher::ex_allocate_pool_with_tag_ordinal == 10U &&
               KernelDispatcher::ex_free_pool_ordinal == 15U,
-          "pool import constants match the Xbox 360 export table ordinals");
+          "debug-print and pool imports match the Xbox 360 export table ordinals");
     check(KernelDispatcher::ke_query_interrupt_time_ordinal == 130U &&
               KernelDispatcher::ke_query_performance_frequency_ordinal == 131U &&
               KernelDispatcher::ke_query_system_time_ordinal == 132U &&
@@ -751,6 +754,75 @@ int main() {
     check(misaligned == KernelDispatchStatus::invalid_guest_argument &&
               state.pc == 0x800180U,
           "RtlFillMemoryUlong rejects unaligned guest ranges without returning");
+
+    constexpr auto debug_format_address = data_page + 0x100U;
+    constexpr auto debug_text_address = data_page + 0x140U;
+    constexpr std::string_view debug_format = "homebrew %x %s%% %d %X %p %c";
+    constexpr std::string_view debug_text = "booted";
+    bool debug_strings_loaded = true;
+    for (std::size_t index = 0U; index < debug_format.size(); ++index) {
+        debug_strings_loaded = debug_strings_loaded &&
+                               memory.write_u8(debug_format_address + index,
+                                                static_cast<std::uint8_t>(debug_format[index]));
+    }
+    debug_strings_loaded = debug_strings_loaded &&
+                           memory.write_u8(debug_format_address + debug_format.size(), 0U);
+    for (std::size_t index = 0U; index < debug_text.size(); ++index) {
+        debug_strings_loaded = debug_strings_loaded &&
+                               memory.write_u8(debug_text_address + index,
+                                                static_cast<std::uint8_t>(debug_text[index]));
+    }
+    debug_strings_loaded = debug_strings_loaded &&
+                           memory.write_u8(debug_text_address + debug_text.size(), 0U);
+    state.gpr[3] = debug_format_address;
+    state.gpr[4] = 0x2aU;
+    state.gpr[5] = debug_text_address;
+    state.gpr[6] = 0xfffffff9U;
+    state.gpr[7] = 0xbeefU;
+    state.gpr[8] = 0x1234U;
+    state.gpr[9] = 'A';
+    state.lr = 0x5207U;
+    state.pc = 0x8001a0U;
+    std::ostringstream debug_log;
+    auto* const original_log_buffer = std::clog.rdbuf(debug_log.rdbuf());
+    const auto debug_print = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::dbg_print_ordinal}, state, memory);
+    std::clog.rdbuf(original_log_buffer);
+    check(debug_strings_loaded && debug_print == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0U && state.pc == 0x5204U &&
+              debug_log.str().find("[guest] homebrew 2a booted% -7 BEEF 0x1234 A") !=
+                  std::string::npos,
+          "DbgPrint ordinal 3 formats bounded integer/string register arguments and emits a guest log");
+
+    constexpr auto unsupported_debug_format_address = data_page + 0x180U;
+    constexpr std::array<std::uint8_t, 3> unsupported_debug_format{'%', 'f', 0U};
+    bool unsupported_format_loaded = true;
+    for (std::size_t index = 0U; index < unsupported_debug_format.size(); ++index) {
+        unsupported_format_loaded = unsupported_format_loaded &&
+                                   memory.write_u8(unsupported_debug_format_address + index,
+                                                    unsupported_debug_format[index]);
+    }
+    state.gpr[3] = unsupported_debug_format_address;
+    state.pc = 0x8001c0U;
+    const auto unsupported_debug_specifier = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::dbg_print_ordinal}, state, memory);
+    check(unsupported_format_loaded &&
+              unsupported_debug_specifier == KernelDispatchStatus::invalid_guest_argument &&
+              state.pc == 0x8001c0U,
+          "DbgPrint rejects unsupported format specifiers without returning false success");
+
+    const auto unterminated_format_address = data_page + GuestMemory::page_size - 2U;
+    const bool unterminated_format_loaded =
+        memory.write_u8(unterminated_format_address, 'x') &&
+        memory.write_u8(unterminated_format_address + 1U, 'y');
+    state.gpr[3] = unterminated_format_address;
+    state.pc = 0x8001e0U;
+    const auto inaccessible_debug_terminator = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::dbg_print_ordinal}, state, memory);
+    check(unterminated_format_loaded &&
+              inaccessible_debug_terminator == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x8001e0U,
+          "DbgPrint reports an inaccessible guest format terminator without advancing the PC");
 
     state.gpr[3] = 0xdeadbeefU;
     state.pc = 0x800200U;

@@ -4,6 +4,7 @@ The dispatcher accepts only the `xboxkrnl.exe` function exports listed below. Or
 
 | Export | Hex ordinal | Decimal ordinal | Project360 behavior | Limits |
 |---|---:|---:|---|---|
+| `DbgPrint` | `0x003` | 3 | Partial | Bounded guest ANSI format; supports `%s`, `%c`, `%d`, `%i`, `%u`, `%x`, `%X`, `%p`, `%%`; up to seven register arguments; width/precision/length modifiers and stack overflow arguments are unsupported |
 | `ExAllocatePool` | `0x009` | 9 | Implemented | Nonpaged pool type 0 only; bounded guest pool |
 | `ExAllocatePoolWithTag` | `0x00A` | 10 | Implemented | Tag accepted but not retained; pool type 0 only |
 | `ExFreePool` | `0x00F` | 15 | Implemented | Exact-base allocations only |

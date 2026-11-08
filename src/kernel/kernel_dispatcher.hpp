@@ -35,6 +35,7 @@ enum class KernelDispatchStatus : std::uint8_t {
 
 class KernelDispatcher {
 public:
+    static constexpr std::uint16_t dbg_print_ordinal = 3;
     static constexpr std::uint16_t ex_allocate_pool_ordinal = 9;
     static constexpr std::uint16_t ex_allocate_pool_with_tag_ordinal = 10;
     static constexpr std::uint16_t ex_free_pool_ordinal = 15;

@@ -1,9 +1,12 @@
 #include "kernel/kernel_dispatcher.hpp"
 
+#include "common/log.hpp"
 #include "memory/guest_memory.hpp"
 
 #include <array>
+#include <bit>
 #include <chrono>
+#include <charconv>
 #include <cstddef>
 #include <limits>
 #include <span>
@@ -13,6 +16,7 @@ namespace project360::kernel {
 namespace {
 
 constexpr std::uint32_t kErrorMessageIdNotFound = 317U;
+constexpr std::size_t kMaximumDebugPrintLength = 1024U;
 
 [[nodiscard]] constexpr std::uint32_t nt_status_to_dos_error(
     std::uint32_t status) noexcept {
@@ -93,6 +97,7 @@ constexpr std::uint32_t kErrorMessageIdNotFound = 317U;
 [[nodiscard]] constexpr bool is_supported_xboxkrnl_ordinal(
     std::uint16_t ordinal) noexcept {
     switch (ordinal) {
+    case KernelDispatcher::dbg_print_ordinal:
     case KernelDispatcher::ex_allocate_pool_ordinal:
     case KernelDispatcher::ex_allocate_pool_with_tag_ordinal:
     case KernelDispatcher::ex_free_pool_ordinal:
@@ -119,6 +124,131 @@ constexpr std::uint32_t kErrorMessageIdNotFound = 317U;
     }
 }
 
+[[nodiscard]] KernelDispatchStatus format_debug_print(
+    const memory::GuestMemory& memory, const cpu::CpuState& state,
+    std::array<char, kMaximumDebugPrintLength>& output,
+    std::size_t& output_size) noexcept {
+    constexpr auto guest_address_limit = std::uint64_t{0xffff'ffffU};
+    const auto format_address = state.gpr[3];
+    if (format_address == 0U || format_address > guest_address_limit) {
+        return KernelDispatchStatus::invalid_guest_argument;
+    }
+
+    const auto append = [&](char character) noexcept {
+        if (output_size >= output.size()) return false;
+        output[output_size++] = character;
+        return true;
+    };
+    const auto append_text = [&](std::string_view text) noexcept {
+        if (text.size() > output.size() - output_size) return false;
+        for (const auto character : text) output[output_size++] = character;
+        return true;
+    };
+    const auto append_number = [&](std::uint64_t value, int base,
+                                   bool signed_decimal) noexcept {
+        if (output_size >= output.size()) return false;
+        const auto first = output.data() + output_size;
+        const auto last = output.data() + output.size();
+        const auto conversion = signed_decimal
+                                    ? std::to_chars(first, last,
+                                                    std::bit_cast<std::int32_t>(
+                                                        static_cast<std::uint32_t>(value)),
+                                                    base)
+                                    : std::to_chars(first, last, value, base);
+        if (conversion.ec != std::errc{}) return false;
+        output_size = static_cast<std::size_t>(conversion.ptr - output.data());
+        return true;
+    };
+
+    std::uint64_t format_offset = 0U;
+    std::uint32_t argument_index = 4U;
+    while (format_offset < kMaximumDebugPrintLength) {
+        if (format_offset > guest_address_limit - format_address) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        std::uint8_t character = 0U;
+        if (!memory.read_u8(format_address + format_offset, character)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        ++format_offset;
+        if (character == 0U) return KernelDispatchStatus::handled;
+        if (character != '%') {
+            if (!append(static_cast<char>(character))) {
+                return KernelDispatchStatus::invalid_guest_argument;
+            }
+            continue;
+        }
+
+        if (format_offset > guest_address_limit - format_address) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        std::uint8_t specifier = 0U;
+        if (!memory.read_u8(format_address + format_offset, specifier)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        ++format_offset;
+        if (specifier == '%') {
+            if (!append('%')) return KernelDispatchStatus::invalid_guest_argument;
+            continue;
+        }
+        if (specifier != 's' && specifier != 'c' && specifier != 'd' &&
+            specifier != 'i' && specifier != 'u' && specifier != 'x' &&
+            specifier != 'X' && specifier != 'p') {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        if (argument_index > 10U) return KernelDispatchStatus::invalid_guest_argument;
+        const auto argument = state.gpr[argument_index++];
+
+        if (specifier == 's') {
+            if (argument == 0U || argument > guest_address_limit) {
+                return KernelDispatchStatus::invalid_guest_argument;
+            }
+            std::uint64_t string_offset = 0U;
+            for (;;) {
+                if (string_offset >= output.size() - output_size ||
+                    string_offset > guest_address_limit - argument) {
+                    return KernelDispatchStatus::invalid_guest_argument;
+                }
+                std::uint8_t string_character = 0U;
+                if (!memory.read_u8(argument + string_offset, string_character)) {
+                    return KernelDispatchStatus::guest_memory_fault;
+                }
+                if (string_character == 0U) break;
+                output[output_size++] = static_cast<char>(string_character);
+                ++string_offset;
+            }
+        } else if (specifier == 'c') {
+            if (!append(static_cast<char>(argument & 0xffU))) {
+                return KernelDispatchStatus::invalid_guest_argument;
+            }
+        } else {
+            if (specifier == 'p' && argument > guest_address_limit) {
+                return KernelDispatchStatus::invalid_guest_argument;
+            }
+            if (specifier == 'p' && !append_text("0x")) {
+                return KernelDispatchStatus::invalid_guest_argument;
+            }
+            const auto base = specifier == 'x' || specifier == 'X' || specifier == 'p'
+                                  ? 16
+                                  : 10;
+            const bool signed_decimal = specifier == 'd' || specifier == 'i';
+            const auto number_start = output_size;
+            if (!append_number(static_cast<std::uint32_t>(argument), base,
+                               signed_decimal)) {
+                return KernelDispatchStatus::invalid_guest_argument;
+            }
+            if (specifier == 'X') {
+                for (auto index = number_start; index < output_size; ++index) {
+                    if (output[index] >= 'a' && output[index] <= 'f') {
+                        output[index] = static_cast<char>(output[index] - 'a' + 'A');
+                    }
+                }
+            }
+        }
+    }
+    return KernelDispatchStatus::invalid_guest_argument;
+}
+
 
 } // namespace
 
@@ -138,6 +268,17 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
     }
     if (!is_supported_xboxkrnl_ordinal(import.ordinal)) {
         return KernelDispatchStatus::unsupported_export;
+    }
+    if (import.ordinal == dbg_print_ordinal) {
+        std::array<char, kMaximumDebugPrintLength> output{};
+        std::size_t output_size = 0U;
+        const auto status = format_debug_print(memory, state, output, output_size);
+        if (status != KernelDispatchStatus::handled) return status;
+        common::log(common::LogLevel::info, "guest",
+                    std::string_view(output.data(), output_size));
+        state.gpr[3] = 0U;
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
     }
     if (import.ordinal == ex_allocate_pool_ordinal ||
         import.ordinal == ex_allocate_pool_with_tag_ordinal) {
