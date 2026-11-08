@@ -1175,26 +1175,13 @@ int main() {
     check(wrong_library == KernelDispatchStatus::unsupported_library,
           "an ordinal from another import library is not misrouted to xboxkrnl");
 
-    constexpr std::uint64_t test_pcr_address = data_page + 0x500U;
-    constexpr std::uint32_t test_thread_object =
-        static_cast<std::uint32_t>(data_page + 0x700U);
-    check(memory.write_u32_be(test_pcr_address + 0x100U, test_thread_object),
-          "test fixture stores current-thread pointer in the guest PCR");
-    state.gpr[13] = test_pcr_address;
-    state.lr = 0x3f07U;
+    state.gpr[3] = 0x12345678U;
     state.pc = 0x8003f0U;
-    const auto current_thread = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::ke_get_current_thread_ordinal}, state, memory);
-    check(current_thread == KernelDispatchStatus::handled &&
-              state.gpr[3] == test_thread_object && state.pc == 0x3f04U,
-          "KeGetCurrentThread returns KPCR.current_thread from the Xenon r13 PCR");
-    state.gpr[13] = 0x1'0000'0000ULL;
-    state.pc = 0x8003f8U;
-    const auto invalid_current_thread_pcr = KernelDispatcher{}.dispatch(
-        {"xboxkrnl.exe", KernelDispatcher::ke_get_current_thread_ordinal}, state, memory);
-    check(invalid_current_thread_pcr == KernelDispatchStatus::invalid_guest_argument &&
-              state.pc == 0x8003f8U,
-          "KeGetCurrentThread rejects a PCR pointer outside the 32-bit guest address space");
+    const auto unsupported_ordinal_104 = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", 104U}, state, memory);
+    check(unsupported_ordinal_104 == KernelDispatchStatus::unsupported_export &&
+              state.gpr[3] == 0x12345678U && state.pc == 0x8003f0U,
+          "Xbox 360 ordinal 104 is not misrouted as KeGetCurrentThread");
 
     state.gpr[3] = 0xdeadbeefU;
     state.lr = 0x4107U;
@@ -1340,17 +1327,14 @@ int main() {
     tls_guest_image.xex.tls_info = project360::loader::XexTlsInfo{2U, 0U, 8U, 0U};
     project360::loader::XexImportLibrary tls_import_library{};
     tls_import_library.name = "xboxkrnl.exe";
-    tls_import_library.import_record_addresses = {
-        0x5000U, 0x5004U, 0x5008U, 0x500cU, 0x5010U};
+    tls_import_library.import_record_addresses = {0x5000U, 0x5004U, 0x5008U, 0x500cU};
     tls_import_library.import_types = {
-        std::uint8_t{1U}, std::uint8_t{1U}, std::uint8_t{1U}, std::uint8_t{1U},
-        std::uint8_t{1U}};
+        std::uint8_t{1U}, std::uint8_t{1U}, std::uint8_t{1U}, std::uint8_t{1U}};
     tls_import_library.import_ordinals = {
         KernelDispatcher::ke_tls_alloc_ordinal,
         KernelDispatcher::ke_tls_set_value_ordinal,
         KernelDispatcher::ke_tls_get_value_ordinal,
         KernelDispatcher::ke_tls_free_ordinal,
-        KernelDispatcher::ke_get_current_thread_ordinal,
     };
     tls_guest_image.xex.import_libraries.push_back(std::move(tls_import_library));
     GuestMemory tls_guest_memory(32U * static_cast<std::size_t>(GuestMemory::page_size));
@@ -1369,14 +1353,6 @@ int main() {
           "main-thread bootstrap exposes dynamic TLS slots after the static template");
     const project360::kernel::GuestExecutor tls_guest_executor(
         tls_guest_image, {guest_tls_context.tls_slot_address, guest_tls_context.tls_slot_count});
-    tls_guest_state.pc = 0x5010U;
-    tls_guest_state.lr = 0x6000U;
-    const auto guest_current_thread =
-        tls_guest_executor.step(tls_guest_state, tls_guest_memory);
-    check(guest_current_thread.status == project360::cpu::StepStatus::executed &&
-              tls_guest_state.gpr[3] == guest_tls_context.thread_object_address &&
-              tls_guest_state.pc == 0x6000U,
-          "GuestExecutor KeGetCurrentThread returns the bootstrapped KTHREAD through its thunk");
     tls_guest_state.pc = 0x5000U;
     tls_guest_state.lr = 0x6004U;
     const auto guest_tls_alloc = tls_guest_executor.step(tls_guest_state, tls_guest_memory);

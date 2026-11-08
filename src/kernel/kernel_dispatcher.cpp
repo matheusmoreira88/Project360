@@ -152,20 +152,6 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
         state.pc = state.lr & ~std::uint64_t{3U};
         return KernelDispatchStatus::handled;
     }
-    if (import.ordinal == ke_get_current_thread_ordinal) {
-        constexpr std::uint64_t current_thread_offset = 0x100U;
-        if (state.gpr[13] > std::numeric_limits<std::uint32_t>::max() -
-                                current_thread_offset) {
-            return KernelDispatchStatus::invalid_guest_argument;
-        }
-        std::uint32_t current_thread = 0U;
-        if (!memory.read_u32_be(state.gpr[13] + current_thread_offset, current_thread)) {
-            return KernelDispatchStatus::guest_memory_fault;
-        }
-        state.gpr[3] = current_thread;
-        state.pc = state.lr & ~std::uint64_t{3U};
-        return KernelDispatchStatus::handled;
-    }
     if (import.ordinal == ke_query_performance_frequency_ordinal) {
         state.gpr[3] = xbox_360_performance_frequency;
         state.pc = state.lr & ~std::uint64_t{3U};
