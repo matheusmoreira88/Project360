@@ -1107,4 +1107,31 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_xenos_triangles(
     return render_offscreen_indexed_triangles(backend_vertices, indices);
 }
 
+VulkanTriangleReadbackResult VulkanContext::render_offscreen_xenos_geometry(
+    std::span<const xenos::ShaderVertexOutputs> vertices,
+    std::uint8_t color_interpolator,
+    const xenos::PrimitiveAssemblyResult& geometry) const {
+    if (!geometry) {
+        return {{}, {}, 0U, "Xenos geometry preparation failed: " + geometry.error};
+    }
+    if (geometry.topology != xenos::PrimitiveTopology::triangles) {
+        return {{}, {}, 0U, "Vulkan diagnostic currently accepts assembled triangle lists only"};
+    }
+    std::size_t covered_indices = 0U;
+    for (const auto& range : geometry.ranges) {
+        if (range.first_index != covered_indices || range.index_count == 0U ||
+            range.first_index > geometry.indices.size() ||
+            range.index_count > geometry.indices.size() - range.first_index ||
+            range.index_count % 3U != 0U) {
+            return {{}, {}, 0U, "Xenos triangle geometry has invalid or incomplete ranges"};
+        }
+        covered_indices += range.index_count;
+    }
+    if (covered_indices != geometry.indices.size()) {
+        return {{}, {}, 0U, "Xenos triangle geometry ranges do not cover all prepared indexes"};
+    }
+    return render_offscreen_xenos_triangles(vertices, color_interpolator,
+                                            geometry.indices);
+}
+
 } // namespace project360::gpu::vulkan

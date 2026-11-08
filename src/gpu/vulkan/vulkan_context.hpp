@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/shader_alu.hpp"
 
 #include <array>
@@ -83,6 +84,10 @@ class VulkanContext final {
         std::span<const xenos::ShaderVertexOutputs> vertices,
         std::uint8_t color_interpolator,
         std::span<const std::uint32_t> indices) const;
+    [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_xenos_geometry(
+        std::span<const xenos::ShaderVertexOutputs> vertices,
+        std::uint8_t color_interpolator,
+        const xenos::PrimitiveAssemblyResult& geometry) const;
 
   private:
     struct Impl;

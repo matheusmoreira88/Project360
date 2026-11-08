@@ -1,10 +1,13 @@
 #include "gpu/vulkan/vulkan_context.hpp"
+#include "gpu/xenos/registers.hpp"
 #include "gpu/xenos/shader_execution.hpp"
 #include "memory/guest_memory.hpp"
 
 #include <array>
+#include <cstddef>
 #include <iostream>
 #include <thread>
+#include <vector>
 
 int main() {
     const auto result = project360::gpu::vulkan::VulkanContext::create();
@@ -45,7 +48,7 @@ int main() {
     }
 
     using namespace project360::gpu::xenos;
-    project360::memory::GuestMemory shader_memory(1U);
+    project360::memory::GuestMemory shader_memory(0x1000U);
     const std::array<std::array<std::uint32_t, 3>, 2> vertex_ucode{
         std::array<std::uint32_t, 3>{62U | (1U << 15U) | (0x0fU << 16U), 0U,
                                     0xe0030201U},
@@ -72,14 +75,51 @@ int main() {
         }
         xenos_vertices[vertex_index] = shader.vertex_outputs;
     }
-    const auto xenos_triangle =
-        result.context->render_offscreen_xenos_triangles(xenos_vertices, 0U, indices);
+    const std::array<std::byte, 6> index_data{
+        std::byte{0U}, std::byte{0U}, std::byte{1U},
+        std::byte{0U}, std::byte{2U}, std::byte{0U}};
+    if (!shader_memory.load(0x100U, index_data)) {
+        std::cerr << "FAIL: could not seed synthetic guest index buffer\n";
+        return 1;
+    }
+    project360::gpu::xenos::DrawCommand draw_command{};
+    draw_command.source = project360::gpu::xenos::DrawSource::dma;
+    draw_command.index_count = 3U;
+    draw_command.primitive_type = 4U;
+    draw_command.dma_base = 0x100U;
+    draw_command.dma_size = 3U;
+    std::vector<std::uint32_t> draw_registers(
+        project360::gpu::xenos::register_index::vgt_indx_offset + 1U, 0U);
+    draw_registers[project360::gpu::xenos::register_index::vgt_max_vtx_indx] = 0x00ffffffU;
+    const auto prepared_geometry =
+        project360::gpu::xenos::prepare_draw_geometry(draw_command, shader_memory,
+                                                       draw_registers);
+    const auto xenos_triangle = result.context->render_offscreen_xenos_geometry(
+        xenos_vertices, 0U, prepared_geometry);
     if (!xenos_triangle ||
         xenos_triangle.center_rgba != std::array<std::uint8_t, 4>{0U, 255U, 0U, 255U} ||
         xenos_triangle.corner_rgba != std::array<std::uint8_t, 4>{255U, 0U, 255U, 255U} ||
         xenos_triangle.green_pixel_count != triangle.green_pixel_count) {
         std::cerr << "FAIL: CPU Xenos exports did not survive Vulkan vertex upload and rasterization"
                   << (xenos_triangle ? "" : ": " + xenos_triangle.error) << '\n';
+        return 1;
+    }
+    auto malformed_geometry = prepared_geometry;
+    malformed_geometry.ranges[0].index_count = 2U;
+    const auto malformed_draw = result.context->render_offscreen_xenos_geometry(
+        xenos_vertices, 0U, malformed_geometry);
+    if (malformed_draw || malformed_draw.error.find("invalid or incomplete ranges") ==
+                              std::string::npos) {
+        std::cerr << "FAIL: Vulkan accepted malformed prepared Xenos triangle ranges\n";
+        return 1;
+    }
+    auto line_geometry = prepared_geometry;
+    line_geometry.topology = project360::gpu::xenos::PrimitiveTopology::lines;
+    const auto unsupported_topology = result.context->render_offscreen_xenos_geometry(
+        xenos_vertices, 0U, line_geometry);
+    if (unsupported_topology ||
+        unsupported_topology.error.find("triangle lists only") == std::string::npos) {
+        std::cerr << "FAIL: Vulkan diagnostic accepted a non-triangle Xenos topology\n";
         return 1;
     }
     auto incomplete_xenos_vertex = xenos_vertices;
