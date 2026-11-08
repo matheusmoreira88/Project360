@@ -125,6 +125,20 @@ DecodeResult decode(std::uint32_t word) {
         }
         return {ins, {}};
     }
+    case 48: case 49: case 50: case 51: case 52: case 53: case 54: case 55: {
+        switch (primary) {
+        case 48: case 49: ins.opcode = Opcode::lfs; ins.update = primary == 49U; break;
+        case 50: case 51: ins.opcode = Opcode::lfd; ins.update = primary == 51U; break;
+        case 52: case 53: ins.opcode = Opcode::stfs; ins.update = primary == 53U; break;
+        case 54: case 55: ins.opcode = Opcode::stfd; ins.update = primary == 55U; break;
+        default: break;
+        }
+        ins.immediate = std::bit_cast<std::int16_t>(imm16);
+        if (ins.update && ins.ra == 0U) {
+            return {{}, "floating-point update load/store requires RA != 0"};
+        }
+        return {ins, {}};
+    }
     case 58:
     case 62: {
         const auto ds_xo = word & 0x3U;

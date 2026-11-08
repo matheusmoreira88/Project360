@@ -7,6 +7,7 @@ namespace project360::cpu {
 
 struct CpuState {
     std::array<std::uint64_t, 32> gpr{};
+    std::array<std::uint64_t, 32> fpr{};
     std::uint64_t pc{};
     std::uint64_t lr{};
     std::uint64_t ctr{};

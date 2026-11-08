@@ -4,6 +4,7 @@
 #include "memory/guest_memory.hpp"
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -872,6 +873,57 @@ void test_doubleword_memory_instructions() {
               update_fault.fault_info->kind == cpu::FaultKind::data_access &&
               update_fault.fault_info->effective_address == 64U,
           "out-of-range ldu reports the address and commits neither destination nor base");
+}
+
+void test_floating_point_load_store_transfers() {
+    using namespace project360;
+    memory::GuestMemory mem(512);
+    check(mem.write_u32_be(0x100U, 0x3fc00000U) &&
+              mem.write_u32_be(0x104U, 0x40100000U) &&
+              mem.write_u64_be(0x120U, std::bit_cast<std::uint64_t>(6.5)),
+          "seed IEEE binary32 and binary64 values"); // 1.5f, 2.25f and 6.5
+
+    put_word(mem, 0, d_form(14, 1, 0, 0x100)); // addi r1,r0,0x100
+    put_word(mem, 4, d_form(48, 2, 1, 0)); // lfs f2,0(r1)
+    put_word(mem, 8, d_form(54, 2, 1, 8)); // stfd f2,8(r1)
+    put_word(mem, 12, d_form(50, 3, 1, 8)); // lfd f3,8(r1)
+    put_word(mem, 16, d_form(52, 3, 1, 16)); // stfs f3,16(r1)
+    put_word(mem, 20, d_form(49, 4, 1, 4)); // lfsu f4,4(r1)
+    put_word(mem, 24, d_form(53, 3, 1, 20)); // stfsu f3,20(r1)
+    put_word(mem, 28, d_form(51, 5, 1, 8)); // lfdu f5,8(r1)
+    put_word(mem, 32, d_form(55, 5, 1, 8)); // stfdu f5,8(r1)
+
+    cpu::CpuState state{};
+    const auto result = cpu::Interpreter{}.run(state, mem, 9);
+    std::uint64_t stored_double = 0;
+    std::uint64_t stored_updated_double = 0;
+    std::uint32_t stored_single = 0;
+    const auto one_and_a_half = std::bit_cast<std::uint64_t>(1.5);
+    check(result.status == cpu::StepStatus::instruction_limit_reached &&
+              state.fpr[2] == one_and_a_half && state.fpr[3] == one_and_a_half,
+          "lfs widens binary32 to FPR and lfd preserves binary64 bits");
+    check(mem.read_u64_be(0x108U, stored_double) && stored_double == one_and_a_half &&
+              mem.read_u32_be(0x110U, stored_single) && stored_single == 0x3fc00000U,
+          "stfd preserves the widened value and stfs converts it back to binary32");
+    check(state.fpr[4] == std::bit_cast<std::uint64_t>(2.25) &&
+              state.fpr[5] == std::bit_cast<std::uint64_t>(6.5) && state.gpr[1] == 0x128U &&
+              mem.read_u64_be(0x128U, stored_updated_double) &&
+              stored_updated_double == std::bit_cast<std::uint64_t>(6.5),
+          "floating-point update loads/stores commit RA only after successful transfers");
+
+    const auto bad_update = cpu::decode(d_form(49, 4, 0, 4));
+    check(!bad_update, "floating-point update forms reject RA equal to zero");
+
+    memory::GuestMemory fault_mem(64);
+    put_word(fault_mem, 0, d_form(50, 5, 1, 0)); // lfd f5,0(r1)
+    cpu::CpuState fault_state{};
+    fault_state.gpr[1] = 4;
+    fault_state.fpr[5] = 0x0123456789abcdefULL;
+    const auto fault = cpu::Interpreter{}.step(fault_state, fault_mem);
+    check(fault.status == cpu::StepStatus::fault && fault_state.fpr[5] == 0x0123456789abcdefULL &&
+              fault_state.pc == 0 && fault.fault_info &&
+              fault.fault_info->kind == cpu::FaultKind::data_alignment,
+          "misaligned lfd reports a data-alignment fault without changing FPR or PC");
 }
 
 void test_indexed_memory_instructions() {
@@ -1799,6 +1851,7 @@ int main() {
     test_byte_and_halfword_memory_instructions();
     test_load_store_update_instructions();
     test_doubleword_memory_instructions();
+    test_floating_point_load_store_transfers();
     test_indexed_memory_instructions();
     test_indexed_update_memory_instructions();
     test_byte_reversed_indexed_memory_instructions();

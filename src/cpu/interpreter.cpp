@@ -737,6 +737,41 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.update) state.gpr[ins.ra] = address;
         break;
     }
+    case Opcode::lfs:
+    case Opcode::lfd: {
+        const auto address = base + static_cast<std::uint64_t>(ins.immediate);
+        if (ins.opcode == Opcode::lfs) {
+            std::uint32_t bits = 0;
+            if (!memory.read_u32_be(address, bits)) {
+                return data_fault(address, 4U, "lfs alignment or address fault");
+            }
+            const auto value = static_cast<double>(std::bit_cast<float>(bits));
+            state.fpr[ins.rt] = std::bit_cast<std::uint64_t>(value);
+        } else {
+            std::uint64_t bits = 0;
+            if (!memory.read_u64_be(address, bits)) {
+                return data_fault(address, 8U, "lfd alignment or address fault");
+            }
+            state.fpr[ins.rt] = bits;
+        }
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
+    case Opcode::stfs:
+    case Opcode::stfd: {
+        const auto address = base + static_cast<std::uint64_t>(ins.immediate);
+        if (ins.opcode == Opcode::stfs) {
+            const auto value = std::bit_cast<double>(state.fpr[ins.rt]);
+            const auto bits = std::bit_cast<std::uint32_t>(static_cast<float>(value));
+            if (!memory.write_u32_be(address, bits)) {
+                return data_fault(address, 4U, "stfs alignment or address fault");
+            }
+        } else if (!memory.write_u64_be(address, state.fpr[ins.rt])) {
+            return data_fault(address, 8U, "stfd alignment or address fault");
+        }
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
     case Opcode::std: {
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;

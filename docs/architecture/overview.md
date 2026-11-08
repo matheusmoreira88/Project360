@@ -6,6 +6,8 @@ The first build has three small layers:
 - `cpu::decode` converts a 32-bit PowerPC instruction word into a typed operation or an explicit diagnostic.
 - `cpu::Interpreter` executes one instruction or a bounded sequence against `CpuState` and guest memory. Current compare instructions update the selected CR field; conditional branches use CR bits and CTR according to their BO/BI fields. Unsupported or reserved forms return a fault instead of silently succeeding.
 
+`CpuState` includes 32 FPR bit containers. The implemented scalar transfer subset is `lfs`, `lfd`, `stfs`, and `stfd` in D form, including update variants. `lfs` widens an IEEE binary32 value into the binary64 FPR representation; `stfs` converts back to binary32. Floating arithmetic, FPSCR status/rounding control, denormal/NaN exception behavior and VMX128 are not implemented, so these transfers alone do not support floating-point programs generally.
+
 ## Memory mapping prototype
 
 `GuestMemory` retains a bounded byte buffer as physical backing storage. Page mapping is opt-in, uses a fixed 4 KiB page size in this prototype, supports aliases, and checks read/write/execute access separately. CPU instruction fetch now requests execute permission, while data operations request read or write permission. `load()` is a host-side initialization path to populate backing bytes. This is generic virtual-to-physical translation only: it has no Xenon segment/page-table rules, MMIO, shared CPU/GPU coherence, concurrent access synchronization, demand paging, or 512 MB console memory model.
