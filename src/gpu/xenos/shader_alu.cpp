@@ -1,5 +1,7 @@
 #include "gpu/xenos/shader_alu.hpp"
 
+#include <cmath>
+
 namespace project360::gpu::xenos {
 
 ShaderAluInstruction decode_shader_alu_instruction(
@@ -49,6 +51,50 @@ ShaderAluInstruction decode_shader_alu_instruction(
         ((word2 >> 29U) & 1U) != 0U,
     };
     return instruction;
+}
+
+ShaderAluSourceResult resolve_shader_alu_temporary_source(
+    const ShaderAluInstruction& instruction, ShaderAluSource source,
+    const ShaderAluTemporaryRegisterBank& temporary_registers) {
+    std::size_t source_slot = 0;
+    switch (source) {
+    case ShaderAluSource::source_1:
+        source_slot = 2U;
+        break;
+    case ShaderAluSource::source_2:
+        source_slot = 1U;
+        break;
+    case ShaderAluSource::source_3:
+        source_slot = 0U;
+        break;
+    default:
+        return {{}, "Invalid Xenos ALU source selector"};
+    }
+
+    if (!instruction.source_is_temporary[source_slot]) {
+        return {{}, "Xenos ALU constant sources are not implemented"};
+    }
+
+    const auto encoded_register = instruction.source_registers[source_slot];
+    if ((encoded_register & 0x40U) != 0U) {
+        return {{}, "Loop-relative Xenos temporary sources are not implemented"};
+    }
+    const auto register_index = static_cast<std::size_t>(encoded_register & 0x3fU);
+    const auto swizzle = instruction.source_swizzles[source_slot];
+    ShaderAluSourceResult result{};
+    for (std::size_t lane = 0; lane < result.value.size(); ++lane) {
+        const auto component = (swizzle >> (2U * lane)) & 0x03U;
+        const auto source_component = (component + lane) & 0x03U;
+        auto value = temporary_registers[register_index][source_component];
+        if ((encoded_register & 0x80U) != 0U) {
+            value = std::abs(value);
+        }
+        if (instruction.source_negate[source_slot]) {
+            value = -value;
+        }
+        result.value[lane] = value;
+    }
+    return result;
 }
 
 ShaderVectorAluResult evaluate_shader_vector_alu(

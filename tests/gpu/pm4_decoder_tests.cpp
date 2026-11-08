@@ -136,6 +136,33 @@ void test_shader_vector_alu_reference_subset() {
           "Xenos vector ALU subset rejects unsupported opcodes and predicates without partial output");
 }
 
+void test_shader_alu_temporary_source_resolution() {
+    using namespace project360::gpu::xenos;
+    ShaderAluTemporaryRegisterBank registers{};
+    registers[5] = {-10.0F, 20.0F, -30.0F, 40.0F};
+
+    // src1 is the low register byte, low swizzle byte and bit 29 selector.
+    const auto instruction = decode_shader_alu_instruction(
+        {0U, 0x01000055U, 0x20000000U | 0x00000085U});
+    const auto source = resolve_shader_alu_temporary_source(
+        instruction, ShaderAluSource::source_1, registers);
+    check(source && source.value == std::array<float, 4>{-20.0F, -30.0F, -40.0F, -10.0F},
+          "Xenos temporary source resolution applies relative swizzle, absolute value and negate");
+
+    const auto constant_instruction = decode_shader_alu_instruction(
+        {0U, 0U, 0x00000005U});
+    const auto constant_source = resolve_shader_alu_temporary_source(
+        constant_instruction, ShaderAluSource::source_1, registers);
+    auto relative_words = std::array<std::uint32_t, 3>{
+        0U, 0U, 0x20000000U | 0x00000045U};
+    const auto relative_instruction = decode_shader_alu_instruction(relative_words);
+    const auto relative_source = resolve_shader_alu_temporary_source(
+        relative_instruction, ShaderAluSource::source_1, registers);
+    check(!constant_source && constant_source.value == std::array<float, 4>{} &&
+              !relative_source && relative_source.value == std::array<float, 4>{},
+          "Xenos source resolver rejects constants and loop-relative registers without partial values");
+}
+
 void test_noops_and_malformed_streams() {
     using namespace project360::gpu::xenos;
     std::vector<std::uint8_t> noops;
@@ -1000,6 +1027,7 @@ int main() {
     test_packet_framing_and_metadata();
     test_shader_alu_word_decode();
     test_shader_vector_alu_reference_subset();
+    test_shader_alu_temporary_source_resolution();
     test_noops_and_malformed_streams();
     test_register_packet_application();
     test_type3_constant_uploads();
