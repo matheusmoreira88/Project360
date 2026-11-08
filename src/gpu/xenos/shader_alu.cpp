@@ -131,4 +131,22 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
     return result;
 }
 
+ShaderVectorAluResult evaluate_shader_vector_alu_from_temporaries(
+    const ShaderAluInstruction& instruction,
+    const ShaderAluTemporaryRegisterBank& temporary_registers,
+    const std::array<float, 4>& previous_destination) {
+    const auto source_1 = resolve_shader_alu_temporary_source(
+        instruction, ShaderAluSource::source_1, temporary_registers);
+    if (!source_1) {
+        return {{}, source_1.error};
+    }
+    const auto source_2 = resolve_shader_alu_temporary_source(
+        instruction, ShaderAluSource::source_2, temporary_registers);
+    if (!source_2) {
+        return {{}, source_2.error};
+    }
+    return evaluate_shader_vector_alu(instruction, source_1.value, source_2.value,
+                                      previous_destination);
+}
+
 } // namespace project360::gpu::xenos

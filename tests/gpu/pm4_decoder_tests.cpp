@@ -163,6 +163,29 @@ void test_shader_alu_temporary_source_resolution() {
           "Xenos source resolver rejects constants and loop-relative registers without partial values");
 }
 
+void test_shader_vector_alu_from_encoded_temporaries() {
+    using namespace project360::gpu::xenos;
+    ShaderAluTemporaryRegisterBank registers{};
+    registers[2] = {1.0F, 2.0F, 3.0F, 4.0F};
+    registers[3] = {10.0F, 20.0F, 30.0F, 40.0F};
+    const std::array<float, 4> previous{};
+
+    // ADD r0, r2, r3.yzwx with both source selectors set to temporaries.
+    const auto instruction = decode_shader_alu_instruction(
+        {0x000f0000U, 0x00005500U, 0x60000302U});
+    const auto result = evaluate_shader_vector_alu_from_temporaries(
+        instruction, registers, previous);
+    check(result && result.destination == std::array<float, 4>{21.0F, 32.0F, 43.0F, 14.0F},
+          "encoded Xenos ADD resolves temporary sources and swizzle before vector evaluation");
+
+    const auto unsupported_source = decode_shader_alu_instruction(
+        {0x000f0000U, 0U, 0x20000302U});
+    const auto rejected = evaluate_shader_vector_alu_from_temporaries(
+        unsupported_source, registers, previous);
+    check(!rejected && rejected.destination == std::array<float, 4>{},
+          "encoded vector evaluation rejects an unresolved constant source without a result");
+}
+
 void test_noops_and_malformed_streams() {
     using namespace project360::gpu::xenos;
     std::vector<std::uint8_t> noops;
@@ -1028,6 +1051,7 @@ int main() {
     test_shader_alu_word_decode();
     test_shader_vector_alu_reference_subset();
     test_shader_alu_temporary_source_resolution();
+    test_shader_vector_alu_from_encoded_temporaries();
     test_noops_and_malformed_streams();
     test_register_packet_application();
     test_type3_constant_uploads();

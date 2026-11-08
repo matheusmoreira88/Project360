@@ -78,4 +78,11 @@ struct ShaderAluSourceResult {
     const std::array<float, 4>& source_2,
     const std::array<float, 4>& previous_destination);
 
+// Resolves src1/src2 from the temporary bank and evaluates the vector half.
+// The caller remains responsible for scalar pairing and destination storage.
+[[nodiscard]] ShaderVectorAluResult evaluate_shader_vector_alu_from_temporaries(
+    const ShaderAluInstruction& instruction,
+    const ShaderAluTemporaryRegisterBank& temporary_registers,
+    const std::array<float, 4>& previous_destination);
+
 } // namespace project360::gpu::xenos
