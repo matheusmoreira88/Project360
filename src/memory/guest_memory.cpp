@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <mutex>
 #include <new>
+#include <shared_mutex>
 
 namespace project360::memory {
 
@@ -26,6 +28,7 @@ bool GuestMemory::map_page(std::uint64_t virtual_base, std::uint64_t physical_ba
 }
 
 bool GuestMemory::map_pages(std::span<const GuestPageMapping> mappings) {
+    const std::unique_lock lock(access_mutex_);
     for (const auto& mapping : mappings) {
         if ((mapping.virtual_base & (page_size - 1U)) != 0U ||
             (mapping.physical_base & (page_size - 1U)) != 0U ||
@@ -56,16 +59,18 @@ bool GuestMemory::map_pages(std::span<const GuestPageMapping> mappings) {
         }
         return false;
     }
-    if (!mappings.empty()) mapping_enabled_ = true;
+    if (!mappings.empty()) mapping_enabled_.store(true, std::memory_order_release);
     return true;
 }
 
 bool GuestMemory::unmap_page(std::uint64_t virtual_base) noexcept {
+    const std::unique_lock lock(access_mutex_);
     if ((virtual_base & (page_size - 1U)) != 0U) return false;
     return page_mappings_.erase(virtual_base) != 0U;
 }
 
 bool GuestMemory::protect_page(std::uint64_t virtual_base, GuestPageAccess access) noexcept {
+    const std::unique_lock lock(access_mutex_);
     if ((virtual_base & (page_size - 1U)) != 0U) return false;
     const auto found = page_mappings_.find(virtual_base);
     if (found == page_mappings_.end()) return false;
@@ -75,7 +80,13 @@ bool GuestMemory::protect_page(std::uint64_t virtual_base, GuestPageAccess acces
 
 bool GuestMemory::translate(std::uint64_t virtual_address, GuestPageAccess access,
                             std::uint64_t& physical_address) const noexcept {
-    if (!mapping_enabled_) {
+    const std::shared_lock lock(access_mutex_);
+    return translate_unlocked(virtual_address, access, physical_address);
+}
+
+bool GuestMemory::translate_unlocked(std::uint64_t virtual_address, GuestPageAccess access,
+                                     std::uint64_t& physical_address) const noexcept {
+    if (!mapping_enabled_.load(std::memory_order_acquire)) {
         if (!contains(virtual_address, 1U)) return false;
         physical_address = virtual_address;
         return true;
@@ -92,12 +103,14 @@ bool GuestMemory::translate(std::uint64_t virtual_address, GuestPageAccess acces
 }
 
 bool GuestMemory::page_mapped(std::uint64_t virtual_base) const noexcept {
+    const std::shared_lock lock(access_mutex_);
     if ((virtual_base & (page_size - 1U)) != 0U) return false;
     return page_mappings_.contains(virtual_base);
 }
 
 bool GuestMemory::physical_range_mapped(std::uint64_t physical_base,
                                         std::size_t length) const noexcept {
+    const std::shared_lock lock(access_mutex_);
     if (length == 0U || physical_base > std::numeric_limits<std::uint64_t>::max() - length) {
         return false;
     }
@@ -113,14 +126,14 @@ bool GuestMemory::physical_range_mapped(std::uint64_t physical_base,
 bool GuestMemory::resolve(std::uint64_t address, std::size_t length, GuestPageAccess access,
                           std::uint64_t& physical_address) const noexcept {
     if (length == 0U) return false;
-    if (!mapping_enabled_) {
+    if (!mapping_enabled_.load(std::memory_order_acquire)) {
         physical_address = address;
         return contains(physical_address, length);
     }
     if (address > std::numeric_limits<std::uint64_t>::max() - (length - 1U)) return false;
 
     std::uint64_t first_physical = 0;
-    if (!translate(address, access, first_physical)) return false;
+    if (!translate_unlocked(address, access, first_physical)) return false;
     const auto last_address = address + static_cast<std::uint64_t>(length - 1U);
     auto current_page = address & ~(page_size - 1U);
     const auto last_page = last_address & ~(page_size - 1U);
@@ -147,6 +160,7 @@ void GuestMemory::mark_write(std::uint64_t physical_address, std::size_t length)
 }
 
 bool GuestMemory::read_u8(std::uint64_t address, std::uint8_t& value) const noexcept {
+    const std::shared_lock lock(access_mutex_);
     std::uint64_t physical = 0;
     if (!resolve(address, 1U, GuestPageAccess::read, physical)) return false;
     const auto start = static_cast<std::size_t>(physical);
@@ -155,6 +169,7 @@ bool GuestMemory::read_u8(std::uint64_t address, std::uint8_t& value) const noex
 }
 
 bool GuestMemory::write_u8(std::uint64_t address, std::uint8_t value) noexcept {
+    const std::unique_lock lock(access_mutex_);
     std::uint64_t physical = 0;
     if (!resolve(address, 1U, GuestPageAccess::write, physical)) return false;
     const auto start = static_cast<std::size_t>(physical);
@@ -164,6 +179,7 @@ bool GuestMemory::write_u8(std::uint64_t address, std::uint8_t value) noexcept {
 }
 
 bool GuestMemory::read_u16_be(std::uint64_t address, std::uint16_t& value) const noexcept {
+    const std::shared_lock lock(access_mutex_);
     std::uint64_t physical = 0;
     if ((address & 1U) != 0U || !resolve(address, 2U, GuestPageAccess::read, physical)) return false;
     const auto start = static_cast<std::size_t>(physical);
@@ -173,6 +189,7 @@ bool GuestMemory::read_u16_be(std::uint64_t address, std::uint16_t& value) const
 }
 
 bool GuestMemory::write_u16_be(std::uint64_t address, std::uint16_t value) noexcept {
+    const std::unique_lock lock(access_mutex_);
     std::uint64_t physical = 0;
     if ((address & 1U) != 0U || !resolve(address, 2U, GuestPageAccess::write, physical)) return false;
     const auto start = static_cast<std::size_t>(physical);
@@ -183,6 +200,7 @@ bool GuestMemory::write_u16_be(std::uint64_t address, std::uint16_t value) noexc
 }
 
 bool GuestMemory::read_u32_be(std::uint64_t address, std::uint32_t& value) const noexcept {
+    const std::shared_lock lock(access_mutex_);
     std::uint64_t physical = 0;
     if ((address & 3U) != 0U || !resolve(address, 4U, GuestPageAccess::read, physical)) {
         return false;
@@ -196,6 +214,7 @@ bool GuestMemory::read_u32_be(std::uint64_t address, std::uint32_t& value) const
 }
 
 bool GuestMemory::write_u32_be(std::uint64_t address, std::uint32_t value) noexcept {
+    const std::unique_lock lock(access_mutex_);
     std::uint64_t physical = 0;
     if ((address & 3U) != 0U || !resolve(address, 4U, GuestPageAccess::write, physical)) {
         return false;
@@ -213,6 +232,7 @@ bool GuestMemory::read_reserve_u32_be(std::uint64_t address, std::uint32_t& valu
                                       std::uint64_t& reserved_address,
                                       std::uint64_t& granule,
                                       std::uint64_t& generation) const noexcept {
+    const std::shared_lock lock(access_mutex_);
     std::uint64_t physical = 0U;
     if ((address & 3U) != 0U || !resolve(address, 4U, GuestPageAccess::read, physical)) {
         return false;
@@ -233,6 +253,7 @@ bool GuestMemory::write_conditional_u32_be(std::uint64_t address, std::uint32_t 
                                            std::uint64_t granule,
                                            std::uint64_t generation,
                                            bool& stored) noexcept {
+    const std::unique_lock lock(access_mutex_);
     stored = false;
     std::uint64_t physical = 0U;
     if ((address & 3U) != 0U || !resolve(address, 4U, GuestPageAccess::write, physical)) {
@@ -255,6 +276,7 @@ bool GuestMemory::write_conditional_u32_be(std::uint64_t address, std::uint32_t 
 }
 
 bool GuestMemory::read_u64_be(std::uint64_t address, std::uint64_t& value) const noexcept {
+    const std::shared_lock lock(access_mutex_);
     std::uint64_t physical = 0;
     if ((address & 7U) != 0U || !resolve(address, 8U, GuestPageAccess::read, physical)) return false;
     const auto start = static_cast<std::size_t>(physical);
@@ -267,6 +289,7 @@ bool GuestMemory::read_u64_be(std::uint64_t address, std::uint64_t& value) const
 }
 
 bool GuestMemory::write_u64_be(std::uint64_t address, std::uint64_t value) noexcept {
+    const std::unique_lock lock(access_mutex_);
     std::uint64_t physical = 0;
     if ((address & 7U) != 0U || !resolve(address, 8U, GuestPageAccess::write, physical)) return false;
     const auto start = static_cast<std::size_t>(physical);
@@ -279,6 +302,7 @@ bool GuestMemory::write_u64_be(std::uint64_t address, std::uint64_t value) noexc
 }
 
 bool GuestMemory::fetch_u32_be(std::uint64_t address, std::uint32_t& value) const noexcept {
+    const std::shared_lock lock(access_mutex_);
     std::uint64_t physical = 0;
     if ((address & 3U) != 0U || !resolve(address, 4U, GuestPageAccess::execute, physical)) {
         return false;
@@ -292,6 +316,7 @@ bool GuestMemory::fetch_u32_be(std::uint64_t address, std::uint32_t& value) cons
 }
 
 bool GuestMemory::load(std::uint64_t address, std::span<const std::byte> data) noexcept {
+    const std::unique_lock lock(access_mutex_);
     if (!contains(address, data.size())) {
         return false;
     }
@@ -305,11 +330,12 @@ bool GuestMemory::load(std::uint64_t address, std::span<const std::byte> data) n
 
 bool GuestMemory::write_bytes(std::uint64_t address,
                               std::span<const std::byte> data) noexcept {
+    const std::unique_lock lock(access_mutex_);
     if (data.empty()) return true;
     if (address > std::numeric_limits<std::uint64_t>::max() - (data.size() - 1U)) {
         return false;
     }
-    if (!mapping_enabled_) {
+    if (!mapping_enabled_.load(std::memory_order_acquire)) {
         if (!contains(address, data.size())) return false;
         const auto start = static_cast<std::size_t>(address);
         std::copy(data.begin(), data.end(),
@@ -324,7 +350,7 @@ bool GuestMemory::write_bytes(std::uint64_t address,
     auto remaining = data.size();
     while (remaining != 0U) {
         std::uint64_t physical = 0U;
-        if (!translate(current, GuestPageAccess::write, physical)) return false;
+        if (!translate_unlocked(current, GuestPageAccess::write, physical)) return false;
         const auto page_offset = static_cast<std::size_t>(current & (page_size - 1U));
         const auto chunk = std::min(remaining,
                                     static_cast<std::size_t>(page_size) - page_offset);
@@ -337,7 +363,7 @@ bool GuestMemory::write_bytes(std::uint64_t address,
     remaining = data.size();
     while (remaining != 0U) {
         std::uint64_t physical = 0U;
-        (void)translate(current, GuestPageAccess::write, physical);
+        (void)translate_unlocked(current, GuestPageAccess::write, physical);
         const auto page_offset = static_cast<std::size_t>(current & (page_size - 1U));
         const auto chunk = std::min(remaining,
                                     static_cast<std::size_t>(page_size) - page_offset);
@@ -353,9 +379,10 @@ bool GuestMemory::write_bytes(std::uint64_t address,
 }
 
 bool GuestMemory::fill(std::uint64_t address, std::size_t length, std::byte value) noexcept {
+    const std::unique_lock lock(access_mutex_);
     if (length == 0U) return true;
     if (address > std::numeric_limits<std::uint64_t>::max() - (length - 1U)) return false;
-    if (!mapping_enabled_) {
+    if (!mapping_enabled_.load(std::memory_order_acquire)) {
         if (!contains(address, length)) return false;
         const auto start = static_cast<std::size_t>(address);
         std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(start),
@@ -370,7 +397,7 @@ bool GuestMemory::fill(std::uint64_t address, std::size_t length, std::byte valu
     auto current = address;
     while (true) {
         std::uint64_t physical = 0;
-        if (!translate(current, GuestPageAccess::write, physical)) return false;
+        if (!translate_unlocked(current, GuestPageAccess::write, physical)) return false;
         const auto remaining_in_page = static_cast<std::size_t>(
             page_size - (current & (page_size - 1U)));
         const auto remaining = static_cast<std::size_t>(last_address - current + 1U);
@@ -382,7 +409,7 @@ bool GuestMemory::fill(std::uint64_t address, std::size_t length, std::byte valu
     auto remaining = length;
     while (remaining != 0U) {
         std::uint64_t physical = 0;
-        (void)translate(current, GuestPageAccess::write, physical);
+        (void)translate_unlocked(current, GuestPageAccess::write, physical);
         const auto page_offset = static_cast<std::size_t>(current & (page_size - 1U));
         const auto chunk = std::min(remaining, static_cast<std::size_t>(page_size) - page_offset);
         const auto start = static_cast<std::size_t>(physical);
@@ -397,6 +424,7 @@ bool GuestMemory::fill(std::uint64_t address, std::size_t length, std::byte valu
 
 bool GuestMemory::fill_u32_be(std::uint64_t address, std::size_t length,
                               std::uint32_t value) noexcept {
+    const std::unique_lock lock(access_mutex_);
     if ((address & 3U) != 0U || (length & 3U) != 0U) return false;
     if (length == 0U) return true;
     if (address > std::numeric_limits<std::uint64_t>::max() - (length - 1U)) return false;
@@ -407,14 +435,14 @@ bool GuestMemory::fill_u32_be(std::uint64_t address, std::size_t length,
         static_cast<std::byte>((value >> 8U) & 0xffU),
         static_cast<std::byte>(value & 0xffU),
     };
-    if (mapping_enabled_) {
+    if (mapping_enabled_.load(std::memory_order_acquire)) {
         // Validate every page first, so a later mapping or permission failure
         // cannot leave earlier words in the guest range modified.
         const auto last_address = address + static_cast<std::uint64_t>(length - 1U);
         auto current = address;
         while (true) {
             std::uint64_t physical = 0;
-            if (!translate(current, GuestPageAccess::write, physical)) return false;
+            if (!translate_unlocked(current, GuestPageAccess::write, physical)) return false;
             const auto remaining_in_page = static_cast<std::size_t>(
                 page_size - (current & (page_size - 1U)));
             const auto remaining = static_cast<std::size_t>(last_address - current + 1U);
@@ -430,8 +458,8 @@ bool GuestMemory::fill_u32_be(std::uint64_t address, std::size_t length,
     while (remaining != 0U) {
         std::uint64_t physical = current;
         std::size_t chunk = remaining;
-        if (mapping_enabled_) {
-            (void)translate(current, GuestPageAccess::write, physical);
+        if (mapping_enabled_.load(std::memory_order_acquire)) {
+            (void)translate_unlocked(current, GuestPageAccess::write, physical);
             const auto page_offset = static_cast<std::size_t>(current & (page_size - 1U));
             chunk = std::min(remaining, static_cast<std::size_t>(page_size) - page_offset);
         }
@@ -449,20 +477,21 @@ bool GuestMemory::fill_u32_be(std::uint64_t address, std::size_t length,
 
 bool GuestMemory::move(std::uint64_t destination, std::uint64_t source,
                        std::size_t length) noexcept {
+    const std::unique_lock lock(access_mutex_);
     if (length == 0U) return true;
     if (destination > std::numeric_limits<std::uint64_t>::max() - (length - 1U) ||
         source > std::numeric_limits<std::uint64_t>::max() - (length - 1U)) {
         return false;
     }
 
-    if (mapping_enabled_) {
+    if (mapping_enabled_.load(std::memory_order_acquire)) {
         const auto validate = [this, length](std::uint64_t address,
                                              GuestPageAccess access) noexcept {
             auto current = address;
             auto remaining = length;
             while (remaining != 0U) {
                 std::uint64_t physical = 0U;
-                if (!translate(current, access, physical)) return false;
+                if (!translate_unlocked(current, access, physical)) return false;
                 const auto page_offset = static_cast<std::size_t>(
                     current & (page_size - 1U));
                 const auto chunk = std::min(remaining,
@@ -492,7 +521,7 @@ bool GuestMemory::move(std::uint64_t destination, std::uint64_t source,
         if (copy_backward) {
             const auto source_end = source + static_cast<std::uint64_t>(remaining);
             const auto destination_end = destination + static_cast<std::uint64_t>(remaining);
-            if (mapping_enabled_) {
+            if (mapping_enabled_.load(std::memory_order_acquire)) {
                 const auto source_page_tail = static_cast<std::size_t>(
                     ((source_end - 1U) & (page_size - 1U)) + 1U);
                 const auto destination_page_tail = static_cast<std::size_t>(
@@ -504,7 +533,7 @@ bool GuestMemory::move(std::uint64_t destination, std::uint64_t source,
         } else {
             source_address = source + static_cast<std::uint64_t>(length - remaining);
             destination_address = destination + static_cast<std::uint64_t>(length - remaining);
-            if (mapping_enabled_) {
+            if (mapping_enabled_.load(std::memory_order_acquire)) {
                 const auto source_page_tail = static_cast<std::size_t>(
                     page_size - (source_address & (page_size - 1U)));
                 const auto destination_page_tail = static_cast<std::size_t>(
@@ -515,9 +544,9 @@ bool GuestMemory::move(std::uint64_t destination, std::uint64_t source,
 
         std::uint64_t source_physical = source_address;
         std::uint64_t destination_physical = destination_address;
-        if (mapping_enabled_ &&
-            (!translate(source_address, GuestPageAccess::read, source_physical) ||
-             !translate(destination_address, GuestPageAccess::write,
+        if (mapping_enabled_.load(std::memory_order_acquire) &&
+            (!translate_unlocked(source_address, GuestPageAccess::read, source_physical) ||
+             !translate_unlocked(destination_address, GuestPageAccess::write,
                         destination_physical))) {
             return false;
         }

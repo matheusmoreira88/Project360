@@ -4,12 +4,14 @@
 #include "memory/guest_memory.hpp"
 
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -2425,6 +2427,57 @@ void test_reservation_instructions() {
           "misaligned lwarx faults without establishing a reservation");
 }
 
+void test_concurrent_reservation_instructions() {
+    using namespace project360;
+    constexpr std::uint32_t increments_per_thread = 1000U;
+    memory::GuestMemory mem(static_cast<std::size_t>(memory::GuestMemory::page_size));
+    check(mem.write_u32_be(0x100U, 0U), "initialize shared atomic counter");
+    put_word(mem, 0U, indexed_memory(3U, 0U, 2U, 20U)); // lwarx r3,0,r2
+    put_word(mem, 4U, d_form(14U, 4U, 3U, 1U)); // addi r4,r3,1
+    put_word(mem, 8U, indexed_memory(4U, 0U, 2U, 150U, true)); // stwcx. r4,0,r2
+
+    std::atomic<bool> worker_failed{false};
+    const auto increment = [&] {
+        cpu::Interpreter interpreter{};
+        cpu::CpuState state{};
+        state.gpr[2] = 0x100U;
+        for (std::uint32_t completed = 0U; completed < increments_per_thread;) {
+            bool stored = false;
+            for (std::uint32_t attempt = 0U; attempt < 10000U && !stored; ++attempt) {
+                state.pc = 0U;
+                const auto load = interpreter.step(state, mem);
+                state.pc = 4U;
+                const auto add_result = interpreter.step(state, mem);
+                state.pc = 8U;
+                const auto store = interpreter.step(state, mem);
+                if (load.status != cpu::StepStatus::executed ||
+                    add_result.status != cpu::StepStatus::executed ||
+                    store.status != cpu::StepStatus::executed) {
+                    worker_failed.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                stored = ((state.cr >> 28U) & 0x2U) != 0U;
+            }
+            if (!stored) {
+                worker_failed.store(true, std::memory_order_relaxed);
+                return;
+            }
+            ++completed;
+        }
+    };
+
+    std::thread first(increment);
+    std::thread second(increment);
+    first.join();
+    second.join();
+
+    std::uint32_t counter = 0U;
+    check(!worker_failed.load(std::memory_order_relaxed) &&
+              mem.read_u32_be(0x100U, counter) &&
+              counter == increments_per_thread * 2U,
+          "two concurrent PPC contexts increment one word without lost updates");
+}
+
 void test_memory_bounds_and_alignment() {
     project360::memory::GuestMemory mem(8);
     std::uint32_t value = 0;
@@ -2504,6 +2557,7 @@ int main() {
     test_conditional_branches();
     test_absolute_and_register_branches();
     test_reservation_instructions();
+    test_concurrent_reservation_instructions();
     test_memory_bounds_and_alignment();
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

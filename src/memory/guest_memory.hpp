@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <shared_mutex>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -70,7 +72,9 @@ public:
     [[nodiscard]] bool page_mapped(std::uint64_t virtual_base) const noexcept;
     [[nodiscard]] bool physical_range_mapped(std::uint64_t physical_base,
                                              std::size_t length) const noexcept;
-    [[nodiscard]] bool page_mapping_enabled() const noexcept { return mapping_enabled_; }
+    [[nodiscard]] bool page_mapping_enabled() const noexcept {
+        return mapping_enabled_.load(std::memory_order_acquire);
+    }
 
 private:
     struct PageMapping {
@@ -81,12 +85,16 @@ private:
     [[nodiscard]] bool resolve(std::uint64_t address, std::size_t length,
                                GuestPageAccess access,
                                std::uint64_t& physical_address) const noexcept;
+    [[nodiscard]] bool translate_unlocked(std::uint64_t virtual_address,
+                                          GuestPageAccess access,
+                                          std::uint64_t& physical_address) const noexcept;
     void mark_write(std::uint64_t physical_address, std::size_t length) noexcept;
 
     std::vector<std::byte> bytes_;
     std::vector<std::uint64_t> write_generations_;
     std::unordered_map<std::uint64_t, PageMapping> page_mappings_;
-    bool mapping_enabled_{};
+    mutable std::shared_mutex access_mutex_;
+    std::atomic_bool mapping_enabled_{};
 };
 
 } // namespace project360::memory

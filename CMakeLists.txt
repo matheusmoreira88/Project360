@@ -75,8 +75,9 @@ endif()
 
 if(PROJECT360_BUILD_TESTS)
     enable_testing()
+    find_package(Threads REQUIRED)
     add_executable(project360_tests tests/cpu/cpu_tests.cpp)
-    target_link_libraries(project360_tests PRIVATE project360_core)
+    target_link_libraries(project360_tests PRIVATE project360_core Threads::Threads)
     add_test(NAME project360_tests COMMAND project360_tests)
 
     add_executable(project360_gpu_tests tests/gpu/pm4_decoder_tests.cpp)
