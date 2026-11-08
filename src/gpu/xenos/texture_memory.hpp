@@ -46,9 +46,10 @@ struct TextureBlockReadResult {
     const memory::GuestMemory& memory);
 
 // Resolves a texel coordinate through a decoded base-level 2D texture
-// descriptor, then reads its raw storage block. The fetch pitch is in
-// 32-pixel units and is converted to storage blocks and 32-block tile pitch.
-// Endian conversion, pixel decoding, mip selection and sampling are not done.
+// descriptor, reads its storage block, and applies the descriptor endian mode
+// to the physical byte lanes. The fetch pitch is in 32-pixel units and is
+// converted to storage blocks and 32-block tile pitch. Pixel decoding, mip
+// selection and sampling are not done.
 [[nodiscard]] TextureBlockReadResult read_xenos_tiled_2d_texture_block(
     const TextureFetchConstant& fetch, std::uint32_t texel_x,
     std::uint32_t texel_y, const memory::GuestMemory& memory);

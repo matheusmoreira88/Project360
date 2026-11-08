@@ -2170,11 +2170,12 @@ void test_tiled_texture_block_addressing_and_reads() {
     const auto make_fetch = [](std::uint8_t format, std::uint32_t base,
                                std::uint32_t width, std::uint32_t height,
                                std::uint16_t pitch, bool tiled = true,
-                               bool stacked = false) {
+                               bool stacked = false, std::uint8_t endian = 0U) {
         std::array<std::uint32_t, 6> words{};
         words[0] = 2U | (static_cast<std::uint32_t>(pitch) << 22U) |
                    (tiled ? 0x80000000U : 0U);
-        words[1] = format | ((base >> 12U) << 12U) |
+        words[1] = format | (static_cast<std::uint32_t>(endian) << 6U) |
+                   ((base >> 12U) << 12U) |
                    (stacked ? (1U << 10U) : 0U);
         words[2] = ((width - 1U) & 0x1fffU) |
                    (((height - 1U) & 0x1fffU) << 13U);
@@ -2198,6 +2199,43 @@ void test_tiled_texture_block_addressing_and_reads() {
               "decoded texture descriptor resolves pitch, dimensions and physical block address");
         check(!read_xenos_tiled_2d_texture_block(rgba_fetch.constant, 64U, 0U, memory),
               "descriptor-backed texture read rejects coordinates outside visible dimensions");
+    }
+
+    constexpr std::array<std::byte, 4> endian_source{
+        std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44}};
+    constexpr std::array<std::array<std::byte, 4>, 4> endian_expected{{
+        {std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44}},
+        {std::byte{0x22}, std::byte{0x11}, std::byte{0x44}, std::byte{0x33}},
+        {std::byte{0x44}, std::byte{0x33}, std::byte{0x22}, std::byte{0x11}},
+        {std::byte{0x33}, std::byte{0x44}, std::byte{0x11}, std::byte{0x22}},
+    }};
+    check(memory.load(0x1000U, endian_source),
+          "texture endian fixture loads a known aligned physical dword");
+    for (std::uint8_t endian = 0U; endian <= 3U; ++endian) {
+        const auto endian_fetch = make_fetch(6U, 0x1000U, 64U, 64U, 2U, true, false,
+                                             endian);
+        if (!endian_fetch) {
+            check(false, "endian fixture descriptor decodes");
+            continue;
+        }
+        const auto endian_block = read_xenos_tiled_2d_texture_block(
+            endian_fetch.constant, 0U, 0U, memory);
+        check(endian_block &&
+                  std::equal(endian_expected[endian].begin(), endian_expected[endian].end(),
+                             endian_block.bytes.begin()),
+              "descriptor reader applies the selected Xenos byte-lane endian mode");
+    }
+
+    constexpr std::array<std::byte, 4> byte_texels{
+        std::byte{0xa1}, std::byte{0xb2}, std::byte{0xc3}, std::byte{0xd4}};
+    const auto byte_endian_fetch = make_fetch(2U, 0x4000U, 64U, 64U, 2U, true, false, 2U);
+    check(memory.load(0x4000U, byte_texels) && byte_endian_fetch,
+          "single-byte format endian fixture is initialized");
+    if (byte_endian_fetch) {
+        const auto byte_endian_block = read_xenos_tiled_2d_texture_block(
+            byte_endian_fetch.constant, 1U, 0U, memory);
+        check(byte_endian_block && byte_endian_block.bytes[0] == std::byte{0xc3},
+              "byte texel endian conversion reads the aligned dword lane group");
     }
 
     const auto dxt_fetch = make_fetch(18U, 0x3000U, 64U, 64U, 2U);

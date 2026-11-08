@@ -5,6 +5,7 @@
 
 #include <limits>
 #include <span>
+#include <utility>
 
 namespace project360::gpu::xenos {
 namespace {
@@ -13,6 +14,7 @@ constexpr std::uint32_t kMacroTileLog2 = 5U;
 constexpr std::uint32_t kMacroTileSize = 1U << kMacroTileLog2;
 constexpr std::uint32_t kMaximumDimensionInBlocks = 1U << 24U;
 constexpr std::uint8_t kMaximumBytesPerBlock = 16U;
+constexpr std::size_t kMaximumEndianReadBytes = kMaximumBytesPerBlock + 4U;
 
 std::uint32_t ceil_divide(std::uint32_t value, std::uint32_t divisor) {
     return value / divisor + static_cast<std::uint32_t>(value % divisor != 0U);
@@ -20,6 +22,43 @@ std::uint32_t ceil_divide(std::uint32_t value, std::uint32_t divisor) {
 
 std::uint32_t round_up_to_tile(std::uint32_t value) {
     return (value + (kMacroTileSize - 1U)) & ~(kMacroTileSize - 1U);
+}
+
+bool apply_texture_endian(TextureBlockReadResult& block, std::uint8_t endian,
+                          const memory::GuestMemory& memory, std::string& error) {
+    if (endian == 0U) return true;
+    if (endian > 3U) {
+        error = "Texture descriptor has an invalid endian mode";
+        return false;
+    }
+
+    const std::uint8_t group_size = endian == 1U ? 2U : 4U;
+    const std::uint8_t lane_xor = endian == 1U ? 1U : endian == 2U ? 3U : 2U;
+    const auto group_base = block.physical_address &
+                            ~static_cast<std::uint64_t>(group_size - 1U);
+    const auto prefix = static_cast<std::size_t>(block.physical_address - group_base);
+    const auto requested_size = prefix + block.byte_count;
+    const auto read_size = (requested_size + group_size - 1U) &
+                           ~static_cast<std::size_t>(group_size - 1U);
+    if (read_size > kMaximumEndianReadBytes ||
+        group_base > std::numeric_limits<std::uint64_t>::max() - read_size) {
+        error = "Texture endian read range overflows its bounded temporary buffer";
+        return false;
+    }
+
+    std::array<std::byte, kMaximumEndianReadBytes> source{};
+    if (!memory.read_physical(group_base, std::span<std::byte>(source).first(read_size))) {
+        error = "Texture endian conversion reads beyond physical guest memory";
+        return false;
+    }
+
+    for (std::size_t i = 0U; i < block.byte_count; ++i) {
+        const auto lane = prefix + i;
+        const auto source_index = (lane & ~(static_cast<std::size_t>(group_size) - 1U)) |
+                                  ((lane & (group_size - 1U)) ^ lane_xor);
+        block.bytes[i] = source[source_index];
+    }
+    return true;
 }
 
 bool supported_block_size(std::uint8_t bytes_per_block) {
@@ -130,10 +169,17 @@ TextureBlockReadResult read_xenos_tiled_2d_texture_block(
         return {{}, {}, 0U, "Texture pitch is smaller than its visible block width"};
     }
 
-    return read_xenos_tiled_2d_block(
+    auto block = read_xenos_tiled_2d_block(
         fetch.base_address_bytes, texel_x / layout.block_width_pixels,
         texel_y / layout.block_height_pixels, width_blocks, height_blocks,
         pitch_blocks, layout.bytes_per_block, memory);
+    if (!block) return block;
+
+    std::string endian_error;
+    if (!apply_texture_endian(block, fetch.endian, memory, endian_error)) {
+        return {{}, {}, 0U, std::move(endian_error)};
+    }
+    return block;
 }
 
 } // namespace project360::gpu::xenos
