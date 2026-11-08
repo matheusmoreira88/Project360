@@ -21,6 +21,28 @@ float select_xenos_operand(float lhs, float rhs, bool select_lhs) noexcept {
     return std::bit_cast<float>(select_lhs ? lhs_bits : rhs_bits);
 }
 
+bool is_supported_vector_opcode(std::uint8_t opcode) noexcept {
+    return opcode <= 7U || opcode == 15U || opcode == 16U;
+}
+
+float dot_product_xenos(const std::array<float, 4>& lhs, const std::array<float, 4>& rhs,
+                        std::size_t component_count) noexcept {
+    // Preserve each FP32 product and sum separately; host FMA contraction would
+    // change the guest result for cancellation-sensitive inputs.
+    volatile float product_x = multiply_xenos_legacy(lhs[0], rhs[0]);
+    volatile float product_y = multiply_xenos_legacy(lhs[1], rhs[1]);
+    volatile float product_z = multiply_xenos_legacy(lhs[2], rhs[2]);
+    volatile float sum_xy = product_x + product_y;
+    volatile float sum_xyz = sum_xy + product_z;
+    if (component_count == 3U) {
+        return sum_xyz;
+    }
+
+    volatile float product_w = multiply_xenos_legacy(lhs[3], rhs[3]);
+    volatile float sum_xyzw = sum_xyz + product_w;
+    return sum_xyzw;
+}
+
 } // namespace
 
 ShaderAluInstruction decode_shader_alu_instruction(
@@ -165,7 +187,7 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
     if (instruction.vector_clamp) {
         return {{}, "Clamped Xenos vector ALU results are not implemented"};
     }
-    if (instruction.vector_opcode > 7U) {
+    if (!is_supported_vector_opcode(instruction.vector_opcode)) {
         return {{}, "Unsupported Xenos vector ALU opcode"};
     }
 
@@ -178,6 +200,10 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
         }
     }
 
+    const float dot_result =
+        instruction.vector_opcode == 15U   ? dot_product_xenos(source_1, source_2, 4U)
+        : instruction.vector_opcode == 16U ? dot_product_xenos(source_1, source_2, 3U)
+                                           : 0.0F;
     ShaderVectorAluResult result{previous_destination, {}};
     for (std::size_t lane = 0; lane < result.destination.size(); ++lane) {
         if ((instruction.vector_write_mask & (1U << lane)) == 0U) {
@@ -209,6 +235,10 @@ ShaderVectorAluResult evaluate_shader_vector_alu(
             break;
         case 7U:
             result.destination[lane] = source_1[lane] != source_2[lane] ? 1.0F : 0.0F;
+            break;
+        case 15U:
+        case 16U:
+            result.destination[lane] = dot_result;
             break;
         default:
             return {{}, "Unsupported Xenos vector ALU opcode"};
@@ -252,7 +282,7 @@ ShaderAluExecutionResult execute_shader_alu_add_mul_pair(
     if (instruction.vector_clamp || instruction.scalar_clamp) {
         return {{}, 0.0F, "Clamped Xenos ALU results are not implemented"};
     }
-    if (instruction.vector_opcode > 7U ||
+    if (!is_supported_vector_opcode(instruction.vector_opcode) ||
         (instruction.scalar_opcode != 0U && instruction.scalar_opcode != 2U)) {
         return {{}, 0.0F, "Unsupported Xenos vector/scalar ALU opcode pair"};
     }

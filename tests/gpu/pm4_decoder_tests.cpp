@@ -187,6 +187,45 @@ void test_shader_vector_alu_comparisons() {
           "Xenos MAX/MIN reject unordered operands until Xenos NaN behavior is verified");
 }
 
+void test_shader_vector_alu_dot_products() {
+    using namespace project360::gpu::xenos;
+    const std::array<float, 4> previous{9.0F, 9.0F, 9.0F, 9.0F};
+    const std::array<float, 4> source_1{1.0F, 2.0F, 3.0F, 1000.0F};
+    const std::array<float, 4> source_2{4.0F, 5.0F, 6.0F, -1000.0F};
+    const auto dot3 =
+        evaluate_shader_vector_alu(decode_shader_alu_instruction({0x00050000U, 0U, 0x10000000U}),
+                                   source_1, source_2, previous);
+    const auto dot4 =
+        evaluate_shader_vector_alu(decode_shader_alu_instruction({0x000f0000U, 0U, 0x0f000000U}),
+                                   {1.0F, 2.0F, 3.0F, 4.0F}, {2.0F, 3.0F, 4.0F, 5.0F}, previous);
+    check(dot3 && dot3.destination == std::array<float, 4>{32.0F, 9.0F, 32.0F, 9.0F} && dot4 &&
+              dot4.destination == std::array<float, 4>{40.0F, 40.0F, 40.0F, 40.0F},
+          "Xenos DP3 ignores W and replicates its result; DP4 includes and replicates W");
+
+    const auto ordered_dot4 = evaluate_shader_vector_alu(
+        decode_shader_alu_instruction({0x000f0000U, 0U, 0x0f000000U}),
+        {1.0e20F, -1.0e20F, 3.0F, 4.0F}, {1.0F, 1.0F, 1.0F, 1.0F}, previous);
+    check(ordered_dot4 && ordered_dot4.destination == std::array<float, 4>{7.0F, 7.0F, 7.0F, 7.0F},
+          "Xenos DP4 follows the documented XYZW accumulation order");
+
+    const auto legacy_dot3 = evaluate_shader_vector_alu(
+        decode_shader_alu_instruction({0x000f0000U, 0U, 0x10000000U}),
+        {0.0F, std::numeric_limits<float>::denorm_min(), 2.0F, 100.0F},
+        {std::numeric_limits<float>::infinity(), 2.0F, 3.0F, 100.0F}, previous);
+    check(legacy_dot3 && legacy_dot3.destination == std::array<float, 4>{6.0F, 6.0F, 6.0F, 6.0F},
+          "Xenos DP3 uses the established legacy zero/subnormal product behavior");
+
+    constexpr float rounded_product_operand = 1.00000011920928955078125F;
+    constexpr float rounded_product_cancel = 1.0000002384185791015625F;
+    const auto cancellation_dot3 = evaluate_shader_vector_alu(
+        decode_shader_alu_instruction({0x000f0000U, 0U, 0x10000000U}),
+        {rounded_product_operand, -1.0F, 0.0F, 0.0F},
+        {rounded_product_operand, rounded_product_cancel, 0.0F, 0.0F}, previous);
+    check(cancellation_dot3 &&
+              cancellation_dot3.destination == std::array<float, 4>{0.0F, 0.0F, 0.0F, 0.0F},
+          "Xenos DP3 rounds products before accumulation instead of fusing host multiply-adds");
+}
+
 void test_shader_vector_alu_legacy_multiplication() {
     using namespace project360::gpu::xenos;
     const auto instruction = decode_shader_alu_instruction({0x000f0000U, 0U, 0x01000000U});
@@ -355,6 +394,12 @@ void test_shader_alu_add_mul_pair_execution() {
     const auto compared = execute_shader_alu_add_mul_pair(compare_pair, registers);
     check(compared && compared.registers[4] == std::array<float, 4>{1.0F, 1.0F, 1.0F, 1.0F},
           "Xenos ALU pair executes vector SNE comparisons alongside scalar ADDS");
+
+    const auto dot_pair = encode_pair(16U, 0U, 4U, 5U, 0x0fU, 0x0fU);
+    const auto dotted = execute_shader_alu_add_mul_pair(dot_pair, registers);
+    check(dotted && dotted.registers[4] == std::array<float, 4>{140.0F, 140.0F, 140.0F, 140.0F} &&
+              dotted.previous_scalar == 13.0F,
+          "Xenos ALU pair executes DP3 alongside scalar ADDS");
 
     auto unordered_registers = registers;
     unordered_registers[2][1] = std::numeric_limits<float>::quiet_NaN();
@@ -1318,6 +1363,7 @@ int main() {
     test_shader_alu_word_decode();
     test_shader_vector_alu_reference_subset();
     test_shader_vector_alu_comparisons();
+    test_shader_vector_alu_dot_products();
     test_shader_vector_alu_legacy_multiplication();
     test_shader_alu_temporary_source_resolution();
     test_shader_alu_absolute_float_constant_sources();
