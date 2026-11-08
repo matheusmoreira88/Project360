@@ -47,7 +47,7 @@ The XEX integration test starts a second PPC caller at the fixture's added code 
 
 A separate bounded program test executes six PowerPC instructions plus a kernel import: it sets arguments with `addi`/`addis`/`ori`, branches with link to the verified `RtlFillMemoryUlong` thunk, checks the big-endian guest-memory write, and confirms execution resumes at the instruction after the call. This is a synthetic executor test; it does not parse or run an external homebrew XEX.
 
-A minimal self-authored unencrypted XEX fixture now exercises the combined loader → main-thread bootstrap → PowerPC caller → imported `DbgPrint` path. It checks the decoded import, initial PC/stack/PCR setup, the diagnostic log, return to guest code and a finite instruction-budget stop. It does not exercise the command-line file path or prove compatibility with external homebrew.
+A minimal self-authored unencrypted XEX fixture is written to a temporary file and exercises the combined file loader → main-thread bootstrap → PowerPC caller → imported `DbgPrint` path. It checks the decoded import, initial PC/stack/PCR setup, the diagnostic log, return to guest code and a finite instruction-budget stop. It does not launch the `project360 --run-xex` process or prove compatibility with external homebrew.
 
 The dispatcher tests cover clock exports, including monotonic interrupt time, big-endian system time and the 49,875,000-tick frequency, and TLS allocation/free/get/set with reuse, exhaustion, big-endian storage and memory-fault cases. A synthetic XEX initializes the main-thread context and executes all four TLS imports through thunk addresses. These checks validate the single-thread TLS array only; they do not validate system-wide scheduling or external title startup.
 

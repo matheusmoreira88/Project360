@@ -738,14 +738,26 @@ int main() {
 
     {
         auto debug_xex = make_dbgprint_homebrew_xex();
+        bool debug_xex_written = false;
+        {
+            std::ofstream output(test_path, std::ios::binary | std::ios::trunc);
+            if (output) {
+                output.write(reinterpret_cast<const char*>(debug_xex.data()),
+                             static_cast<std::streamsize>(debug_xex.size()));
+                debug_xex_written = static_cast<bool>(output);
+            }
+        }
         project360::memory::GuestMemory debug_memory(4U * 1024U * 1024U);
-        const auto debug_loaded = project360::loader::load_xex2(
-            debug_xex, debug_memory, 0U);
-        check(debug_loaded && debug_loaded.image->entry_point == 0x83100U &&
+        const auto debug_loaded = debug_xex_written
+                                      ? project360::loader::load_xex2_file(
+                                            test_path, debug_memory, 0U)
+                                      : project360::loader::XexLoadResult{};
+        check(debug_xex_written && debug_loaded &&
+                  debug_loaded.image->entry_point == 0x83100U &&
                   debug_loaded.image->xex.import_libraries.size() == 1U &&
                   debug_loaded.image->xex.import_libraries[0].import_ordinals ==
                       std::vector<std::optional<std::uint16_t>>{3U},
-              "minimal synthetic homebrew XEX loads its entry point and DbgPrint import");
+              "file loader reads a minimal synthetic homebrew XEX and decodes DbgPrint");
 
         if (debug_loaded) {
             project360::cpu::CpuState debug_state{};
@@ -773,6 +785,7 @@ int main() {
                       "loaded homebrew XEX initializes a thread, calls DbgPrint and resumes guest code");
             }
         }
+        std::filesystem::remove(test_path, remove_error);
     }
 
     {
