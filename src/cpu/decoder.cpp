@@ -225,6 +225,18 @@ DecodeResult decode(std::uint32_t word) {
         const auto xo = static_cast<std::uint16_t>((word >> 1U) & 0x1ffU);
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
         const bool oe = (word & (1U << 10U)) != 0U;
+        if (xo10 == 339U || xo10 == 467U) {
+            if ((word & 1U) != 0U) {
+                return {{}, "mfspr/mtspr record bit is reserved"};
+            }
+            ins.spr = static_cast<std::uint16_t>((ins.rb << 5U) | ins.ra);
+            if (ins.spr != 1U && ins.spr != 8U && ins.spr != 9U) {
+                return {{}, "unsupported special-purpose register " + std::to_string(ins.spr)};
+            }
+            ins.opcode = xo10 == 339U ? Opcode::move_from_special_register
+                                      : Opcode::move_to_special_register;
+            return {ins, {}};
+        }
         if (xo10 == 19U) {
             if (ins.ra != 0U || ins.rb != 0U || (word & 1U) != 0U) {
                 return {{}, "mfcr reserved fields are nonzero"};

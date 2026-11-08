@@ -75,6 +75,8 @@ enum class Opcode {
     condition_register_logical,
     move_to_condition_register_fields,
     move_condition_register_from_xer,
+    move_from_special_register,
+    move_to_special_register,
     lbz,
     lhz,
     lha,
@@ -104,6 +106,7 @@ struct DecodedInstruction {
     std::uint8_t bf{};
     std::uint8_t bfa{};
     CrLogicalOperation cr_logical_operation{};
+    std::uint16_t spr{};
     std::uint8_t bo{};
     std::uint8_t bi{};
     std::uint8_t branch_hint{};

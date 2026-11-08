@@ -517,6 +517,22 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         state.xer &= 0x0fffffffU;
         break;
     }
+    case Opcode::move_from_special_register:
+        switch (ins.spr) {
+        case 1U: state.gpr[ins.rt] = state.xer; break;
+        case 8U: state.gpr[ins.rt] = state.lr; break;
+        case 9U: state.gpr[ins.rt] = state.ctr; break;
+        default: return fault("unsupported mfspr register");
+        }
+        break;
+    case Opcode::move_to_special_register:
+        switch (ins.spr) {
+        case 1U: state.xer = static_cast<std::uint32_t>(state.gpr[ins.rt]); break;
+        case 8U: state.lr = state.gpr[ins.rt]; break;
+        case 9U: state.ctr = state.gpr[ins.rt]; break;
+        default: return fault("unsupported mtspr register");
+        }
+        break;
     case Opcode::lbz: {
         std::uint8_t value = 0;
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);

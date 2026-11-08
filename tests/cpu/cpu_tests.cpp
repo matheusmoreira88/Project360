@@ -79,6 +79,15 @@ std::uint32_t cr_logical_form(std::uint8_t bt, std::uint8_t ba, std::uint8_t bb,
            (record ? 1U : 0U);
 }
 
+std::uint32_t special_register_form(bool to_special, std::uint8_t reg, std::uint16_t spr,
+                                    bool record = false) {
+    const auto encoded_spr = (static_cast<std::uint32_t>(spr & 0x1fU) << 16U) |
+                             (static_cast<std::uint32_t>(spr & 0x3e0U) << 6U);
+    const auto xo = to_special ? 467U : 339U;
+    return (31U << 26U) | (static_cast<std::uint32_t>(reg) << 21U) | encoded_spr |
+           (xo << 1U) | (record ? 1U : 0U);
+}
+
 std::uint32_t mtcrf_form(std::uint8_t fxm, std::uint8_t rs, bool record = false,
                          std::uint8_t reserved_instruction_bit11 = 0,
                          std::uint8_t reserved_instruction_bit20 = 0) {
@@ -1420,6 +1429,47 @@ void test_condition_register_logical_operations() {
           "CR logical operations read source bits before writing an aliased target");
 }
 
+void test_special_register_transfers() {
+    using namespace project360;
+    memory::GuestMemory mem(24);
+    put_word(mem, 0, special_register_form(false, 3, 1)); // mfspr r3,XER
+    put_word(mem, 4, special_register_form(false, 4, 8)); // mfspr r4,LR
+    put_word(mem, 8, special_register_form(false, 5, 9)); // mfspr r5,CTR
+    put_word(mem, 12, special_register_form(true, 6, 1)); // mtspr XER,r6
+    put_word(mem, 16, special_register_form(true, 7, 8)); // mtspr LR,r7
+    put_word(mem, 20, special_register_form(true, 8, 9)); // mtspr CTR,r8
+
+    cpu::CpuState state{};
+    state.xer = 0x81234567U;
+    state.lr = 0x1122334455667788ULL;
+    state.ctr = 0x8877665544332211ULL;
+    state.cr = 0x5a5aa5a5U;
+    state.gpr[6] = 0x12345678abcdef12ULL;
+    state.gpr[7] = 0x0123456789abcdefULL;
+    state.gpr[8] = 0xfedcba9876543210ULL;
+    const cpu::Interpreter interpreter{};
+
+    for (unsigned i = 0; i < 6U; ++i) {
+        const auto result = interpreter.step(state, mem);
+        check(result.status == cpu::StepStatus::executed,
+              "supported mfspr/mtspr instruction executes");
+    }
+    check(state.gpr[3] == 0x81234567U && state.gpr[4] == 0x1122334455667788ULL &&
+              state.gpr[5] == 0x8877665544332211ULL,
+          "mfspr reads XER, LR and CTR into the selected GPRs");
+    check(state.xer == 0xabcdef12U, "mtspr XER write truncates to XER width");
+    check(state.lr == 0x0123456789abcdefULL, "mtspr writes LR");
+    check(state.ctr == 0xfedcba9876543210ULL, "mtspr writes CTR");
+    check(state.cr == 0x5a5aa5a5U && state.pc == 24,
+          "special-register transfers preserve CR and advance PC");
+
+    check(!cpu::decode(special_register_form(false, 3, 2)) &&
+              !cpu::decode(special_register_form(true, 3, 2)) &&
+              !cpu::decode(special_register_form(false, 3, 1, true)) &&
+              !cpu::decode(special_register_form(true, 3, 9, true)),
+          "unsupported SPR numbers and reserved record encodings are rejected");
+}
+
 void test_move_condition_register_from_xer() {
     using namespace project360;
     memory::GuestMemory mem(8);
@@ -1607,6 +1657,7 @@ int main() {
     test_condition_register_transfers();
     test_move_condition_register_field();
     test_condition_register_logical_operations();
+    test_special_register_transfers();
     test_move_condition_register_from_xer();
     test_conditional_branches();
     test_absolute_and_register_branches();
