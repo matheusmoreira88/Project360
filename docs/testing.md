@@ -6,7 +6,7 @@ Kernel dispatcher tests cover RtlCompareMemory prefix results across non-contigu
 
 The synthetic XEX integration test also changes a decoded import record to the data-import type and verifies that attempting to execute it returns an explicit fault while leaving the guest PC unchanged. Data imports are parsed as metadata but are not resolved or executable services.
 
-CPU tests verify `mfmsr` decoding, complete MSR transfer in supervisor state, reserved-field rejection, and privileged exception entry from problem state without modifying its target GPR.
+CPU tests verify `mfmsr` decoding, complete MSR transfer in supervisor state, reserved-field rejection, and privileged exception entry from problem state without modifying its target GPR. `mtmsrd` tests cover the L=1 EE/RI write mask, preservation of other MSR bits, unsupported L=0 behavior, reserved encodings, and privileged exception entry without an MSR write.
 
 The floating-point transfer tests verify optional PowerPC `stfiwx` indexed storage byte-for-byte, including unchanged FPR, CR and FPSCR state, plus reserved-record-bit rejection and misaligned-store fault behavior.
 

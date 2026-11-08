@@ -963,6 +963,22 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         }
         state.gpr[ins.rt] = state.msr;
         break;
+    case Opcode::move_to_machine_state_register_doubleword:
+        if ((state.msr & powerpc_bit(49U)) != 0U) {
+            return take_program_exception(state, FaultKind::privileged_instruction, 45U, word,
+                                           "privileged mtmsrd in problem state");
+        }
+        if (!ins.msr_l) {
+            return fault(FaultKind::unsupported_instruction, old_pc,
+                         "mtmsrd L=0 MSR context transition is unsupported", word);
+        }
+        {
+            constexpr auto enable = powerpc_bit(48U);
+            constexpr auto recoverable_interrupt = powerpc_bit(62U);
+            const auto writable = enable | recoverable_interrupt;
+            state.msr = (state.msr & ~writable) | (state.gpr[ins.rt] & writable);
+        }
+        break;
     case Opcode::move_from_special_register:
         if ((ins.spr == 26U || ins.spr == 27U) &&
             (state.msr & powerpc_bit(49U)) != 0U) {

@@ -144,6 +144,16 @@ std::uint32_t mfmsr_form(std::uint8_t rt, std::uint8_t reserved_ra = 0,
            (record ? 1U : 0U);
 }
 
+std::uint32_t mtmsrd_form(std::uint8_t rs, bool low_bit_mode,
+                          std::uint8_t reserved_low = 0,
+                          std::uint8_t reserved_high = 0, bool record = false) {
+    return (31U << 26U) | (static_cast<std::uint32_t>(rs) << 21U) |
+           (static_cast<std::uint32_t>(reserved_low) << 11U) |
+           (static_cast<std::uint32_t>(low_bit_mode ? 1U : 0U) << 16U) |
+           (static_cast<std::uint32_t>(reserved_high) << 17U) | (178U << 1U) |
+           (record ? 1U : 0U);
+}
+
 std::uint32_t mcrf_form(std::uint8_t bf, std::uint8_t bfa, std::uint32_t reserved = 0) {
     return (19U << 26U) | (static_cast<std::uint32_t>(bf) << 23U) |
            (static_cast<std::uint32_t>(bfa) << 18U) | reserved;
@@ -2619,6 +2629,59 @@ void test_move_from_machine_state_register() {
           "problem-state mfmsr enters the privileged-instruction exception without partial GPR state");
 }
 
+void test_move_to_machine_state_register_doubleword() {
+    using namespace project360;
+    memory::GuestMemory mem(0x704U);
+    put_word(mem, 0U, mtmsrd_form(5U, true));
+
+    cpu::CpuState state{};
+    constexpr std::uint64_t msr_sf = 1ULL << 63U;
+    constexpr std::uint64_t msr_me = 1ULL << 12U;
+    constexpr std::uint64_t msr_ee = 1ULL << 15U;
+    constexpr std::uint64_t msr_ri = 1ULL << 1U;
+    constexpr std::uint64_t msr_fp = 1ULL << 13U;
+    state.msr = msr_sf | msr_me | msr_ri | msr_fp;
+    state.gpr[5] = msr_ee;
+    state.cr = 0x12345678U;
+    state.xer = 0xe0000000U;
+    const auto decoded = cpu::decode(mtmsrd_form(5U, true));
+    const auto result = cpu::Interpreter{}.step(state, mem);
+    check(decoded && decoded.instruction.opcode ==
+                          cpu::Opcode::move_to_machine_state_register_doubleword &&
+              decoded.instruction.msr_l && result.status == cpu::StepStatus::executed &&
+              state.msr == (msr_sf | msr_me | msr_ee | msr_fp) && state.pc == 4U &&
+              state.gpr[5] == msr_ee && state.cr == 0x12345678U &&
+              state.xer == 0xe0000000U,
+          "supervisor mtmsrd L=1 writes only MSR[EE] and MSR[RI]");
+
+    put_word(mem, 4U, mtmsrd_form(5U, false));
+    const auto unsupported = cpu::Interpreter{}.step(state, mem);
+    check(unsupported.status == cpu::StepStatus::fault && unsupported.fault_info &&
+              unsupported.fault_info->kind == cpu::FaultKind::unsupported_instruction &&
+              state.msr == (msr_sf | msr_me | msr_ee | msr_fp) && state.pc == 4U,
+          "mtmsrd L=0 reports unsupported without changing MSR or PC");
+
+    check(!cpu::decode(mtmsrd_form(1U, true, 1U)) &&
+              !cpu::decode(mtmsrd_form(1U, true, 0U, 1U)) &&
+              !cpu::decode(mtmsrd_form(1U, true, 0U, 0U, true)),
+          "mtmsrd rejects reserved and record-bit encodings");
+
+    constexpr std::uint64_t msr_pr = 1ULL << 14U;
+    constexpr std::uint64_t privileged_syndrome = 1ULL << 18U;
+    put_word(mem, 0U, mtmsrd_form(5U, true));
+    cpu::CpuState problem_state{};
+    problem_state.msr = msr_sf | msr_pr;
+    problem_state.gpr[5] = 0xfeedfaceU;
+    const auto privileged = cpu::Interpreter{}.step(problem_state, mem);
+    check(privileged.status == cpu::StepStatus::exception_taken &&
+              privileged.fault_info &&
+              privileged.fault_info->kind == cpu::FaultKind::privileged_instruction &&
+              problem_state.gpr[5] == 0xfeedfaceU && problem_state.srr0 == 0U &&
+              problem_state.srr1 == (msr_sf | msr_pr | privileged_syndrome) &&
+              problem_state.pc == 0x700U,
+          "problem-state mtmsrd enters the privileged exception without an MSR write");
+}
+
 void test_move_condition_register_field() {
     using namespace project360;
     memory::GuestMemory mem(12);
@@ -3202,6 +3265,7 @@ int main() {
     test_integer_trap_instructions();
     test_condition_register_transfers();
     test_move_from_machine_state_register();
+    test_move_to_machine_state_register_doubleword();
     test_move_condition_register_field();
     test_condition_register_logical_operations();
     test_special_register_transfers();

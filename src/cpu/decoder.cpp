@@ -317,6 +317,15 @@ DecodeResult decode(std::uint32_t word) {
             ins.opcode = Opcode::move_from_machine_state_register;
             return {ins, {}};
         }
+        if (xo10 == 178U) {
+            constexpr std::uint32_t reserved_fields = (0x1fU << 11U) | (0xfU << 17U) | 1U;
+            if ((word & reserved_fields) != 0U) {
+                return {{}, "mtmsrd reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::move_to_machine_state_register_doubleword;
+            ins.msr_l = ((word >> 16U) & 1U) != 0U;
+            return {ins, {}};
+        }
         if (xo10 == 339U || xo10 == 467U) {
             if ((word & 1U) != 0U) {
                 return {{}, "mfspr/mtspr record bit is reserved"};
