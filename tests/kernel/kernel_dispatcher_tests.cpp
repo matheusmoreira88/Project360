@@ -864,6 +864,76 @@ int main() {
     check(wrong_library == KernelDispatchStatus::unsupported_library,
           "an ordinal from another import library is not misrouted to xboxkrnl");
 
+    constexpr std::uint32_t tls_slots_address = static_cast<std::uint32_t>(data_page + 0x400U);
+    constexpr auto tls_storage = project360::kernel::KernelTlsStorage{tls_slots_address, 2U};
+    const KernelDispatcher tls_dispatcher(tls_storage);
+    state.gpr[3] = 0U;
+    state.gpr[4] = 0U;
+    state.lr = 0x4007U;
+    state.pc = 0x800400U;
+    const auto tls_allocated = tls_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_tls_alloc_ordinal}, state, memory);
+    check(tls_allocated == KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              state.pc == 0x4004U && memory.read_u32_be(tls_slots_address, word) &&
+              word == 0U,
+          "KeTlsAlloc returns and zeroes the first available guest TLS slot");
+    state.gpr[3] = 0U;
+    state.gpr[4] = 0x1234abcdU;
+    state.lr = 0x4017U;
+    const auto tls_set = tls_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_tls_set_value_ordinal}, state, memory);
+    check(tls_set == KernelDispatchStatus::handled && state.gpr[3] == 1U &&
+              state.pc == 0x4014U && memory.read_u32_be(tls_slots_address, word) &&
+              word == 0x1234abcdU,
+          "KeTlsSetValue writes a big-endian value to the selected guest slot");
+    state.gpr[3] = 0U;
+    state.lr = 0x4027U;
+    const auto tls_get = tls_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_tls_get_value_ordinal}, state, memory);
+    check(tls_get == KernelDispatchStatus::handled && state.gpr[3] == 0x1234abcdU &&
+              state.pc == 0x4024U,
+          "KeTlsGetValue returns the selected slot value in GPR3");
+    state.lr = 0x4037U;
+    const auto tls_second_allocated = tls_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_tls_alloc_ordinal}, state, memory);
+    check(tls_second_allocated == KernelDispatchStatus::handled && state.gpr[3] == 1U,
+          "KeTlsAlloc assigns the next unallocated slot");
+    state.lr = 0x4047U;
+    const auto tls_exhausted = tls_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_tls_alloc_ordinal}, state, memory);
+    check(tls_exhausted == KernelDispatchStatus::handled && state.gpr[3] == 0xffff'ffffU,
+          "KeTlsAlloc reports the documented sentinel when configured slots are exhausted");
+    state.gpr[3] = 0U;
+    state.lr = 0x4057U;
+    const auto tls_freed = tls_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_tls_free_ordinal}, state, memory);
+    check(tls_freed == KernelDispatchStatus::handled && state.gpr[3] == 1U &&
+              memory.read_u32_be(tls_slots_address, word) && word == 0U,
+          "KeTlsFree clears the slot value and releases its allocation");
+    state.lr = 0x4067U;
+    const auto tls_reused = tls_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_tls_alloc_ordinal}, state, memory);
+    check(tls_reused == KernelDispatchStatus::handled && state.gpr[3] == 0U,
+          "KeTlsAlloc reuses the lowest freed slot");
+    state.gpr[3] = 2U;
+    state.pc = 0x800410U;
+    state.lr = 0x4077U;
+    const auto tls_out_of_range = tls_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_tls_get_value_ordinal}, state, memory);
+    check(tls_out_of_range == KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              state.pc == 0x4074U,
+          "KeTlsGetValue returns zero for an index beyond the configured TLS slots");
+    state.gpr[3] = 0U;
+    state.gpr[4] = 7U;
+    state.pc = 0x800420U;
+    const KernelDispatcher inaccessible_tls_dispatcher(
+        {static_cast<std::uint32_t>(data_page + GuestMemory::page_size), 1U});
+    const auto inaccessible_tls = inaccessible_tls_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ke_tls_alloc_ordinal}, state, memory);
+    check(inaccessible_tls == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x800420U && state.gpr[3] == 0U && state.gpr[4] == 7U,
+          "KeTlsAlloc reports protected TLS storage without changing guest state");
+
     if (failures != 0) {
         std::cerr << failures << " kernel dispatcher test(s) failed\n";
         return 1;

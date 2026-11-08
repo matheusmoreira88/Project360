@@ -186,6 +186,8 @@ GuestThreadInitResult initialize_main_thread_context(const loader::LoadedXexImag
     state.gpr[13] = pcr_address;
     return {GuestMainThreadContext{static_cast<std::uint32_t>(pcr_address),
                                    static_cast<std::uint32_t>(tls_address),
+                                   static_cast<std::uint32_t>(tls_address + tls_data_size),
+                                   static_cast<std::uint32_t>(slot_count),
                                    static_cast<std::uint32_t>(stack_limit),
                                    static_cast<std::uint32_t>(stack_base)},
             {}};

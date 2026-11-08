@@ -145,7 +145,9 @@ int run_xex(const std::filesystem::path& path) {
                                     thread_context.error);
             return 1;
         }
-        const project360::kernel::GuestExecutor executor(*loaded.image);
+        const project360::kernel::GuestExecutor executor(
+            *loaded.image,
+            {thread_context.context->tls_slot_address, thread_context.context->tls_slot_count});
         const auto result = executor.run(state, memory, instruction_limit);
         std::cout << "XEX execution stopped after " << result.instructions_executed
                   << " guest instructions at PC 0x" << std::hex << std::uppercase

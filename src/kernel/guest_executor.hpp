@@ -21,7 +21,8 @@ struct GuestRunResult {
 // kernel export runs as a host shim.
 class GuestExecutor {
 public:
-    explicit GuestExecutor(const loader::LoadedXexImage& image);
+    explicit GuestExecutor(const loader::LoadedXexImage& image,
+                           KernelTlsStorage tls_storage = {});
 
     [[nodiscard]] cpu::StepResult step(cpu::CpuState& state,
                                        memory::GuestMemory& memory) const;

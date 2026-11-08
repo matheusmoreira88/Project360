@@ -77,10 +77,90 @@ constexpr std::uint32_t kMaximumIntegerTextLength = 0x10000U;
 
 } // namespace
 
+KernelDispatcher::KernelDispatcher(KernelTlsStorage tls_storage) noexcept
+    : tls_storage_(tls_storage),
+      tls_slot_limit_(tls_storage.slot_count < maximum_tls_slots
+                          ? tls_storage.slot_count
+                          : maximum_tls_slots) {}
+
 KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuState& state,
                                                 memory::GuestMemory& memory) const noexcept {
     if (!equals_ascii_case_insensitive(import.library, "xboxkrnl.exe")) {
         return KernelDispatchStatus::unsupported_library;
+    }
+    if (import.ordinal == ke_tls_alloc_ordinal) {
+        std::lock_guard lock(tls_mutex_);
+        std::uint32_t slot = 0U;
+        while (slot < tls_slot_limit_ &&
+               (allocated_tls_slots_[slot / 64U] & (std::uint64_t{1U} << (slot % 64U))) != 0U) {
+            ++slot;
+        }
+        if (slot == tls_slot_limit_) {
+            state.gpr[3] = 0xffff'ffffU;
+            state.pc = state.lr & ~std::uint64_t{3U};
+            return KernelDispatchStatus::handled;
+        }
+        const auto slot_address = static_cast<std::uint64_t>(tls_storage_.slots_address) +
+                                  static_cast<std::uint64_t>(slot) * 4U;
+        if (!memory.write_u32_be(slot_address, 0U)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        allocated_tls_slots_[slot / 64U] |= std::uint64_t{1U} << (slot % 64U);
+        state.gpr[3] = slot;
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == ke_tls_free_ordinal) {
+        const auto slot = static_cast<std::uint32_t>(state.gpr[3]);
+        std::lock_guard lock(tls_mutex_);
+        if (slot >= tls_slot_limit_ ||
+            (allocated_tls_slots_[slot / 64U] & (std::uint64_t{1U} << (slot % 64U))) == 0U) {
+            state.gpr[3] = 0U;
+            state.pc = state.lr & ~std::uint64_t{3U};
+            return KernelDispatchStatus::handled;
+        }
+        const auto slot_address = static_cast<std::uint64_t>(tls_storage_.slots_address) +
+                                  static_cast<std::uint64_t>(slot) * 4U;
+        if (!memory.write_u32_be(slot_address, 0U)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        allocated_tls_slots_[slot / 64U] &= ~(std::uint64_t{1U} << (slot % 64U));
+        state.gpr[3] = 1U;
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == ke_tls_get_value_ordinal) {
+        const auto slot = static_cast<std::uint32_t>(state.gpr[3]);
+        if (slot >= tls_slot_limit_) {
+            state.gpr[3] = 0U;
+            state.pc = state.lr & ~std::uint64_t{3U};
+            return KernelDispatchStatus::handled;
+        }
+        std::uint32_t value = 0U;
+        const auto slot_address = static_cast<std::uint64_t>(tls_storage_.slots_address) +
+                                  static_cast<std::uint64_t>(slot) * 4U;
+        if (!memory.read_u32_be(slot_address, value)) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        state.gpr[3] = value;
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == ke_tls_set_value_ordinal) {
+        const auto slot = static_cast<std::uint32_t>(state.gpr[3]);
+        if (slot >= tls_slot_limit_) {
+            state.gpr[3] = 0U;
+            state.pc = state.lr & ~std::uint64_t{3U};
+            return KernelDispatchStatus::handled;
+        }
+        const auto slot_address = static_cast<std::uint64_t>(tls_storage_.slots_address) +
+                                  static_cast<std::uint64_t>(slot) * 4U;
+        if (!memory.write_u32_be(slot_address, static_cast<std::uint32_t>(state.gpr[4]))) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        state.gpr[3] = 1U;
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
     }
     if (import.ordinal == rtl_char_to_integer_ordinal) {
         const auto string_address = state.gpr[3];

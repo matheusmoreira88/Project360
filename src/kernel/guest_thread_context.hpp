@@ -13,6 +13,8 @@ namespace project360::kernel {
 struct GuestMainThreadContext {
     std::uint32_t pcr_address{};
     std::uint32_t tls_address{};
+    std::uint32_t tls_slot_address{};
+    std::uint32_t tls_slot_count{};
     std::uint32_t stack_limit{};
     std::uint32_t stack_base{};
 };

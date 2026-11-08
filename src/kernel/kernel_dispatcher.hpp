@@ -2,7 +2,9 @@
 
 #include "cpu/cpu_state.hpp"
 
+#include <array>
 #include <cstdint>
+#include <mutex>
 #include <string_view>
 
 namespace project360::memory {
@@ -14,6 +16,11 @@ namespace project360::kernel {
 struct KernelImport {
     std::string_view library;
     std::uint16_t ordinal{};
+};
+
+struct KernelTlsStorage {
+    std::uint32_t slots_address{};
+    std::uint32_t slot_count{};
 };
 
 enum class KernelDispatchStatus : std::uint8_t {
@@ -41,12 +48,25 @@ public:
     static constexpr std::uint16_t rtl_ushort_byte_swap_ordinal = 318;
     static constexpr std::uint16_t rtl_zero_memory_ordinal = 320;
     static constexpr std::uint16_t rtl_unicode_string_to_integer_ordinal = 309;
+    static constexpr std::uint16_t ke_tls_alloc_ordinal = 338;
+    static constexpr std::uint16_t ke_tls_free_ordinal = 339;
+    static constexpr std::uint16_t ke_tls_get_value_ordinal = 340;
+    static constexpr std::uint16_t ke_tls_set_value_ordinal = 341;
+    static constexpr std::uint32_t maximum_tls_slots = 2048U;
+
+    explicit KernelDispatcher(KernelTlsStorage tls_storage = {}) noexcept;
 
     // Dispatches an imported xboxkrnl function using the Xenon register ABI.
     // A handled void function returns to the caller through LR (blr semantics).
     [[nodiscard]] KernelDispatchStatus dispatch(KernelImport import,
                                                 cpu::CpuState& state,
                                                 memory::GuestMemory& memory) const noexcept;
+
+private:
+    KernelTlsStorage tls_storage_{};
+    std::uint32_t tls_slot_limit_{};
+    mutable std::mutex tls_mutex_;
+    mutable std::array<std::uint64_t, maximum_tls_slots / 64U> allocated_tls_slots_{};
 };
 
 } // namespace project360::kernel
