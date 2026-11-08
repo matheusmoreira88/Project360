@@ -211,6 +211,15 @@ DecodeResult decode(std::uint32_t word) {
             ins.field_mask = static_cast<std::uint8_t>((word >> 12U) & 0xffU);
             return {ins, {}};
         }
+        if (xo10 == 512U) {
+            if (((word >> 21U) & 0x3U) != 0U || ins.ra != 0U || ins.rb != 0U ||
+                (word & 1U) != 0U) {
+                return {{}, "mcrxr reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::move_condition_register_from_xer;
+            ins.bf = static_cast<std::uint8_t>((word >> 23U) & 0x7U);
+            return {ins, {}};
+        }
         if (xo10 == 21U || xo10 == 53U || xo10 == 149U || xo10 == 181U ||
             xo10 == 23U || xo10 == 55U || xo10 == 87U || xo10 == 119U ||
             xo10 == 279U || xo10 == 331U || xo10 == 343U || xo10 == 375U ||

@@ -482,6 +482,12 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         }
         break;
     }
+    case Opcode::move_condition_register_from_xer: {
+        const auto xer_field = (state.xer >> 28U) & 0xfU;
+        set_cr_field(state, ins.bf, xer_field);
+        state.xer &= 0x0fffffffU;
+        break;
+    }
     case Opcode::lbz: {
         std::uint8_t value = 0;
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);

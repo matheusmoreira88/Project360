@@ -60,6 +60,7 @@ enum class Opcode {
     cmpli,
     move_from_condition_register,
     move_to_condition_register_fields,
+    move_condition_register_from_xer,
     lbz,
     lhz,
     lha,

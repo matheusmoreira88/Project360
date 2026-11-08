@@ -75,6 +75,16 @@ std::uint32_t mtcrf_form(std::uint8_t fxm, std::uint8_t rs, bool record = false,
            (144U << 1U) | (record ? 1U : 0U);
 }
 
+std::uint32_t mcrxr_form(std::uint8_t bf, bool record = false,
+                         std::uint8_t reserved_bf_low = 0, std::uint8_t reserved_ra = 0,
+                         std::uint8_t reserved_rb = 0) {
+    return (31U << 26U) | (static_cast<std::uint32_t>(bf) << 23U) |
+           (static_cast<std::uint32_t>(reserved_bf_low & 0x3U) << 21U) |
+           (static_cast<std::uint32_t>(reserved_ra) << 16U) |
+           (static_cast<std::uint32_t>(reserved_rb) << 11U) | (512U << 1U) |
+           (record ? 1U : 0U);
+}
+
 std::uint32_t indexed_memory(std::uint8_t rt, std::uint8_t ra, std::uint8_t rb,
                              std::uint16_t xo, bool record = false) {
     return (31U << 26U) | (static_cast<std::uint32_t>(rt) << 21U) |
@@ -1296,6 +1306,34 @@ void test_condition_register_transfers() {
           "mtcrf record and reserved-field encodings are rejected");
 }
 
+void test_move_condition_register_from_xer() {
+    using namespace project360;
+    memory::GuestMemory mem(8);
+    put_word(mem, 0, mcrxr_form(4)); // mcrxr cr4
+    put_word(mem, 4, mcrxr_form(0)); // mcrxr cr0
+
+    cpu::CpuState state{};
+    state.cr = 0x12345678U;
+    state.xer = 0xd2345678U; // SO, OV, CA and XER bit 3 transfer as nibble D.
+    const cpu::Interpreter interpreter{};
+
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.cr == 0x1234d678U &&
+              state.xer == 0x02345678U,
+          "mcrxr moves the complete XER top nibble to the selected CR field and clears it");
+
+    state.xer = 0xeabcdef0U;
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.cr == 0xe234d678U &&
+              state.xer == 0x0abcdef0U && state.pc == 8,
+          "mcrxr can update CR0 and preserves the lower XER bits");
+
+    check(!cpu::decode(mcrxr_form(3, true)) && !cpu::decode(mcrxr_form(3, false, 1)) &&
+              !cpu::decode(mcrxr_form(3, false, 0, 1)) &&
+              !cpu::decode(mcrxr_form(3, false, 0, 0, 1)),
+          "mcrxr record and reserved-field encodings are rejected");
+}
+
 void test_conditional_branches() {
     using namespace project360;
     memory::GuestMemory mem(128);
@@ -1453,6 +1491,7 @@ int main() {
     test_compare_immediates();
     test_compare_registers();
     test_condition_register_transfers();
+    test_move_condition_register_from_xer();
     test_conditional_branches();
     test_absolute_and_register_branches();
     test_memory_bounds_and_alignment();
