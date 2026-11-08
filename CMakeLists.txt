@@ -13,6 +13,7 @@ add_library(project360_core
     src/gpu/xenos/pm4_decoder.cpp
     src/gpu/xenos/pm4_draw.cpp
     src/gpu/xenos/pm4_registers.cpp
+    src/gpu/xenos/shader_alu.cpp
     src/gpu/xenos/vertex_fetch.cpp
     src/kernel/guest_executor.cpp
     src/kernel/guest_pool.cpp

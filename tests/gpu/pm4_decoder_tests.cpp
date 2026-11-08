@@ -2,6 +2,7 @@
 #include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/pm4_registers.hpp"
 #include "gpu/xenos/registers.hpp"
+#include "gpu/xenos/shader_alu.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
@@ -67,6 +68,41 @@ void test_packet_framing_and_metadata() {
               type3.predicated && type3.payload_word_count == 3U &&
               type3.payload_word_offset == 8U,
           "type-3 header exposes opcode, predicate bit and payload bounds");
+}
+
+void test_shader_alu_word_decode() {
+    using namespace project360::gpu::xenos;
+    constexpr std::array<std::uint32_t, 3> words{
+        0xabebefd2U,
+        0xffdcba98U,
+        0xd6543210U,
+    };
+    const auto instruction = decode_shader_alu_instruction(words);
+    check(instruction.vector_destination == 0x12U &&
+              instruction.vector_destination_relative && instruction.absolute_constants &&
+              instruction.scalar_destination == 0x2fU &&
+              instruction.scalar_destination_relative && instruction.export_result &&
+              instruction.vector_write_mask == 0x0bU && instruction.scalar_write_mask == 0x0eU &&
+              instruction.vector_clamp && instruction.scalar_clamp &&
+              instruction.scalar_opcode == 0x2aU,
+          "Xenos ALU word 0 decodes destinations, masks, export and scalar opcode fields");
+    check(instruction.source_swizzles == std::array<std::uint8_t, 3>{0xdcU, 0xbaU, 0x98U} &&
+              instruction.source_negate == std::array<bool, 3>{true, true, true} &&
+              instruction.predicate_condition && instruction.predicated &&
+              instruction.constant_address_register_relative &&
+              instruction.constant_1_relative && instruction.constant_0_relative,
+          "Xenos ALU word 1 decodes swizzles, negation, predicate and constant addressing");
+    check(instruction.source_registers == std::array<std::uint8_t, 3>{0x54U, 0x32U, 0x10U} &&
+              instruction.vector_opcode == 0x16U &&
+              instruction.source_is_temporary == std::array<bool, 3>{true, true, false},
+          "Xenos ALU word 2 decodes raw source registers, selectors and vector opcode");
+
+    constexpr std::array<std::uint32_t, 3> unknown_opcodes{
+        (0x3fU << 26U), (0U), (0x1fU << 24U),
+    };
+    const auto unknown = decode_shader_alu_instruction(unknown_opcodes);
+    check(unknown.scalar_opcode == 0x3fU && unknown.vector_opcode == 0x1fU,
+          "Xenos ALU decoder preserves unknown opcode values for explicit later rejection");
 }
 
 void test_noops_and_malformed_streams() {
@@ -931,6 +967,7 @@ void test_wait_for_idle_is_synchronous_barrier() {
 
 int main() {
     test_packet_framing_and_metadata();
+    test_shader_alu_word_decode();
     test_noops_and_malformed_streams();
     test_register_packet_application();
     test_type3_constant_uploads();
