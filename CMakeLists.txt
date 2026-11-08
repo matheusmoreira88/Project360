@@ -10,6 +10,7 @@ add_library(project360_core
     src/cpu/decoder.cpp
     src/cpu/interpreter.cpp
     src/gpu/xenos/pm4_decoder.cpp
+    src/gpu/xenos/pm4_draw.cpp
     src/gpu/xenos/pm4_registers.cpp
     src/kernel/guest_executor.cpp
     src/kernel/kernel_dispatcher.cpp

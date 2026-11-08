@@ -1,4 +1,5 @@
 #include "gpu/xenos/pm4_decoder.hpp"
+#include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/pm4_registers.hpp"
 
 #include <cstdint>
@@ -220,7 +221,9 @@ void test_unimplemented_commands_fail_explicitly() {
     std::vector<std::uint8_t> draw_stream;
     append_u32_be(draw_stream, 4U);
     append_u32_be(draw_stream, 0x12345678U);
-    append_u32_be(draw_stream, 0xc0000000U | (0x22U << 8U)); // DRAW_INDX.
+    append_u32_be(draw_stream, 0xc0000000U | (1U << 16U) | (0x22U << 8U)); // DRAW_INDX.
+    append_u32_be(draw_stream, 0U); // Visibility query condition.
+    append_u32_be(draw_stream, (3U << 16U) | (2U << 6U)); // Auto-index, triangle list.
     const auto draw_decoded = decode_pm4(draw_stream);
     std::vector<std::uint32_t> draw_registers(8U, 0xccccccccU);
     const auto draw_result = apply_register_packets(draw_decoded.packets, draw_stream,
@@ -249,6 +252,54 @@ void test_unimplemented_commands_fail_explicitly() {
         complete_registers);
     check(!incomplete_list_result,
           "register application rejects a packet list that omits stream contents");
+}
+
+void test_draw_packet_metadata_decoding() {
+    using namespace project360::gpu::xenos;
+    std::vector<std::uint8_t> stream;
+    // DRAW_INDX: query token, 16-bit DMA indices, triangle list, 3 indices.
+    append_u32_be(stream, 0xc0000000U | (3U << 16U) | (0x22U << 8U));
+    append_u32_be(stream, 0x00000105U);
+    append_u32_be(stream, (3U << 16U) | 3U);
+    append_u32_be(stream, 0x00123456U);
+    append_u32_be(stream, 0x00000003U);
+    // DRAW_INDX_2: auto-index point list, two indices, with no query token.
+    append_u32_be(stream, 0xc0000000U | (0x36U << 8U));
+    append_u32_be(stream, (2U << 16U) | (2U << 6U) | 2U);
+    const auto packets = decode_pm4(stream);
+    const auto draws = packets ? decode_draw_commands(packets.packets, stream)
+                               : DrawDecodeResult{{}, "PM4 decode failed", 0U};
+    check(static_cast<bool>(draws) && draws.commands.size() == 2U,
+          "DRAW_INDX and DRAW_INDX_2 produce metadata without submitting work");
+    if (draws && draws.commands.size() == 2U) {
+        const auto& dma = draws.commands[0];
+        check(dma.has_viz_query_condition && dma.viz_query_condition == 0x105U &&
+                  dma.source == DrawSource::dma && dma.primitive_type == 3U &&
+                  dma.index_count == 3U && !dma.index_32_bit &&
+                  dma.dma_base == 0x00123456U && dma.dma_size == 3U,
+              "DMA draw exposes query token, initiator fields, base and size");
+        const auto& automatic = draws.commands[1];
+        check(!automatic.has_viz_query_condition && automatic.source == DrawSource::auto_index &&
+                  automatic.primitive_type == 2U && automatic.index_count == 2U,
+              "DRAW_INDX_2 decodes auto-index metadata without a query prefix");
+    }
+
+    std::vector<std::uint8_t> truncated;
+    append_u32_be(truncated, 0xc0000000U | (0x22U << 8U));
+    append_u32_be(truncated, 0U); // Query token, but missing initiator.
+    const auto truncated_packets = decode_pm4(truncated);
+    const auto missing_initiator = decode_draw_commands(truncated_packets.packets, truncated);
+    check(!missing_initiator && missing_initiator.commands.empty(),
+          "draw packet missing initiator fails without partial commands");
+
+    std::vector<std::uint8_t> immediate;
+    append_u32_be(immediate, 0xc0000000U | (2U << 16U) | (0x36U << 8U));
+    append_u32_be(immediate, (1U << 6U) | 3U);
+    append_u32_be(immediate, 0x1234U);
+    const auto immediate_packets = decode_pm4(immediate);
+    const auto unsupported = decode_draw_commands(immediate_packets.packets, immediate);
+    check(!unsupported && unsupported.commands.empty(),
+          "immediate-index draw reports unsupported semantics explicitly");
 }
 
 void test_wait_for_idle_is_synchronous_barrier() {
@@ -280,6 +331,7 @@ int main() {
     test_register_packet_application();
     test_type3_constant_uploads();
     test_unimplemented_commands_fail_explicitly();
+    test_draw_packet_metadata_decoding();
     test_wait_for_idle_is_synchronous_barrier();
     if (failures != 0) {
         std::cerr << failures << " GPU packet test(s) failed\n";
