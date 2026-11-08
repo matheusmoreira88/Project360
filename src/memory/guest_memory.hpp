@@ -44,6 +44,8 @@ public:
                             std::byte value) noexcept;
     [[nodiscard]] bool fill_u32_be(std::uint64_t address, std::size_t length,
                                    std::uint32_t value) noexcept;
+    [[nodiscard]] bool move(std::uint64_t destination, std::uint64_t source,
+                            std::size_t length) noexcept;
 
     // Mapping mode is opt-in; the default remains the bounded flat memory used by CPU tests.
     [[nodiscard]] bool map_page(std::uint64_t virtual_base, std::uint64_t physical_base,

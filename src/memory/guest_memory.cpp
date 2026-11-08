@@ -335,4 +335,90 @@ bool GuestMemory::fill_u32_be(std::uint64_t address, std::size_t length,
     return true;
 }
 
+bool GuestMemory::move(std::uint64_t destination, std::uint64_t source,
+                       std::size_t length) noexcept {
+    if (length == 0U) return true;
+    if (destination > std::numeric_limits<std::uint64_t>::max() - (length - 1U) ||
+        source > std::numeric_limits<std::uint64_t>::max() - (length - 1U)) {
+        return false;
+    }
+
+    if (mapping_enabled_) {
+        const auto validate = [this, length](std::uint64_t address,
+                                             GuestPageAccess access) noexcept {
+            auto current = address;
+            auto remaining = length;
+            while (remaining != 0U) {
+                std::uint64_t physical = 0U;
+                if (!translate(current, access, physical)) return false;
+                const auto page_offset = static_cast<std::size_t>(
+                    current & (page_size - 1U));
+                const auto chunk = std::min(remaining,
+                                            static_cast<std::size_t>(page_size) - page_offset);
+                current += static_cast<std::uint64_t>(chunk);
+                remaining -= chunk;
+            }
+            return true;
+        };
+        if (!validate(source, GuestPageAccess::read) ||
+            !validate(destination, GuestPageAccess::write)) {
+            return false;
+        }
+    } else if (!contains(source, length) || !contains(destination, length)) {
+        return false;
+    }
+
+    // A fixed-size scratch buffer bounds host memory use regardless of guest
+    // request size. Direction selection preserves overlapping virtual ranges.
+    std::array<std::byte, static_cast<std::size_t>(page_size)> scratch{};
+    const bool copy_backward = destination > source && destination - source < length;
+    std::size_t remaining = length;
+    while (remaining != 0U) {
+        std::uint64_t source_address = 0U;
+        std::uint64_t destination_address = 0U;
+        std::size_t chunk = std::min(remaining, scratch.size());
+        if (copy_backward) {
+            const auto source_end = source + static_cast<std::uint64_t>(remaining);
+            const auto destination_end = destination + static_cast<std::uint64_t>(remaining);
+            if (mapping_enabled_) {
+                const auto source_page_tail = static_cast<std::size_t>(
+                    ((source_end - 1U) & (page_size - 1U)) + 1U);
+                const auto destination_page_tail = static_cast<std::size_t>(
+                    ((destination_end - 1U) & (page_size - 1U)) + 1U);
+                chunk = std::min({chunk, source_page_tail, destination_page_tail});
+            }
+            source_address = source_end - static_cast<std::uint64_t>(chunk);
+            destination_address = destination_end - static_cast<std::uint64_t>(chunk);
+        } else {
+            source_address = source + static_cast<std::uint64_t>(length - remaining);
+            destination_address = destination + static_cast<std::uint64_t>(length - remaining);
+            if (mapping_enabled_) {
+                const auto source_page_tail = static_cast<std::size_t>(
+                    page_size - (source_address & (page_size - 1U)));
+                const auto destination_page_tail = static_cast<std::size_t>(
+                    page_size - (destination_address & (page_size - 1U)));
+                chunk = std::min({chunk, source_page_tail, destination_page_tail});
+            }
+        }
+
+        std::uint64_t source_physical = source_address;
+        std::uint64_t destination_physical = destination_address;
+        if (mapping_enabled_ &&
+            (!translate(source_address, GuestPageAccess::read, source_physical) ||
+             !translate(destination_address, GuestPageAccess::write,
+                        destination_physical))) {
+            return false;
+        }
+        const auto source_offset = static_cast<std::size_t>(source_physical);
+        const auto destination_offset = static_cast<std::size_t>(destination_physical);
+        std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(source_offset), chunk,
+                    scratch.begin());
+        std::copy_n(scratch.begin(), chunk,
+                    bytes_.begin() + static_cast<std::ptrdiff_t>(destination_offset));
+
+        remaining -= chunk;
+    }
+    return true;
+}
+
 } // namespace project360::memory

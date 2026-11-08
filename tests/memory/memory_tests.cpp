@@ -124,6 +124,75 @@ int main() {
               !fill_memory.fill(UINT64_MAX - 1U, 4U, std::byte{0x11}),
           "zero-length fill is a no-op and wrapped guest ranges fail safely");
 
+    GuestMemory move_memory(32U);
+    const std::array<std::byte, 12> move_seed{
+        std::byte{0U}, std::byte{1U}, std::byte{2U}, std::byte{3U},
+        std::byte{4U}, std::byte{5U}, std::byte{6U}, std::byte{7U},
+        std::byte{8U}, std::byte{9U}, std::byte{10U}, std::byte{11U}};
+    check(move_memory.load(0U, move_seed), "fixture seeds the overlapping move ranges");
+    check(move_memory.move(2U, 0U, 8U),
+          "guest move preserves data when destination overlaps above the source");
+    std::array<std::uint8_t, 8> moved_bytes{};
+    bool overlap_above_matches = true;
+    for (std::size_t i = 0; i < moved_bytes.size(); ++i) {
+        overlap_above_matches = overlap_above_matches &&
+                                move_memory.read_u8(2U + i, moved_bytes[i]) &&
+                                moved_bytes[i] == i;
+    }
+    check(overlap_above_matches,
+          "backward overlapping move copies the original source bytes");
+    check(move_memory.load(0U, move_seed) && move_memory.move(0U, 2U, 8U),
+          "guest move preserves data when destination overlaps below the source");
+    bool overlap_below_matches = true;
+    for (std::size_t i = 0; i < moved_bytes.size(); ++i) {
+        overlap_below_matches = overlap_below_matches &&
+                                move_memory.read_u8(i, moved_bytes[i]) &&
+                                moved_bytes[i] == i + 2U;
+    }
+    check(overlap_below_matches,
+          "forward overlapping move copies the original source bytes");
+
+    GuestMemory mapped_move(4U * static_cast<std::size_t>(GuestMemory::page_size));
+    const std::array<project360::memory::GuestPageMapping, 4> move_pages{{
+        {0x100000U, 0U, GuestPageAccess::read | GuestPageAccess::write},
+        {0x101000U, 3U * GuestMemory::page_size,
+         GuestPageAccess::read | GuestPageAccess::write},
+        {0x200000U, GuestMemory::page_size,
+         GuestPageAccess::read | GuestPageAccess::write},
+        {0x201000U, 2U * GuestMemory::page_size,
+         GuestPageAccess::read | GuestPageAccess::write},
+    }};
+    const std::array<std::byte, 8> move_first_half{
+        std::byte{0x10}, std::byte{0x11}, std::byte{0x12}, std::byte{0x13},
+        std::byte{0x14}, std::byte{0x15}, std::byte{0x16}, std::byte{0x17}};
+    const std::array<std::byte, 8> move_second_half{
+        std::byte{0x20}, std::byte{0x21}, std::byte{0x22}, std::byte{0x23},
+        std::byte{0x24}, std::byte{0x25}, std::byte{0x26}, std::byte{0x27}};
+    check(mapped_move.map_pages(move_pages) &&
+              mapped_move.load(GuestMemory::page_size - move_first_half.size(), move_first_half) &&
+              mapped_move.load(3U * GuestMemory::page_size, move_second_half),
+          "fixture maps and seeds non-contiguous cross-page copy ranges");
+    check(mapped_move.move(0x200ff8U, 0x100ff8U, 16U),
+          "guest move copies across non-contiguous virtual page mappings");
+    std::uint8_t moved_byte = 0U;
+    check(mapped_move.read_u8(0x200ff8U, moved_byte) && moved_byte == 0x10U &&
+              mapped_move.read_u8(0x201000U, moved_byte) && moved_byte == 0x20U,
+          "cross-page move preserves both halves through virtual translation");
+    check(mapped_move.protect_page(0x201000U, GuestPageAccess::read),
+          "second destination page becomes read-only for move atomicity test");
+    check(!mapped_move.move(0x200ff8U, 0x100ff8U, 16U) &&
+              mapped_move.read_u8(0x200ff8U, moved_byte) && moved_byte == 0x10U,
+          "move validates the entire destination before changing a writable prefix");
+    check(mapped_move.protect_page(0x201000U,
+                                   GuestPageAccess::read | GuestPageAccess::write) &&
+              mapped_move.unmap_page(0x101000U) &&
+              !mapped_move.move(0x200ff8U, 0x100ff8U, 16U) &&
+              mapped_move.read_u8(0x200ff8U, moved_byte) && moved_byte == 0x10U,
+          "move validates the complete source before changing destination memory");
+    check(move_memory.move(UINT64_MAX, 0U, 0U) &&
+              !move_memory.move(UINT64_MAX - 1U, 0U, 4U),
+          "zero-length moves are no-ops and wrapped guest ranges fail safely");
+
     GuestMemory transactional(2U * static_cast<std::size_t>(GuestMemory::page_size));
     const std::array<project360::memory::GuestPageMapping, 2> duplicate_batch{{
         {0x8000U, 0U, GuestPageAccess::read},

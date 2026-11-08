@@ -83,6 +83,24 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
         state.pc = state.lr & ~std::uint64_t{3};
         return KernelDispatchStatus::handled;
     }
+    if (import.ordinal == rtl_move_memory_ordinal) {
+        const auto destination = state.gpr[3];
+        const auto source = state.gpr[4];
+        const auto length = state.gpr[5];
+        constexpr auto guest_address_limit = std::uint64_t{0xffff'ffffU};
+        if (destination > guest_address_limit || source > guest_address_limit ||
+            length > guest_address_limit ||
+            (length != 0U &&
+             (length - 1U > guest_address_limit - destination ||
+              length - 1U > guest_address_limit - source))) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        if (!memory.move(destination, source, static_cast<std::size_t>(length))) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        state.pc = state.lr & ~std::uint64_t{3};
+        return KernelDispatchStatus::handled;
+    }
     if (import.ordinal != rtl_fill_memory_ordinal &&
         import.ordinal != rtl_fill_memory_ulong_ordinal &&
         import.ordinal != rtl_zero_memory_ordinal) {

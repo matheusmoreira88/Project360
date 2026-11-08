@@ -115,6 +115,24 @@ int main() {
               state.pc == 0x800090U,
           "RtlCompareMemory rejects guest address ranges that wrap the 32-bit address space");
 
+    check(memory.load(32U, initial), "test fixture seeds a source range for RtlMoveMemory");
+    state.gpr[3] = data_page + 40U;
+    state.gpr[4] = data_page + 32U;
+    state.gpr[5] = initial.size();
+    state.lr = 0x1047U;
+    state.pc = 0x8000a0U;
+    const auto moved = KernelDispatcher{}.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::rtl_move_memory_ordinal}, state, memory);
+    bool moved_matches = true;
+    for (std::size_t i = 0; i < initial.size(); ++i) {
+        std::uint8_t byte = 0U;
+        moved_matches = moved_matches && memory.read_u8(data_page + 40U + i, byte) &&
+                        byte == std::to_integer<std::uint8_t>(initial[i]);
+    }
+    check(moved == KernelDispatchStatus::handled && moved_matches &&
+              state.pc == 0x1044U,
+          "xboxkrnl ordinal 298 copies guest bytes and returns through LR");
+
     state.gpr[3] = data_page;
     state.gpr[4] = initial.size();
     state.gpr[14] = 0x1122334455667788ULL;
