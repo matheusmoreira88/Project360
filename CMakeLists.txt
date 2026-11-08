@@ -88,5 +88,22 @@ if(PROJECT360_BUILD_TESTS)
             target_compile_options(project360_qt_model_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
         endif()
         add_test(NAME project360_qt_model_tests COMMAND project360_qt_model_tests)
+
+        add_executable(project360_qt_window_tests
+            tests/frontend/qt_window_tests.cpp
+            src/frontend/qt/main_window.cpp
+            src/frontend/qt/main_window.hpp
+        )
+        target_link_libraries(project360_qt_window_tests PRIVATE project360_qt_frontend Qt6::Widgets)
+        target_compile_features(project360_qt_window_tests PRIVATE cxx_std_20)
+        if(MSVC)
+            target_compile_options(project360_qt_window_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
+        else()
+            target_compile_options(project360_qt_window_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+        endif()
+        add_test(NAME project360_qt_window_tests COMMAND project360_qt_window_tests)
+        set_tests_properties(project360_qt_window_tests PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        )
     endif()
 endif()

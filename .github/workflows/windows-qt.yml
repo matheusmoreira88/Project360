@@ -1,0 +1,56 @@
+name: Windows Qt build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python for the pinned Qt downloader
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Qt 6.12.0 for MSVC 2022
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check aqtinstall==3.3.0
+          python -m aqt install-qt windows desktop 6.12.0 win64_msvc2022_64 --outputdir C:\Qt --archives qtbase
+
+      - name: Configure Debug and Release
+        shell: pwsh
+        run: >-
+          cmake -S . -B out/build/windows-qt-ci
+          -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_PREFIX_PATH=C:\Qt\6.12.0\msvc2022_64
+          -DPROJECT360_BUILD_GUI=ON -DPROJECT360_BUILD_TESTS=ON
+
+      - name: Build Debug
+        run: cmake --build out/build/windows-qt-ci --config Debug --parallel 2
+
+      - name: Test Debug
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Qt\6.12.0\msvc2022_64\bin;$env:PATH"
+          ctest --test-dir out/build/windows-qt-ci -C Debug --output-on-failure
+
+      - name: Build Release
+        run: cmake --build out/build/windows-qt-ci --config Release --parallel 2
+
+      - name: Test Release
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Qt\6.12.0\msvc2022_64\bin;$env:PATH"
+          ctest --test-dir out/build/windows-qt-ci -C Release --output-on-failure

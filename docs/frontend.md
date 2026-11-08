@@ -22,6 +22,8 @@ The library file uses a small versioned format with bounded entry and path sizes
 
 Install Qt 6.5 or newer with the Widgets module and make its CMake package files discoverable (for example with `CMAKE_PREFIX_PATH`). The GUI target is optional: CMake skips it when Qt is not found, while preserving the core executable and tests.
 
+The `Windows Qt build` GitHub Actions workflow pins Qt 6.12.0 and the Qt downloader, and builds/tests the GUI on the Windows 2022/MSVC 2022 runner. It runs the model tests and an offscreen window smoke test; that checks construction and rendering, not visual design quality. Its first run is still pending; this local machine does not have Qt installed, so local builds cannot validate the widget code.
+
 ```powershell
 cmake --preset windows-debug
 cmake --build --preset debug --target project360_gui

@@ -202,7 +202,7 @@ MainWindow::MainWindow(std::filesystem::path library_file, QWidget* parent)
     detailsLayout->addWidget(selectionStatus_);
     detailsLayout->addStretch();
     launchButton_ = new QPushButton("Iniciar");
-    launchButton_->setObjectName("secondaryButton");
+    launchButton_->setObjectName("launchButton");
     launchButton_->setMinimumHeight(42);
     launchButton_->setEnabled(false);
     launchButton_->setToolTip("Indisponível: CPU, kernel e loader necessários ainda estão em desenvolvimento.");
@@ -384,8 +384,8 @@ void MainWindow::applyTheme() {
         QComboBox#sortOrder QAbstractItemView { background: #171c26; selection-background-color: #213c3c; }
         QPushButton#primaryButton { background: #55d6be; color: #081714; font-weight: 750; padding: 10px 17px; }
         QPushButton#primaryButton:hover { background: #79e5d1; }
-        QPushButton#secondaryButton { background: #27313d; color: #788598; font-weight: 700; text-align: center; }
-        QPushButton#secondaryButton:disabled { background: #222832; color: #707a89; }
+        QPushButton#launchButton { background: #27313d; color: #788598; font-weight: 700; text-align: center; }
+        QPushButton#launchButton:disabled { background: #222832; color: #707a89; }
         QPushButton#removeButton { background: #342329; color: #e8a7ac; font-weight: 650; text-align: center; }
         QPushButton#removeButton:hover:enabled { background: #482b33; }
         QPushButton#removeButton:disabled { background: #222832; color: #707a89; }
