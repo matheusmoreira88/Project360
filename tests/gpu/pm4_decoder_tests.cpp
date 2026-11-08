@@ -465,6 +465,18 @@ void test_primitive_assembly() {
           "primitive assembly rejects an index span inconsistent with draw metadata");
 }
 
+void test_vertex_shader_index_transform() {
+    using namespace project360::gpu::xenos;
+    check(transform_vertex_shader_index(0xab000005U, {1U, 0U, 0x00ffffffU}) == 6U,
+          "vertex shader index uses the low 24 bits after adding the draw offset");
+    check(transform_vertex_shader_index(0x00ffffffU, {2U, 0U, 0x00ffffffU}) == 1U,
+          "vertex shader index offset wraps within the 24-bit guest index range");
+    check(transform_vertex_shader_index(5U, {2U, 10U, 100U}) == 10U,
+          "vertex shader index is clamped to the minimum after offsetting");
+    check(transform_vertex_shader_index(150U, {3U, 10U, 100U}) == 100U,
+          "vertex shader index is clamped to the maximum after offsetting");
+}
+
 void test_vertex_fetch_descriptors_and_memory() {
     using namespace project360::gpu::xenos;
     project360::memory::GuestMemory memory(0x1000U);
@@ -542,6 +554,7 @@ int main() {
     test_draw_packet_metadata_decoding();
     test_dma_index_fetch();
     test_primitive_assembly();
+    test_vertex_shader_index_transform();
     test_vertex_fetch_descriptors_and_memory();
     test_wait_for_idle_is_synchronous_barrier();
     if (failures != 0) {

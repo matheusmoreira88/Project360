@@ -2,6 +2,7 @@
 
 #include "memory/guest_memory.hpp"
 
+#include <algorithm>
 #include <new>
 #include <utility>
 
@@ -334,6 +335,14 @@ PrimitiveAssemblyResult assemble_draw_primitives(
         return primitive_failure("Not enough host memory to assemble draw primitives");
     }
     return result;
+}
+
+std::uint32_t transform_vertex_shader_index(std::uint32_t vertex_index,
+                                            VertexIndexTransform transform) noexcept {
+    constexpr std::uint32_t kVertexIndexMask = 0x00ffffffU;
+    auto remapped = (vertex_index + transform.offset) & kVertexIndexMask;
+    remapped = std::max(remapped, transform.minimum);
+    return std::min(remapped, transform.maximum);
 }
 
 } // namespace project360::gpu::xenos

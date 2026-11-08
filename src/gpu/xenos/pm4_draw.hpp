@@ -74,6 +74,12 @@ struct PrimitiveAssemblyResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct VertexIndexTransform {
+    std::uint32_t offset{};
+    std::uint32_t minimum{};
+    std::uint32_t maximum{0x00ffffffU};
+};
+
 // Decodes DRAW_INDX and DRAW_INDX_2 packets into metadata only. No graphics
 // state is changed and no draw is submitted. Predicated and immediate-index
 // packets remain unsupported until their state/data semantics are implemented.
@@ -96,5 +102,10 @@ struct PrimitiveAssemblyResult {
 [[nodiscard]] PrimitiveAssemblyResult assemble_draw_primitives(
     const DrawCommand& command, std::span<const std::uint32_t> indices,
     PrimitiveAssemblyOptions options = {});
+
+// Produces the guest vertex-shader index: add the base offset, retain 24 bits,
+// then clamp to the configured unsigned minimum and maximum.
+[[nodiscard]] std::uint32_t transform_vertex_shader_index(
+    std::uint32_t vertex_index, VertexIndexTransform transform) noexcept;
 
 } // namespace project360::gpu::xenos
