@@ -26,8 +26,9 @@ struct TextureBlockDecodeResult {
 };
 
 // Decodes one complete storage block into row-major RGBA8 texels for the
-// explicitly supported Xenos formats. Numeric sign, gamma, component swizzle,
-// filtering and sampling semantics are not applied.
+// explicitly supported Xenos formats (8:8:8:8, 5:6:5, DXT1, DXT3 and DXT5).
+// Numeric sign, gamma, component swizzle, filtering and sampling semantics are
+// not applied.
 [[nodiscard]] TextureBlockDecodeResult decode_xenos_texture_block_rgba8(
     std::uint8_t format, std::span<const std::byte> block_bytes);
 

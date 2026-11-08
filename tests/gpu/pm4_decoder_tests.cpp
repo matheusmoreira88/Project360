@@ -2082,6 +2082,13 @@ void test_texture_block_rgba_decoding() {
               rgba.texels[0] == TextureRgba8{0x11U, 0x22U, 0x33U, 0x44U},
           "8:8:8:8 decoder extracts channels using Xenos format bit masks");
 
+    constexpr std::array<std::byte, 2> rgb565_storage{
+        std::byte{0x00}, std::byte{0xf8}};
+    const auto rgb565 = decode_xenos_texture_block_rgba8(4U, rgb565_storage);
+    check(rgb565 && rgb565.texel_count == 1U &&
+              rgb565.texels[0] == TextureRgba8{255U, 0U, 0U, 255U},
+          "5:6:5 decoder expands packed red, green and blue channels");
+
     constexpr std::array<std::byte, 8> dxt1_four_color{
         std::byte{0x00}, std::byte{0xf8}, std::byte{0xe0}, std::byte{0x07},
         std::byte{0xe4}, std::byte{0xe4}, std::byte{0xe4}, std::byte{0xe4}};
@@ -2100,10 +2107,42 @@ void test_texture_block_rgba_decoding() {
     check(transparent && transparent.texels[3] == TextureRgba8{0U, 0U, 0U, 0U},
           "DXT1 three-color mode decodes the transparent selector as transparent black");
 
+    constexpr std::array<std::byte, 16> dxt3_explicit_alpha{
+        std::byte{0x10}, std::byte{0x32}, std::byte{0x54}, std::byte{0x76},
+        std::byte{0x98}, std::byte{0xba}, std::byte{0xdc}, std::byte{0xfe},
+        std::byte{0x00}, std::byte{0xf8}, std::byte{0xe0}, std::byte{0x07},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}};
+    const auto dxt3 = decode_xenos_texture_block_rgba8(19U, dxt3_explicit_alpha);
+    check(dxt3 && dxt3.texel_count == 16U &&
+              dxt3.texels[0] == TextureRgba8{255U, 0U, 0U, 0U} &&
+              dxt3.texels[1] == TextureRgba8{255U, 0U, 0U, 17U} &&
+              dxt3.texels[15] == TextureRgba8{255U, 0U, 0U, 255U},
+          "DXT3 decoder expands explicit 4-bit alpha and decodes its color block");
+
+    constexpr std::array<std::byte, 16> dxt5_interpolated_alpha{
+        std::byte{0xff}, std::byte{0x00}, std::byte{0xd0}, std::byte{0x01},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0xff}, std::byte{0xff},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}};
+    const auto dxt5 = decode_xenos_texture_block_rgba8(20U, dxt5_interpolated_alpha);
+    check(dxt5 && dxt5.texel_count == 16U && dxt5.texels[0].a == 255U &&
+              dxt5.texels[1].a == 218U && dxt5.texels[2].a == 36U,
+          "DXT5 decoder reads selectors for endpoint and interpolated alpha values");
+
+    constexpr std::array<std::byte, 16> dxt5_alpha_extremes{
+        std::byte{0x00}, std::byte{0xff}, std::byte{0x3e}, std::byte{0xff},
+        std::byte{0xff}, std::byte{0xff}, std::byte{0xff}, std::byte{0xff},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0xff}, std::byte{0xff},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}};
+    const auto dxt5_extremes = decode_xenos_texture_block_rgba8(20U, dxt5_alpha_extremes);
+    check(dxt5_extremes && dxt5_extremes.texels[0].a == 0U &&
+              dxt5_extremes.texels[1].a == 255U,
+          "DXT5 lower-endpoint mode produces its explicit transparent and opaque entries");
+
     constexpr std::array<std::byte, 7> truncated_dxt1{};
     const auto truncated = decode_xenos_texture_block_rgba8(18U, truncated_dxt1);
     const std::array<std::byte, 2> unsupported_storage{};
-    const auto unsupported = decode_xenos_texture_block_rgba8(4U, unsupported_storage);
+    const auto unsupported = decode_xenos_texture_block_rgba8(5U, unsupported_storage);
     const std::array<std::byte, 3> wrong_size{};
     const auto wrong_block_size = decode_xenos_texture_block_rgba8(6U, wrong_size);
     check(!truncated && !unsupported && !wrong_block_size,
