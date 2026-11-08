@@ -423,6 +423,44 @@ void test_subfze_arithmetic() {
           "subfze rejects a nonzero reserved RB field");
 }
 
+void test_subfme_arithmetic() {
+    using namespace project360;
+    memory::GuestMemory mem(4);
+    const cpu::Interpreter interpreter{};
+
+    put_word(mem, 0, add_xo(3, 1, 0, 232, false, true)); // subfme. r3,r1
+    cpu::CpuState state{};
+    state.gpr[1] = 0x90003000U;
+    state.xer = 0xa0000000U; // SO and CA.
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.gpr[3] == 0xffffffff6fffcfffULL && state.xer == 0xa0000000U &&
+              (state.cr >> 28U) == 9U,
+          "subfme. combines complemented RA, minus one and incoming CA");
+
+    put_word(mem, 0, add_xo(3, 1, 0, 232));
+    cpu::CpuState no_carry_state{};
+    no_carry_state.gpr[1] = 0x00000000b0043000ULL;
+    result = interpreter.step(no_carry_state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              no_carry_state.gpr[3] == 0xffffffff4ffbcffeULL &&
+              no_carry_state.xer == 0x20000000U,
+          "subfme with CA clear subtracts an additional one and reports carry-out");
+
+    put_word(mem, 0, add_xo(3, 1, 0, 232, true, true));
+    cpu::CpuState overflow_state{};
+    overflow_state.gpr[1] = 0x7fffffffffffffffULL;
+    overflow_state.xer = 0x80000000U; // Sticky SO.
+    result = interpreter.step(overflow_state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              overflow_state.gpr[3] == 0x7fffffffffffffffULL &&
+              overflow_state.xer == 0xe0000000U && (overflow_state.cr >> 28U) == 5U,
+          "subfmeo. detects signed overflow and updates SO, OV and CR0");
+
+    check(!cpu::decode(add_xo(3, 1, 1, 232)),
+          "subfme rejects a nonzero reserved RB field");
+}
+
 void test_negate_arithmetic() {
     using namespace project360;
     memory::GuestMemory mem(16);
@@ -2313,6 +2351,7 @@ int main() {
     test_addze_arithmetic();
     test_addme_arithmetic();
     test_subfze_arithmetic();
+    test_subfme_arithmetic();
     test_negate_arithmetic();
     test_carry_immediate_and_subtract_arithmetic();
     test_logical_shift_and_rotate_instructions();

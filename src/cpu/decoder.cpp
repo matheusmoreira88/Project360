@@ -448,6 +448,13 @@ DecodeResult decode(std::uint32_t word) {
             ins.overflow_enable = oe;
             return {ins, {}};
         }
+        if (xo == 232U) {
+            if (ins.rb != 0U) return {{}, "subfme reserved RB field is nonzero"};
+            ins.opcode = Opcode::subfme;
+            ins.record = (word & 1U) != 0U;
+            ins.overflow_enable = oe;
+            return {ins, {}};
+        }
         if (xo == 235U || xo == 233U) {
             ins.opcode = xo == 235U ? Opcode::mullw : Opcode::mulld;
             ins.record = (word & 1U) != 0U;

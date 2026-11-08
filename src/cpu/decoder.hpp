@@ -77,6 +77,7 @@ enum class Opcode {
     subf,
     subfc,
     subfe,
+    subfme,
     subfze,
     subfic,
     cmp,
