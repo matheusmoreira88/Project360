@@ -73,6 +73,20 @@ struct TextureFetchConstantBankResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct TextureStorageLayout {
+    std::uint8_t block_width_pixels{};
+    std::uint8_t block_height_pixels{};
+    std::uint8_t bytes_per_block{};
+    bool compressed{};
+};
+
+struct TextureStorageLayoutResult {
+    TextureStorageLayout layout{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 // Decodes the six-dword texture fetch descriptor. Width, height, and depth or
 // layer counts are returned as texel counts after applying the stored minus-one
 // encoding. Texture memory layout and sampling are not performed here.
@@ -85,5 +99,11 @@ struct TextureFetchConstantBankResult {
 [[nodiscard]] TextureFetchConstantBankResult decode_texture_fetch_constant_bank(
     std::span<const std::uint32_t> register_file,
     std::span<const std::uint8_t> required_slots);
+
+// Returns storage block geometry for the formats whose texel/block sizes are
+// validated by the current implementation. Pixel/channel conversion is not
+// included; unsupported format values fail explicitly.
+[[nodiscard]] TextureStorageLayoutResult decode_texture_storage_layout(
+    std::uint8_t format);
 
 } // namespace project360::gpu::xenos

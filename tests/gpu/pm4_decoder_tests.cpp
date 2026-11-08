@@ -2038,6 +2038,35 @@ void test_texture_fetch_constant_metadata() {
         truncated_slot);
     check(!invalid_slot && !truncated,
           "texture fetch bank rejects invalid slots and truncated register storage");
+
+    const auto rgba8_layout = decode_texture_storage_layout(6U);
+    const auto rgb565_layout = decode_texture_storage_layout(4U);
+    const auto dxt1_layout = decode_texture_storage_layout(18U);
+    const auto dxt5_layout = decode_texture_storage_layout(20U);
+    const auto dxn_layout = decode_texture_storage_layout(49U);
+    const auto ctx1_layout = decode_texture_storage_layout(60U);
+    const auto rgba8_extended_layout = decode_texture_storage_layout(50U);
+    const auto unsupported_layout = decode_texture_storage_layout(0U);
+    check(rgba8_layout && rgba8_layout.layout.block_width_pixels == 1U &&
+              rgba8_layout.layout.block_height_pixels == 1U &&
+              rgba8_layout.layout.bytes_per_block == 4U && !rgba8_layout.layout.compressed,
+          "RGBA8 texture storage is classified as four bytes per texel");
+    check(rgb565_layout && rgb565_layout.layout.bytes_per_block == 2U &&
+              !rgb565_layout.layout.compressed && rgba8_extended_layout &&
+              rgba8_extended_layout.layout.bytes_per_block == 4U,
+          "packed RGB565 and extended RGBA8 formats expose their source storage sizes");
+    check(dxt1_layout && dxt1_layout.layout.block_width_pixels == 4U &&
+              dxt1_layout.layout.block_height_pixels == 4U &&
+              dxt1_layout.layout.bytes_per_block == 8U && dxt1_layout.layout.compressed,
+          "DXT1 texture storage is classified as an eight-byte 4x4 block");
+    check(dxt5_layout && dxt5_layout.layout.bytes_per_block == 16U &&
+              dxt5_layout.layout.compressed && dxn_layout &&
+              dxn_layout.layout.bytes_per_block == 16U && dxn_layout.layout.compressed &&
+              ctx1_layout && ctx1_layout.layout.bytes_per_block == 8U &&
+              ctx1_layout.layout.compressed,
+          "DXT5, DXN and CTX1 texture storage use their encoded block sizes");
+    check(!unsupported_layout,
+          "unsupported Xenos texture storage formats fail explicitly");
 }
 
 void test_vfetch_instruction_and_attribute_range() {

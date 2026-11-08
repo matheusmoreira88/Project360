@@ -127,4 +127,74 @@ TextureFetchConstantBankResult decode_texture_fetch_constant_bank(
     return result;
 }
 
+TextureStorageLayoutResult decode_texture_storage_layout(std::uint8_t format) {
+    switch (format) {
+    case 2U: // 8 bits per texel.
+    case 8U:
+    case 9U:
+        return {{1U, 1U, 1U, false}, {}};
+    case 3U: // 16 bits per texel.
+    case 4U:
+    case 5U:
+    case 10U:
+    case 15U:
+        return {{1U, 1U, 2U, false}, {}};
+    case 6U: // 32 bits per texel.
+    case 7U:
+    case 13U:
+    case 14U:
+    case 16U:
+    case 17U:
+    case 22U:
+    case 23U:
+    case 24U:
+    case 25U:
+    case 27U:
+    case 28U:
+    case 30U:
+    case 31U:
+    case 33U:
+    case 36U:
+    case 39U:
+    case 40U:
+    case 44U:
+    case 45U:
+    case 50U: // Same storage size as the corresponding 8:8:8:8 or 10:10:10:2 format.
+    case 54U:
+    case 55U:
+    case 56U:
+    case 62U:
+    case 63U:
+        return {{1U, 1U, 4U, false}, {}};
+    case 19U: // 16-byte 4x4 DXT blocks.
+    case 20U:
+    case 52U:
+    case 53U:
+    case 49U: // Two 8-byte channel blocks per 4x4 DXN block.
+        return {{4U, 4U, 16U, true}, {}};
+    case 18U: // 8-byte 4x4 DXT1 blocks.
+    case 51U:
+    case 58U:
+    case 59U:
+    case 60U:
+    case 61U:
+        return {{4U, 4U, 8U, true}, {}};
+    case 21U: // 64 bits per texel.
+    case 26U:
+    case 29U:
+    case 32U:
+    case 34U:
+    case 37U:
+        return {{1U, 1U, 8U, false}, {}};
+    case 35U:
+    case 38U:
+        return {{1U, 1U, 16U, false}, {}};
+    case 57U:
+        return {{1U, 1U, 12U, false}, {}};
+    default:
+        return {{}, "Texture storage layout is not implemented for format " +
+                           std::to_string(format)};
+    }
+}
+
 } // namespace project360::gpu::xenos
