@@ -39,10 +39,18 @@ struct VertexFetchWordsResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct VertexFetchValuesResult {
+    std::vector<float> components;
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct VertexFetchInstruction {
     std::uint8_t fetch_constant_index{};
     std::uint8_t format{};
     std::uint8_t component_count{};
+    std::uint8_t storage_dword_count{};
     std::uint8_t prefetch_count{};
     std::uint8_t source_register{};
     std::uint8_t destination_register{};
@@ -84,10 +92,15 @@ struct VertexFetchInstructionDecodeResult {
 [[nodiscard]] VertexFetchInstructionDecodeResult decode_vertex_fetch_instruction(
     const std::array<std::uint32_t, 3>& dwords);
 
-// Reads one vertex's raw 32-bit components for the supported 32-bit scalar and
-// vector formats. Float bit patterns are preserved; shader numeric conversion,
-// swizzling, normalization and result-register writes are not performed.
+// Reads the encoded storage dwords for a single vertex. Packed and half-width
+// formats occupy fewer dwords than their logical component count.
 [[nodiscard]] VertexFetchWordsResult read_vertex_fetch_attribute(
+    const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
+    const memory::GuestMemory& memory, std::uint32_t vertex_index);
+
+// Converts supported VFETCH storage formats into numeric components. It does
+// not apply destination swizzles, defaults, exponent adjustment or register writes.
+[[nodiscard]] VertexFetchValuesResult read_vertex_fetch_attribute_values(
     const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
     const memory::GuestMemory& memory, std::uint32_t vertex_index);
 

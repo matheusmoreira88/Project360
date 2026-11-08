@@ -2,6 +2,7 @@
 
 #include "memory/guest_memory.hpp"
 
+#include <bit>
 #include <cstddef>
 #include <limits>
 #include <new>
@@ -38,6 +39,80 @@ std::uint32_t read_u32_le(std::span<const std::byte> bytes, std::size_t offset) 
            (std::to_integer<std::uint32_t>(bytes[offset + 1U]) << 8U) |
            (std::to_integer<std::uint32_t>(bytes[offset + 2U]) << 16U) |
            (std::to_integer<std::uint32_t>(bytes[offset + 3U]) << 24U);
+}
+
+struct FormatInfo {
+    std::uint8_t components{};
+    std::uint8_t dwords{};
+    std::array<std::uint8_t, 4> widths{};
+    bool floating_point{};
+};
+
+FormatInfo format_info(std::uint8_t format) {
+    switch (format) {
+    case 6U: return {4U, 1U, {8U, 8U, 8U, 8U}, false};
+    case 7U: return {4U, 1U, {10U, 10U, 10U, 2U}, false};
+    case 16U: return {3U, 1U, {10U, 11U, 11U, 0U}, false};
+    case 17U: return {3U, 1U, {11U, 11U, 10U, 0U}, false};
+    case 25U: return {2U, 1U, {16U, 16U, 0U, 0U}, false};
+    case 26U: return {4U, 2U, {16U, 16U, 16U, 16U}, false};
+    case 31U: return {2U, 1U, {16U, 16U, 0U, 0U}, true};
+    case 32U: return {4U, 2U, {16U, 16U, 16U, 16U}, true};
+    case 33U: return {1U, 1U, {32U, 0U, 0U, 0U}, false};
+    case 34U: return {2U, 2U, {32U, 32U, 0U, 0U}, false};
+    case 35U: return {4U, 4U, {32U, 32U, 32U, 32U}, false};
+    case 36U: return {1U, 1U, {32U, 0U, 0U, 0U}, true};
+    case 37U: return {2U, 2U, {32U, 32U, 0U, 0U}, true};
+    case 38U: return {4U, 4U, {32U, 32U, 32U, 32U}, true};
+    case 57U: return {3U, 3U, {32U, 32U, 32U, 0U}, true};
+    default: return {};
+    }
+}
+
+float half_to_float(std::uint16_t bits) {
+    const auto sign = static_cast<std::uint32_t>(bits & 0x8000U) << 16U;
+    auto exponent = static_cast<std::uint32_t>((bits >> 10U) & 0x1fU);
+    auto fraction = static_cast<std::uint32_t>(bits & 0x03ffU);
+    std::uint32_t result{};
+    if (exponent == 0U) {
+        if (fraction == 0U) {
+            result = sign;
+        } else {
+            std::int32_t unbiased = -14;
+            while ((fraction & 0x0400U) == 0U) {
+                fraction <<= 1U;
+                --unbiased;
+            }
+            fraction &= 0x03ffU;
+            result = sign | (static_cast<std::uint32_t>(unbiased + 127) << 23U) |
+                     (fraction << 13U);
+        }
+    } else if (exponent == 0x1fU) {
+        result = sign | 0x7f800000U | (fraction << 13U);
+    } else {
+        exponent += 112U;
+        result = sign | (exponent << 23U) | (fraction << 13U);
+    }
+    return std::bit_cast<float>(result);
+}
+
+std::uint32_t extract_component(const std::vector<std::uint32_t>& words,
+                                std::uint32_t bit_offset, std::uint8_t width) {
+    const auto word_index = static_cast<std::size_t>(bit_offset / 32U);
+    const auto shift = bit_offset % 32U;
+    if (word_index >= words.size()) return 0U;
+    std::uint64_t packed = words[word_index] >> shift;
+    if (shift != 0U && shift + width > 32U && word_index + 1U < words.size()) {
+        packed |= static_cast<std::uint64_t>(words[word_index + 1U]) << (32U - shift);
+    }
+    const auto mask = width == 32U ? 0xffffffffULL : ((1ULL << width) - 1ULL);
+    return static_cast<std::uint32_t>(packed & mask);
+}
+
+std::int64_t sign_extend(std::uint32_t value, std::uint8_t width) {
+    const auto sign_bit = 1U << (width - 1U);
+    if ((value & sign_bit) == 0U) return static_cast<std::int64_t>(value);
+    return static_cast<std::int64_t>(value) - (1LL << width);
 }
 
 } // namespace
@@ -147,30 +222,10 @@ VertexFetchInstructionDecodeResult decode_vertex_fetch_instruction(
             : static_cast<std::int32_t>(encoded_exponent_adjust));
     instruction.stride_dwords = static_cast<std::uint8_t>(word2 & 0xffU);
     instruction.offset_dwords = static_cast<std::int32_t>(signed_offset);
-    switch (instruction.format) {
-    case 33U:
-        instruction.component_count = 1U;
-        break;
-    case 34U:
-    case 37U:
-        instruction.component_count = 2U;
-        break;
-    case 57U:
-        instruction.component_count = 3U;
-        break;
-    case 35U:
-    case 38U:
-        instruction.component_count = 4U;
-        break;
-    case 36U:
-        instruction.component_count = 1U;
-        break;
-    default:
-        instruction.component_count = 0U;
-        break;
-    }
-    instruction.is_float_format = instruction.format >= 36U && instruction.format <= 38U;
-    instruction.is_float_format = instruction.is_float_format || instruction.format == 57U;
+    const auto info = format_info(instruction.format);
+    instruction.component_count = info.components;
+    instruction.storage_dword_count = info.dwords;
+    instruction.is_float_format = info.floating_point;
     return {instruction, {}};
 }
 
@@ -178,7 +233,7 @@ VertexFetchWordsResult read_vertex_fetch_attribute(const VertexFetchInstruction&
                                                    const VertexFetchDescriptor& descriptor,
                                                    const memory::GuestMemory& memory,
                                                    std::uint32_t vertex_index) {
-    if (instruction.component_count == 0U) {
+    if (instruction.component_count == 0U || instruction.storage_dword_count == 0U) {
         return {{}, "VFETCH element format is unsupported by the raw dword reader"};
     }
     const auto base_offset = static_cast<std::uint64_t>(vertex_index) *
@@ -195,11 +250,68 @@ VertexFetchWordsResult read_vertex_fetch_attribute(const VertexFetchInstruction&
         first_dword += static_cast<std::uint32_t>(instruction.offset_dwords);
     }
     if (first_dword > descriptor.size_dwords ||
-        instruction.component_count > descriptor.size_dwords - first_dword) {
+        instruction.storage_dword_count > descriptor.size_dwords - first_dword) {
         return {{}, "VFETCH attribute exceeds its descriptor range"};
     }
     return read_vertex_fetch_words(descriptor, memory, static_cast<std::uint32_t>(first_dword),
-                                   instruction.component_count);
+                                   instruction.storage_dword_count);
+}
+
+VertexFetchValuesResult read_vertex_fetch_attribute_values(
+    const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
+    const memory::GuestMemory& memory, std::uint32_t vertex_index) {
+    const auto info = format_info(instruction.format);
+    if (info.components == 0U || instruction.component_count != info.components ||
+        instruction.storage_dword_count != info.dwords) {
+        return {{}, "VFETCH format metadata is unsupported or inconsistent"};
+    }
+    if (info.floating_point && instruction.exponent_adjust != 0) {
+        return {{}, "VFETCH exponent adjustment is not implemented for floating formats"};
+    }
+    if (!info.floating_point && instruction.signed_repeating_fraction &&
+        instruction.normalized_number_format && instruction.format_component_all) {
+        return {{}, "VFETCH signed repeating-fraction mode is not implemented"};
+    }
+
+    const auto raw = read_vertex_fetch_attribute(instruction, descriptor, memory, vertex_index);
+    if (!raw) return {{}, raw.error};
+
+    VertexFetchValuesResult result{};
+    result.components.reserve(info.components);
+    std::uint32_t bit_offset = 0U;
+    for (std::uint8_t component = 0U; component < info.components; ++component) {
+        const auto width = info.widths[component];
+        if (width == 0U || bit_offset + width > raw.words.size() * 32U) {
+            return {{}, "VFETCH component layout exceeds its encoded storage"};
+        }
+        const auto value = extract_component(raw.words, bit_offset, width);
+        if (info.floating_point) {
+            if (width == 16U) {
+                result.components.push_back(half_to_float(static_cast<std::uint16_t>(value)));
+            } else if (width == 32U) {
+                result.components.push_back(std::bit_cast<float>(value));
+            } else {
+                return {{}, "VFETCH floating component width is unsupported"};
+            }
+        } else if (instruction.normalized_number_format) {
+            if (instruction.format_component_all) {
+                const auto signed_value = sign_extend(value, width);
+                const auto max_positive = static_cast<double>((1ULL << (width - 1U)) - 1ULL);
+                const auto normalized = static_cast<double>(signed_value) / max_positive;
+                result.components.push_back(
+                    static_cast<float>(normalized < -1.0 ? -1.0 : normalized));
+            } else {
+                const auto max_value = static_cast<double>((1ULL << width) - 1ULL);
+                result.components.push_back(static_cast<float>(static_cast<double>(value) / max_value));
+            }
+        } else if (instruction.format_component_all) {
+            result.components.push_back(static_cast<float>(sign_extend(value, width)));
+        } else {
+            result.components.push_back(static_cast<float>(value));
+        }
+        bit_offset += width;
+    }
+    return result;
 }
 
 } // namespace project360::gpu::xenos

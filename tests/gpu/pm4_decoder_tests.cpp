@@ -552,15 +552,20 @@ void test_vfetch_instruction_and_attribute_range() {
         decode_vertex_fetch_instruction(encoded_negative_offset);
     check(decoded_negative_offset && decoded_negative_offset.instruction.offset_dwords == -1,
           "VFETCH sign-extends the 23-bit signed dword offset");
-    constexpr std::array<std::uint8_t, 7> formats{33U, 34U, 35U, 36U, 37U, 38U, 57U};
-    constexpr std::array<std::uint8_t, 7> component_counts{1U, 2U, 4U, 1U, 2U, 4U, 3U};
+    constexpr std::array<std::uint8_t, 15> formats{
+        6U, 7U, 16U, 17U, 25U, 26U, 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 57U};
+    constexpr std::array<std::uint8_t, 15> component_counts{
+        4U, 4U, 3U, 3U, 2U, 4U, 2U, 4U, 1U, 2U, 4U, 1U, 2U, 4U, 3U};
+    constexpr std::array<std::uint8_t, 15> storage_counts{
+        1U, 1U, 1U, 1U, 1U, 2U, 1U, 2U, 1U, 2U, 4U, 1U, 2U, 4U, 3U};
     for (std::size_t index = 0U; index < formats.size(); ++index) {
         auto format_words = words;
         format_words[1] = (format_words[1] & ~(0x3fU << 16U)) |
                           (static_cast<std::uint32_t>(formats[index]) << 16U);
         const auto format = decode_vertex_fetch_instruction(format_words);
-        check(format && format.instruction.component_count == component_counts[index],
-              "VFETCH recognizes the supported 32-bit scalar/vector component counts");
+        check(format && format.instruction.component_count == component_counts[index] &&
+                  format.instruction.storage_dword_count == storage_counts[index],
+              "VFETCH distinguishes logical components from encoded dword storage");
     }
     if (decoded && descriptor) {
         const auto attribute =
@@ -613,13 +618,88 @@ void test_vfetch_instruction_and_attribute_range() {
     auto packed_words = words;
     packed_words[1] = (packed_words[1] & ~(0x3fU << 16U)) | (6U << 16U);
     const auto packed = decode_vertex_fetch_instruction(packed_words);
-    const auto unsupported_format = descriptor
-                                        ? read_vertex_fetch_attribute(packed.instruction,
-                                                                     descriptor.descriptor, memory,
-                                                                     0U)
-                                        : VertexFetchWordsResult{{}, "Invalid fixture"};
-    check(packed && !unsupported_format && unsupported_format.words.empty(),
-          "packed VFETCH formats remain unsupported instead of being misinterpreted as dwords");
+    const auto packed_attribute = descriptor
+                                      ? read_vertex_fetch_attribute(packed.instruction,
+                                                                   descriptor.descriptor, memory,
+                                                                   0U)
+                                      : VertexFetchWordsResult{{}, "Invalid fixture"};
+    check(packed && packed_attribute && packed_attribute.words.size() == 1U,
+          "VFETCH recognizes packed formats and reads their actual storage width");
+
+    const std::array<std::byte, 16> packed_data{
+        std::byte{0x00}, std::byte{0x40}, std::byte{0x80}, std::byte{0xff}, // 8_8_8_8
+        std::byte{0x00}, std::byte{0x02}, std::byte{0x01}, std::byte{0x00}, // 16_16
+        std::byte{0x00}, std::byte{0x3c}, std::byte{0x00}, std::byte{0xc0}, // half 1, -2
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x80}, std::byte{0x3f}}; // float 1
+    check(memory.load(64U, packed_data), "VFETCH conversion fixtures load into guest memory");
+    const auto packed_descriptor = decode_vertex_fetch_descriptor((16U << 2U) | 3U, 4U << 2U);
+    auto make_format = [&](std::uint8_t format, bool integer, bool signed_components) {
+        auto format_words = words;
+        format_words[1] = (format_words[1] & ~((0x3fU << 24U) | (0x3fU << 16U) | (1U << 14U) |
+                                               (1U << 13U) | (1U << 12U))) |
+                          (static_cast<std::uint32_t>(format) << 16U) |
+                          (integer ? 1U << 13U : 0U) |
+                          (signed_components ? 1U << 12U : 0U);
+        const auto result = decode_vertex_fetch_instruction(format_words);
+        return result.instruction;
+    };
+    auto at_offset = [&](std::uint8_t format, bool integer, bool signed_components,
+                         std::int32_t offset) {
+        auto instruction = make_format(format, integer, signed_components);
+        instruction.offset_dwords = offset;
+        return instruction;
+    };
+    if (packed_descriptor) {
+        const auto rgba = read_vertex_fetch_attribute_values(
+            make_format(6U, false, false), packed_descriptor.descriptor, memory, 0U);
+        check(rgba && rgba.components.size() == 4U && rgba.components[0] == 0.0F &&
+                  rgba.components[1] == 64.0F / 255.0F &&
+                  rgba.components[2] == 128.0F / 255.0F && rgba.components[3] == 1.0F,
+              "VFETCH converts packed 8-bit unsigned normalized components");
+
+        const std::array<std::byte, 4> snorm_bytes{
+            std::byte{0x00}, std::byte{0xfe}, std::byte{0x07}, std::byte{0x80}};
+        const auto signed_packed = memory.load(64U, snorm_bytes);
+        const auto snorm = read_vertex_fetch_attribute_values(
+            make_format(7U, false, true), packed_descriptor.descriptor, memory, 0U);
+        check(signed_packed && snorm && snorm.components.size() == 4U &&
+                  snorm.components[0] == -1.0F && snorm.components[1] == 1.0F &&
+                  snorm.components[2] == 0.0F && snorm.components[3] == -1.0F,
+              "VFETCH converts signed packed normalized components with minus-one clamping");
+
+        auto unsupported_rf_instruction = make_format(7U, false, true);
+        unsupported_rf_instruction.signed_repeating_fraction = true;
+        check(!read_vertex_fetch_attribute_values(unsupported_rf_instruction,
+                                                  packed_descriptor.descriptor, memory, 0U),
+              "VFETCH rejects the unimplemented alternate signed-fraction mapping");
+
+        const auto unsigned_int = read_vertex_fetch_attribute_values(
+            at_offset(25U, true, false, 1), packed_descriptor.descriptor, memory, 0U);
+        check(unsigned_int && unsigned_int.components == std::vector<float>{512.0F, 1.0F},
+              "VFETCH converts packed 16-bit integer components without normalization");
+
+        const auto half = read_vertex_fetch_attribute_values(
+            at_offset(31U, false, false, 2), packed_descriptor.descriptor, memory, 0U);
+        check(half && half.components == std::vector<float>{1.0F, -2.0F},
+              "VFETCH converts two IEEE binary16 components to float");
+
+        const std::array<std::byte, 16> float_vector{
+            std::byte{0x00}, std::byte{0x00}, std::byte{0x80}, std::byte{0x3f},
+            std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0xc0},
+            std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x3f},
+            std::byte{0x00}, std::byte{0x00}, std::byte{0x80}, std::byte{0xbf}};
+        const auto vector_loaded = memory.load(80U, float_vector);
+        const auto vector_descriptor =
+            decode_vertex_fetch_descriptor((20U << 2U) | 3U, 4U << 2U);
+        const auto vector = vector_descriptor
+                                ? read_vertex_fetch_attribute_values(
+                                      make_format(38U, false, false),
+                                      vector_descriptor.descriptor, memory, 0U)
+                                : VertexFetchValuesResult{{}, "Invalid fixture"};
+        check(vector_loaded && vector &&
+                  vector.components == std::vector<float>{1.0F, -2.0F, 0.5F, -1.0F},
+              "VFETCH extracts all four components from a 128-bit float attribute");
+    }
 }
 
 void test_wait_for_idle_is_synchronous_barrier() {
