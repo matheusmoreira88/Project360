@@ -310,6 +310,13 @@ DecodeResult decode(std::uint32_t word) {
             ins.to = rt;
             return {ins, {}};
         }
+        if (xo10 == 83U) {
+            if ((word & (0x3ffU << 11U)) != 0U || (word & 1U) != 0U) {
+                return {{}, "mfmsr reserved fields are nonzero"};
+            }
+            ins.opcode = Opcode::move_from_machine_state_register;
+            return {ins, {}};
+        }
         if (xo10 == 339U || xo10 == 467U) {
             if ((word & 1U) != 0U) {
                 return {{}, "mfspr/mtspr record bit is reserved"};

@@ -956,6 +956,13 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         state.xer &= 0x0fffffffU;
         break;
     }
+    case Opcode::move_from_machine_state_register:
+        if ((state.msr & powerpc_bit(49U)) != 0U) {
+            return take_program_exception(state, FaultKind::privileged_instruction, 45U, word,
+                                           "privileged mfmsr in problem state");
+        }
+        state.gpr[ins.rt] = state.msr;
+        break;
     case Opcode::move_from_special_register:
         if ((ins.spr == 26U || ins.spr == 27U) &&
             (state.msr & powerpc_bit(49U)) != 0U) {

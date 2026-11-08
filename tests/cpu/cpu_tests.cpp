@@ -136,6 +136,14 @@ std::uint32_t mfcr_form(std::uint8_t rt, bool record = false,
            (record ? 1U : 0U);
 }
 
+std::uint32_t mfmsr_form(std::uint8_t rt, std::uint8_t reserved_ra = 0,
+                         std::uint8_t reserved_rb = 0, bool record = false) {
+    return (31U << 26U) | (static_cast<std::uint32_t>(rt) << 21U) |
+           (static_cast<std::uint32_t>(reserved_ra) << 16U) |
+           (static_cast<std::uint32_t>(reserved_rb) << 11U) | (83U << 1U) |
+           (record ? 1U : 0U);
+}
+
 std::uint32_t mcrf_form(std::uint8_t bf, std::uint8_t bfa, std::uint32_t reserved = 0) {
     return (19U << 26U) | (static_cast<std::uint32_t>(bf) << 23U) |
            (static_cast<std::uint32_t>(bfa) << 18U) | reserved;
@@ -2576,6 +2584,41 @@ void test_condition_register_transfers() {
           "mtcrf record and reserved-field encodings are rejected");
 }
 
+void test_move_from_machine_state_register() {
+    using namespace project360;
+    memory::GuestMemory mem(0x704U);
+    put_word(mem, 0U, mfmsr_form(5U));
+
+    cpu::CpuState state{};
+    state.msr = (1ULL << 63U) | (1ULL << 59U) | (1ULL << 10U);
+    state.gpr[5] = UINT64_MAX;
+    state.cr = 0x12345678U;
+    state.xer = 0xe0000000U;
+    const auto decoded = cpu::decode(mfmsr_form(5U));
+    const auto result = cpu::Interpreter{}.step(state, mem);
+    check(decoded && decoded.instruction.opcode == cpu::Opcode::move_from_machine_state_register &&
+              result.status == cpu::StepStatus::executed && state.gpr[5] == state.msr &&
+              state.pc == 4U && state.cr == 0x12345678U && state.xer == 0xe0000000U,
+          "supervisor mfmsr copies the complete MSR without changing CR or XER");
+    check(!cpu::decode(mfmsr_form(1U, 1U)) && !cpu::decode(mfmsr_form(1U, 0U, 1U)) &&
+              !cpu::decode(mfmsr_form(1U, 0U, 0U, true)),
+          "mfmsr rejects reserved operand and record-bit encodings");
+
+    constexpr std::uint64_t msr_pr = 1ULL << 14U;
+    constexpr std::uint64_t msr_sf = 1ULL << 63U;
+    constexpr std::uint64_t privileged_syndrome = 1ULL << 18U;
+    cpu::CpuState problem_state{};
+    problem_state.msr = msr_sf | msr_pr;
+    problem_state.gpr[5] = 0xfeedfaceU;
+    const auto privileged = cpu::Interpreter{}.step(problem_state, mem);
+    check(privileged.status == cpu::StepStatus::exception_taken && privileged.fault_info &&
+              privileged.fault_info->kind == cpu::FaultKind::privileged_instruction &&
+              problem_state.gpr[5] == 0xfeedfaceU && problem_state.srr0 == 0U &&
+              problem_state.srr1 == (msr_sf | msr_pr | privileged_syndrome) &&
+              problem_state.pc == 0x700U,
+          "problem-state mfmsr enters the privileged-instruction exception without partial GPR state");
+}
+
 void test_move_condition_register_field() {
     using namespace project360;
     memory::GuestMemory mem(12);
@@ -3158,6 +3201,7 @@ int main() {
     test_compare_registers();
     test_integer_trap_instructions();
     test_condition_register_transfers();
+    test_move_from_machine_state_register();
     test_move_condition_register_field();
     test_condition_register_logical_operations();
     test_special_register_transfers();

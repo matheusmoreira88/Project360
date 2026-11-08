@@ -91,6 +91,7 @@ enum class Opcode {
     condition_register_logical,
     move_to_condition_register_fields,
     move_condition_register_from_xer,
+    move_from_machine_state_register,
     move_from_special_register,
     move_to_special_register,
     lbz,

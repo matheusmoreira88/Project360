@@ -6,6 +6,8 @@ Kernel dispatcher tests cover RtlCompareMemory prefix results across non-contigu
 
 The synthetic XEX integration test also changes a decoded import record to the data-import type and verifies that attempting to execute it returns an explicit fault while leaving the guest PC unchanged. Data imports are parsed as metadata but are not resolved or executable services.
 
+CPU tests verify `mfmsr` decoding, complete MSR transfer in supervisor state, reserved-field rejection, and privileged exception entry from problem state without modifying its target GPR.
+
 The floating-point transfer tests verify optional PowerPC `stfiwx` indexed storage byte-for-byte, including unchanged FPR, CR and FPSCR state, plus reserved-record-bit rejection and misaligned-store fault behavior.
 
 PowerPC reservation tests execute `lwarx`/`stwcx.` and `ldarx`/`stdcx.` success and no-reservation failure, verify CR0.EQ/SO handling, reject mismatched targets, and ensure an intervening write within the selected 4 KiB backing-page reservation granule forces the conditional store to fail. The doubleword tests also check 8-byte alignment and reserved record-bit encodings. Memory tests exercise word reservations through virtual aliases. Concurrent tests run two independent interpreter states that each increment one shared guest word and one shared guest doubleword 1,000 times through retrying conditional-store loops, then verify exact totals of 2,000. This covers GuestMemory's host locking and reservation mechanism, but does not validate Xenon scheduling or weak-memory behavior.
