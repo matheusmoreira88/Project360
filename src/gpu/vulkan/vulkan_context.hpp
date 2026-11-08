@@ -82,17 +82,20 @@ class VulkanContext final {
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_indexed_triangles(
         std::span<const VulkanTestVertex> vertices,
         std::span<const std::uint32_t> indices,
-        std::optional<xenos::XenosScissorRectangle> scissor = std::nullopt) const;
+        std::optional<xenos::XenosScissorRectangle> scissor = std::nullopt,
+        std::optional<xenos::XenosViewport> viewport = std::nullopt) const;
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_xenos_triangles(
         std::span<const xenos::ShaderVertexOutputs> vertices,
         std::uint8_t color_interpolator,
         std::span<const std::uint32_t> indices,
-        std::optional<xenos::XenosScissorRectangle> scissor = std::nullopt) const;
+        std::optional<xenos::XenosScissorRectangle> scissor = std::nullopt,
+        std::optional<xenos::XenosViewport> viewport = std::nullopt) const;
     [[nodiscard]] VulkanTriangleReadbackResult render_offscreen_xenos_geometry(
         std::span<const xenos::ShaderVertexOutputs> vertices,
         std::uint8_t color_interpolator,
         const xenos::PrimitiveAssemblyResult& geometry,
-        std::optional<xenos::XenosScissorRectangle> scissor = std::nullopt) const;
+        std::optional<xenos::XenosScissorRectangle> scissor = std::nullopt,
+        std::optional<xenos::XenosViewport> viewport = std::nullopt) const;
 
   private:
     struct Impl;

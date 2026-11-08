@@ -1305,6 +1305,49 @@ void test_xenos_scissor_register_resolution() {
           "truncated Xenos scissor register files fail without a partial rectangle");
 }
 
+void test_xenos_viewport_register_resolution() {
+    using namespace project360::gpu::xenos;
+    std::vector<std::uint32_t> registers(register_index::pa_su_vtx_cntl + 1U, 0U);
+    registers[register_index::pa_cl_clip_cntl] = 1U << 19U;
+    registers[register_index::pa_cl_vte_cntl] = 0x0fU;
+    registers[register_index::pa_cl_vport_xscale] = std::bit_cast<std::uint32_t>(6.0F);
+    registers[register_index::pa_cl_vport_xoffset] = std::bit_cast<std::uint32_t>(8.0F);
+    registers[register_index::pa_cl_vport_yscale] = std::bit_cast<std::uint32_t>(-6.0F);
+    registers[register_index::pa_cl_vport_yoffset] = std::bit_cast<std::uint32_t>(8.5F);
+    registers[register_index::pa_su_sc_mode_cntl] = 1U << 16U;
+    registers[register_index::pa_sc_window_offset] = 1U | (0x7ffeU << 16U);
+
+    const auto d3d_pixel_center = read_xenos_viewport(registers);
+    check(d3d_pixel_center &&
+              d3d_pixel_center.viewport == XenosViewport{3.5F, 1.0F, 12.0F, 12.0F,
+                                                          false, true},
+          "Xenos viewport applies signed scale, enabled window offset and D3D half-pixel shift");
+
+    registers[register_index::pa_su_vtx_cntl] = 1U;
+    const auto half_pixel_center = read_xenos_viewport(registers);
+    check(half_pixel_center &&
+              half_pixel_center.viewport == XenosViewport{3.0F, 0.5F, 12.0F, 12.0F,
+                                                           false, true},
+          "Xenos OGL pixel center omits the D3D half-pixel shift");
+
+    registers[register_index::pa_cl_vte_cntl] |= 1U << 4U;
+    check(!read_xenos_viewport(registers),
+          "Xenos viewport reports unsupported Z transforms instead of dropping them");
+    registers[register_index::pa_cl_vte_cntl] &= ~(1U << 4U);
+    registers[register_index::pa_cl_clip_cntl] |= 1U << 16U;
+    check(!read_xenos_viewport(registers),
+          "Xenos viewport rejects clipping-disabled raster state");
+    registers[register_index::pa_cl_clip_cntl] = (1U << 19U) | 1U;
+    check(!read_xenos_viewport(registers),
+          "Xenos viewport rejects unsupported user clip planes");
+
+    registers[register_index::pa_cl_clip_cntl] = 1U << 19U;
+    registers[register_index::pa_cl_vport_xscale] =
+        std::bit_cast<std::uint32_t>(std::numeric_limits<float>::infinity());
+    check(!read_xenos_viewport(registers),
+          "Xenos viewport rejects non-finite scale values");
+}
+
 void test_dma_index_fetch() {
     using namespace project360::gpu::xenos;
     project360::memory::GuestMemory memory(0x4000U);
@@ -1904,6 +1947,7 @@ int main() {
     test_draw_packet_metadata_decoding();
     test_pm4_sequential_draw_dispatch();
     test_xenos_scissor_register_resolution();
+    test_xenos_viewport_register_resolution();
     test_dma_index_fetch();
     test_primitive_assembly();
     test_vertex_shader_index_transform();

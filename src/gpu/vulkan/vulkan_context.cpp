@@ -624,7 +624,8 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_test_triangle() con
 VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
     std::span<const VulkanTestVertex> vertices,
     std::span<const std::uint32_t> indices,
-    std::optional<xenos::XenosScissorRectangle> scissor) const {
+    std::optional<xenos::XenosScissorRectangle> scissor,
+    std::optional<xenos::XenosViewport> viewport) const {
     constexpr std::uint32_t image_width = 16U;
     constexpr std::uint32_t image_height = 16U;
     constexpr std::size_t maximum_vertices = 65'536U;
@@ -639,6 +640,15 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
          scissor->width > image_width - scissor->x ||
          scissor->height > image_height - scissor->y)) {
         return {{}, {}, 0U, "Indexed triangle scissor exceeds the diagnostic render target"};
+    }
+    if (viewport &&
+        (!std::isfinite(viewport->x) || !std::isfinite(viewport->y) ||
+         !std::isfinite(viewport->width) || !std::isfinite(viewport->height) ||
+         viewport->x < 0.0F || viewport->y < 0.0F || viewport->width <= 0.0F ||
+         viewport->height <= 0.0F ||
+         viewport->x + viewport->width > static_cast<float>(image_width) ||
+         viewport->y + viewport->height > static_cast<float>(image_height))) {
+        return {{}, {}, 0U, "Xenos viewport exceeds the diagnostic render target"};
     }
     if (vertices.size() > maximum_vertices || indices.size() > maximum_indices ||
         indices.size() > std::numeric_limits<std::uint32_t>::max()) {
@@ -975,7 +985,10 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
     render_begin.clearValueCount = 1U;
     render_begin.pClearValues = &clear_value;
     vkCmdBeginRenderPass(command_buffer, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
-    const VkViewport viewport{0.0F, 0.0F, static_cast<float>(image_width),
+    const VkViewport render_viewport =
+        viewport ? VkViewport{viewport->x, viewport->y, viewport->width, viewport->height,
+                              0.0F, 1.0F}
+                 : VkViewport{0.0F, 0.0F, static_cast<float>(image_width),
                               static_cast<float>(image_height), 0.0F, 1.0F};
     const VkRect2D render_scissor = scissor
                                         ? VkRect2D{
@@ -983,7 +996,7 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_indexed_triangles(
                                                static_cast<std::int32_t>(scissor->y)},
                                               {scissor->width, scissor->height}}
                                         : VkRect2D{{0, 0}, {image_width, image_height}};
-    vkCmdSetViewport(command_buffer, 0U, 1U, &viewport);
+    vkCmdSetViewport(command_buffer, 0U, 1U, &render_viewport);
     vkCmdSetScissor(command_buffer, 0U, 1U, &render_scissor);
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, resources.pipeline);
     constexpr VkDeviceSize vertex_offset = 0U;
@@ -1088,7 +1101,8 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_xenos_triangles(
     std::span<const xenos::ShaderVertexOutputs> vertices,
     std::uint8_t color_interpolator,
     std::span<const std::uint32_t> indices,
-    std::optional<xenos::XenosScissorRectangle> scissor) const {
+    std::optional<xenos::XenosScissorRectangle> scissor,
+    std::optional<xenos::XenosViewport> viewport) const {
     constexpr std::size_t maximum_vertices = 65'536U;
     constexpr std::size_t maximum_indices = 196'608U;
     if (color_interpolator >= 16U) {
@@ -1114,17 +1128,20 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_xenos_triangles(
             return {{}, {}, 0U,
                     "Xenos triangle vertex is missing position or selected color components"};
         }
-        backend_vertices.push_back(
-            {vertex.position, vertex.interpolators[color_interpolator]});
+        auto position = vertex.position;
+        if (viewport && viewport->flip_x) position[0] = -position[0];
+        if (viewport && viewport->flip_y) position[1] = -position[1];
+        backend_vertices.push_back({position, vertex.interpolators[color_interpolator]});
     }
-    return render_offscreen_indexed_triangles(backend_vertices, indices, scissor);
+    return render_offscreen_indexed_triangles(backend_vertices, indices, scissor, viewport);
 }
 
 VulkanTriangleReadbackResult VulkanContext::render_offscreen_xenos_geometry(
     std::span<const xenos::ShaderVertexOutputs> vertices,
     std::uint8_t color_interpolator,
     const xenos::PrimitiveAssemblyResult& geometry,
-    std::optional<xenos::XenosScissorRectangle> scissor) const {
+    std::optional<xenos::XenosScissorRectangle> scissor,
+    std::optional<xenos::XenosViewport> viewport) const {
     if (!geometry) {
         return {{}, {}, 0U, "Xenos geometry preparation failed: " + geometry.error};
     }
@@ -1145,7 +1162,7 @@ VulkanTriangleReadbackResult VulkanContext::render_offscreen_xenos_geometry(
         return {{}, {}, 0U, "Xenos triangle geometry ranges do not cover all prepared indexes"};
     }
     return render_offscreen_xenos_triangles(vertices, color_interpolator,
-                                            geometry.indices, scissor);
+                                            geometry.indices, scissor, viewport);
 }
 
 } // namespace project360::gpu::vulkan
