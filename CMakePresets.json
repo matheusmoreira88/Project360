@@ -16,11 +16,24 @@
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
         "PROJECT360_BUILD_TESTS": "ON"
       }
+    },
+    {
+      "name": "windows-benchmarks",
+      "displayName": "Windows Release Benchmarks (Visual Studio)",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Release",
+        "PROJECT360_BUILD_TESTS": "OFF",
+        "PROJECT360_BUILD_GUI": "OFF",
+        "PROJECT360_BUILD_BENCHMARKS": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "windows-debug", "configuration": "Debug" },
-    { "name": "release", "configurePreset": "windows-debug", "configuration": "Release" }
+    { "name": "release", "configurePreset": "windows-debug", "configuration": "Release" },
+    { "name": "benchmarks-release", "configurePreset": "windows-benchmarks", "configuration": "Release" }
   ],
   "testPresets": [
     { "name": "debug", "configurePreset": "windows-debug", "configuration": "Debug", "output": { "outputOnFailure": true } }

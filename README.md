@@ -54,4 +54,4 @@ See [docs/frontend.md](docs/frontend.md) for the current interface scope and bui
 
 ## Project status
 
-See [docs/roadmap.md](docs/roadmap.md), [docs/testing.md](docs/testing.md) and [docs/compatibility.md](docs/compatibility.md). No commercial game compatibility or performance result has been measured.
+See [docs/roadmap.md](docs/roadmap.md), [docs/testing.md](docs/testing.md), [docs/compatibility.md](docs/compatibility.md) and [docs/performance.md](docs/performance.md). No commercial game compatibility or game-performance result has been measured; the performance document contains only an initial kernel microbenchmark.
