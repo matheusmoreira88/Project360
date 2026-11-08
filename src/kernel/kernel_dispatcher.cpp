@@ -711,6 +711,88 @@ KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuSta
         state.pc = state.lr & ~std::uint64_t{3};
         return KernelDispatchStatus::handled;
     }
+    if (import.ordinal == rtl_compare_unicode_string_ordinal ||
+        import.ordinal == rtl_equal_unicode_string_ordinal) {
+        enum class StringReadStatus { valid, invalid, memory_fault };
+        struct UnicodeStringView {
+            std::uint16_t length{};
+            std::uint32_t buffer{};
+        };
+        constexpr auto guest_address_limit = std::uint64_t{0xffff'ffffU};
+        const auto read_descriptor = [&](std::uint64_t address,
+                                         UnicodeStringView& string) noexcept {
+            if (address > guest_address_limit - 7U) return StringReadStatus::invalid;
+            std::uint16_t maximum_length = 0U;
+            if (!memory.read_u16_be(address, string.length) ||
+                !memory.read_u16_be(address + 2U, maximum_length) ||
+                !memory.read_u32_be(address + 4U, string.buffer)) {
+                return StringReadStatus::memory_fault;
+            }
+            if (string.length > maximum_length || (string.length & 1U) != 0U ||
+                (string.length != 0U &&
+                 (string.buffer == 0U || (string.buffer & 1U) != 0U ||
+                  static_cast<std::uint64_t>(string.length - 1U) >
+                      guest_address_limit - string.buffer))) {
+                return StringReadStatus::invalid;
+            }
+            return StringReadStatus::valid;
+        };
+
+        UnicodeStringView left{};
+        UnicodeStringView right{};
+        const auto left_status = read_descriptor(state.gpr[3], left);
+        const auto right_status = read_descriptor(state.gpr[4], right);
+        if (left_status == StringReadStatus::memory_fault ||
+            right_status == StringReadStatus::memory_fault) {
+            return KernelDispatchStatus::guest_memory_fault;
+        }
+        if (left_status == StringReadStatus::invalid ||
+            right_status == StringReadStatus::invalid) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+
+        const bool ignore_case = (state.gpr[5] & 0xffU) != 0U;
+        const auto common_characters =
+            (left.length < right.length ? left.length : right.length) / 2U;
+        std::int32_t comparison = 0;
+        for (std::uint32_t index = 0U; index < common_characters; ++index) {
+            std::uint16_t left_character = 0U;
+            std::uint16_t right_character = 0U;
+            const auto left_address = static_cast<std::uint64_t>(left.buffer) + index * 2U;
+            const auto right_address = static_cast<std::uint64_t>(right.buffer) + index * 2U;
+            if (!memory.read_u16_be(left_address, left_character) ||
+                !memory.read_u16_be(right_address, right_character)) {
+                return KernelDispatchStatus::guest_memory_fault;
+            }
+            if (ignore_case) {
+                std::uint16_t left_upcase = 0U;
+                std::uint16_t right_upcase = 0U;
+                if (!upcase_latin1(left_character, left_upcase) ||
+                    !upcase_latin1(right_character, right_upcase)) {
+                    return KernelDispatchStatus::unsupported_export;
+                }
+                left_character = left_upcase;
+                right_character = right_upcase;
+            }
+            if (left_character != right_character) {
+                comparison = static_cast<std::int32_t>(left_character) -
+                             static_cast<std::int32_t>(right_character);
+                break;
+            }
+        }
+        if (comparison == 0 && left.length != right.length) {
+            comparison = static_cast<std::int32_t>(left.length) -
+                         static_cast<std::int32_t>(right.length);
+        }
+
+        if (import.ordinal == rtl_equal_unicode_string_ordinal) {
+            state.gpr[3] = comparison == 0 ? 1U : 0U;
+        } else {
+            state.gpr[3] = static_cast<std::uint64_t>(static_cast<std::int64_t>(comparison));
+        }
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
+    }
     if (import.ordinal == rtl_upcase_unicode_char_ordinal ||
         import.ordinal == rtl_downcase_unicode_char_ordinal) {
         if (state.gpr[3] > 0xffffU) return KernelDispatchStatus::invalid_guest_argument;

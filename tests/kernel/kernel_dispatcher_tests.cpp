@@ -254,6 +254,90 @@ int main() {
               state.pc == 0x8000b0U && state.gpr[3] == 0x10000U,
           "Unicode case mapping rejects values outside the guest WCHAR width");
 
+    constexpr std::uint64_t unicode_left_descriptor = data_page + 0x120U;
+    constexpr std::uint64_t unicode_right_descriptor = data_page + 0x130U;
+    constexpr std::uint64_t unicode_left_buffer = data_page + 0x400U;
+    constexpr std::uint64_t unicode_right_buffer = data_page + 0x500U;
+    const std::array<std::uint16_t, 2> uppercase_unicode{0x00c9U, 'X'};
+    const std::array<std::uint16_t, 2> lowercase_unicode{0x00e9U, 'x'};
+    check(write_unicode_descriptor(memory, unicode_left_descriptor, unicode_left_buffer,
+                                   uppercase_unicode) &&
+              write_unicode_descriptor(memory, unicode_right_descriptor,
+                                       unicode_right_buffer, lowercase_unicode),
+          "test fixture seeds counted UTF-16 strings");
+    const auto call_unicode_compare = [&](std::uint16_t ordinal, std::uint64_t left,
+                                          std::uint64_t right, std::uint64_t ignore_case,
+                                          std::uint64_t return_address) {
+        state.gpr[3] = left;
+        state.gpr[4] = right;
+        state.gpr[5] = ignore_case;
+        state.lr = return_address;
+        return KernelDispatcher{}.dispatch({"xboxkrnl.exe", ordinal}, state, memory);
+    };
+    check(call_unicode_compare(KernelDispatcher::rtl_compare_unicode_string_ordinal,
+                               unicode_left_descriptor, unicode_right_descriptor, 1U,
+                               0x1107U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0U && state.pc == 0x1104U,
+          "RtlCompareUnicodeString compares UTF-16 text with supported case folding");
+    check(call_unicode_compare(KernelDispatcher::rtl_equal_unicode_string_ordinal,
+                               unicode_left_descriptor, unicode_right_descriptor, 1U,
+                               0x1117U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 1U && state.pc == 0x1114U,
+          "RtlEqualUnicodeString returns a BOOLEAN for case-insensitive equality");
+    check(call_unicode_compare(KernelDispatcher::rtl_compare_unicode_string_ordinal,
+                               unicode_left_descriptor, unicode_right_descriptor, 0U,
+                               0x1127U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == static_cast<std::uint64_t>(-32LL),
+          "RtlCompareUnicodeString preserves case-sensitive UTF-16 ordering");
+    const std::array<std::uint16_t, 1> unicode_prefix{0x00c9U};
+    check(write_unicode_descriptor(memory, unicode_right_descriptor, unicode_right_buffer,
+                                   unicode_prefix),
+          "test fixture seeds a strict UTF-16 prefix");
+    check(call_unicode_compare(KernelDispatcher::rtl_compare_unicode_string_ordinal,
+                               unicode_left_descriptor, unicode_right_descriptor, 1U,
+                               0x112fU) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 2U,
+          "RtlCompareUnicodeString orders equal prefixes by byte length");
+    check(call_unicode_compare(KernelDispatcher::rtl_equal_unicode_string_ordinal,
+                               unicode_left_descriptor, unicode_right_descriptor, 1U,
+                               0x1133U) == KernelDispatchStatus::handled &&
+              state.gpr[3] == 0U,
+          "RtlEqualUnicodeString returns false for different counted lengths");
+    const std::array<std::uint16_t, 1> greek_lower{0x03b1U};
+    const std::array<std::uint16_t, 1> greek_upper{0x0391U};
+    check(write_unicode_descriptor(memory, unicode_left_descriptor, unicode_left_buffer,
+                                   greek_lower) &&
+              write_unicode_descriptor(memory, unicode_right_descriptor,
+                                       unicode_right_buffer, greek_upper),
+          "test fixture seeds Unicode characters outside the modeled case table");
+    state.pc = 0x8000c0U;
+    const auto unsupported_unicode_fold = call_unicode_compare(
+        KernelDispatcher::rtl_compare_unicode_string_ordinal, unicode_left_descriptor,
+        unicode_right_descriptor, 1U, 0x1137U);
+    check(unsupported_unicode_fold == KernelDispatchStatus::unsupported_export &&
+              state.pc == 0x8000c0U && state.gpr[3] == unicode_left_descriptor,
+          "RtlCompareUnicodeString diagnoses case folding outside the modeled table");
+    check(memory.write_u16_be(unicode_left_descriptor, 2U) &&
+              memory.write_u16_be(unicode_left_descriptor + 2U, 2U) &&
+              memory.write_u32_be(unicode_left_descriptor + 4U, 0x300000U),
+          "test fixture seeds a well-formed string with inaccessible backing");
+    state.pc = 0x8000d0U;
+    const auto inaccessible_unicode = call_unicode_compare(
+        KernelDispatcher::rtl_equal_unicode_string_ordinal, unicode_left_descriptor,
+        unicode_right_descriptor, 0U, 0x1137U);
+    check(inaccessible_unicode == KernelDispatchStatus::guest_memory_fault &&
+              state.pc == 0x8000d0U,
+          "Unicode comparison reports inaccessible character memory without returning");
+    check(memory.write_u16_be(unicode_left_descriptor, 1U) &&
+              memory.write_u16_be(unicode_left_descriptor + 2U, 2U),
+          "test fixture creates an odd-byte UNICODE_STRING length");
+    const auto odd_unicode_length = call_unicode_compare(
+        KernelDispatcher::rtl_equal_unicode_string_ordinal, unicode_left_descriptor,
+        unicode_right_descriptor, 0U, 0x1147U);
+    check(odd_unicode_length == KernelDispatchStatus::invalid_guest_argument &&
+              state.pc == 0x8000d0U,
+          "Unicode string comparison rejects malformed odd-byte lengths");
+
     state.gpr[3] = data_page;
     state.gpr[4] = 8U;
     state.gpr[5] = 0xaabbccddU;
