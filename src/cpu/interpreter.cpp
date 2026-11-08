@@ -186,7 +186,7 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
                      "unaligned instruction address");
     }
     std::uint32_t word = 0;
-    if (!memory.read_u32_be(state.pc, word)) {
+    if (!memory.fetch_u32_be(state.pc, word)) {
         return fault(FaultKind::instruction_access, state.pc, "instruction fetch out of range");
     }
     const auto decoded = decode(word);

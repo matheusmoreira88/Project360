@@ -74,6 +74,10 @@ if(PROJECT360_BUILD_TESTS)
     target_link_libraries(project360_tests PRIVATE project360_core)
     add_test(NAME project360_tests COMMAND project360_tests)
 
+    add_executable(project360_memory_tests tests/memory/memory_tests.cpp)
+    target_link_libraries(project360_memory_tests PRIVATE project360_core)
+    add_test(NAME project360_memory_tests COMMAND project360_memory_tests)
+
     add_executable(project360_library_tests tests/frontend/library_store_tests.cpp)
     target_link_libraries(project360_library_tests PRIVATE project360_frontend_core)
     add_test(NAME project360_library_tests COMMAND project360_library_tests)

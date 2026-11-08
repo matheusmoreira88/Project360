@@ -1357,6 +1357,28 @@ void test_program_exception_and_rfid_return() {
           "rfid uses the low 32-bit return address when restored MSR.SF is clear");
 }
 
+void test_cpu_fetch_from_mapped_executable_page() {
+    using namespace project360;
+    memory::GuestMemory mem(2U * static_cast<std::size_t>(memory::GuestMemory::page_size));
+    put_word(mem, 0x1000, d_form(14, 3, 0, 5));
+    check(mem.map_page(0x4000, 0x1000, memory::GuestPageAccess::execute),
+          "guest code virtual page maps with execute permission");
+    cpu::CpuState state{};
+    state.pc = 0x4000;
+    auto result = cpu::Interpreter{}.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 5 && state.pc == 0x4004,
+          "PowerPC interpreter fetches and executes code through virtual address translation");
+
+    check(mem.protect_page(0x4000, memory::GuestPageAccess::read),
+          "test changes executable page to a non-executable permission");
+    state.pc = 0x4000;
+    result = cpu::Interpreter{}.step(state, mem);
+    check(result.status == cpu::StepStatus::fault && result.fault_info &&
+              result.fault_info->kind == cpu::FaultKind::instruction_access &&
+              state.gpr[3] == 5 && state.pc == 0x4000,
+          "CPU rejects instruction fetch when its mapped page lacks execute permission");
+}
+
 void test_compare_immediates() {
     using namespace project360;
     memory::GuestMemory mem(128);
@@ -1787,6 +1809,7 @@ int main() {
     test_xor_and_immediate_logic_instructions();
     test_branch_and_faults();
     test_program_exception_and_rfid_return();
+    test_cpu_fetch_from_mapped_executable_page();
     test_compare_immediates();
     test_compare_registers();
     test_condition_register_transfers();
