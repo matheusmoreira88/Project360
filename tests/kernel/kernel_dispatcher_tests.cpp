@@ -924,6 +924,103 @@ int main() {
     check(state.pc == 0x2234U,
           "RtlFillMemory returns through LR after filling its destination");
 
+    GuestMemory pool_memory(16U * static_cast<std::size_t>(GuestMemory::page_size));
+    check(pool_memory.map_page(0x80000000U, 0U,
+                              GuestPageAccess::read | GuestPageAccess::write),
+          "pool fixture reserves the image page before the guest heap range");
+    const KernelDispatcher pool_dispatcher({}, {0x80001000U, 8192U});
+    state.gpr[3] = 0U;
+    state.gpr[4] = 20U;
+    state.gpr[5] = 0x54455354U;
+    state.lr = 0x3307U;
+    const auto pool_first = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_allocate_pool_with_tag_ordinal}, state,
+        pool_memory);
+    const auto first_pool_address = static_cast<std::uint32_t>(state.gpr[3]);
+    check(pool_first == KernelDispatchStatus::handled &&
+              first_pool_address == 0x80001000U && state.pc == 0x3304U,
+          "ExAllocatePoolWithTag returns an aligned guest allocation through LR");
+    state.gpr[3] = 0U;
+    state.gpr[4] = 4064U;
+    state.lr = 0x3317U;
+    const auto pool_fill_page = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_allocate_pool_ordinal}, state, pool_memory);
+    const auto second_pool_address = static_cast<std::uint32_t>(state.gpr[3]);
+    check(pool_fill_page == KernelDispatchStatus::handled &&
+              second_pool_address == first_pool_address + 32U,
+          "ExAllocatePool splits and consumes the remaining aligned page block");
+    state.gpr[3] = 0U;
+    state.gpr[4] = 16U;
+    state.lr = 0x3327U;
+    const auto pool_second_page = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_allocate_pool_ordinal}, state, pool_memory);
+    const auto third_pool_address = static_cast<std::uint32_t>(state.gpr[3]);
+    check(pool_second_page == KernelDispatchStatus::handled &&
+              third_pool_address == first_pool_address + GuestMemory::page_size,
+          "guest pool maps another bounded page after exhausting the first");
+    check(pool_memory.write_u32_be(first_pool_address, 0xcafe1234U) &&
+              pool_memory.write_u32_be(third_pool_address, 0x76543210U) &&
+              pool_memory.read_u32_be(first_pool_address, word) && word == 0xcafe1234U,
+          "guest pool pointers address mapped read/write backing memory");
+    state.gpr[3] = 0U;
+    state.gpr[4] = 4096U;
+    state.lr = 0x3337U;
+    const auto pool_exhausted = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_allocate_pool_ordinal}, state, pool_memory);
+    check(pool_exhausted == KernelDispatchStatus::handled && state.gpr[3] == 0U &&
+              state.pc == 0x3334U,
+          "guest pool reports its bounded exhaustion as a null allocation");
+    state.gpr[3] = first_pool_address;
+    state.lr = 0x3347U;
+    const auto pool_free_first = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_free_pool_ordinal}, state, pool_memory);
+    state.gpr[3] = 0U;
+    state.gpr[4] = 16U;
+    state.lr = 0x3357U;
+    const auto pool_reused = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_allocate_pool_ordinal}, state, pool_memory);
+    const bool reused_first_block = state.gpr[3] == first_pool_address;
+    state.gpr[3] = static_cast<std::uint32_t>(state.gpr[3]);
+    state.lr = 0x3367U;
+    const auto pool_free_reused = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_free_pool_ordinal}, state, pool_memory);
+    state.gpr[3] = second_pool_address;
+    state.lr = 0x3377U;
+    const auto pool_free_second = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_free_pool_ordinal}, state, pool_memory);
+    state.gpr[3] = third_pool_address;
+    state.lr = 0x3387U;
+    const auto pool_free_third = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_free_pool_ordinal}, state, pool_memory);
+    state.gpr[3] = first_pool_address;
+    state.pc = 0x8001a0U;
+    const auto pool_double_free = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_free_pool_ordinal}, state, pool_memory);
+    check(pool_free_first == KernelDispatchStatus::handled &&
+              pool_reused == KernelDispatchStatus::handled && reused_first_block &&
+              pool_free_reused == KernelDispatchStatus::handled &&
+              pool_free_second == KernelDispatchStatus::handled &&
+              pool_free_third == KernelDispatchStatus::handled &&
+              pool_double_free == KernelDispatchStatus::invalid_guest_argument &&
+              state.pc == 0x8001a0U,
+          "ExFreePool validates ownership, and freed blocks are reused without double-free success");
+    state.gpr[3] = 0U;
+    state.gpr[4] = 8192U;
+    state.lr = 0x3397U;
+    const auto pool_coalesced = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_allocate_pool_ordinal}, state, pool_memory);
+    check(pool_coalesced == KernelDispatchStatus::handled &&
+              state.gpr[3] == first_pool_address,
+          "guest pool coalesces adjacent freed blocks across mapped pages");
+    state.gpr[3] = 1U;
+    state.gpr[4] = 8U;
+    state.pc = 0x8001b0U;
+    const auto unsupported_pool_type = pool_dispatcher.dispatch(
+        {"xboxkrnl.exe", KernelDispatcher::ex_allocate_pool_ordinal}, state, pool_memory);
+    check(unsupported_pool_type == KernelDispatchStatus::invalid_guest_argument &&
+              state.pc == 0x8001b0U,
+          "guest pool rejects paged allocation until a page-reclamation model exists");
+
     state.gpr[3] = data_page;
     state.gpr[4] = 4U;
     state.gpr[5] = 0x11223344U;

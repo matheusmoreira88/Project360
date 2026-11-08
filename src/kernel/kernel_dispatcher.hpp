@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/cpu_state.hpp"
+#include "kernel/guest_pool.hpp"
 
 #include <array>
 #include <cstdint>
@@ -33,6 +34,9 @@ enum class KernelDispatchStatus : std::uint8_t {
 
 class KernelDispatcher {
 public:
+    static constexpr std::uint16_t ex_allocate_pool_ordinal = 14;
+    static constexpr std::uint16_t ex_allocate_pool_with_tag_ordinal = 15;
+    static constexpr std::uint16_t ex_free_pool_ordinal = 17;
     static constexpr std::uint16_t rtl_compare_memory_ordinal = 268;
     static constexpr std::uint16_t rtl_compare_memory_ulong_ordinal = 269;
     static constexpr std::uint16_t rtl_compare_string_ordinal = 270;
@@ -59,7 +63,8 @@ public:
     static constexpr std::uint16_t ke_tls_set_value_ordinal = 341;
     static constexpr std::uint32_t maximum_tls_slots = 2048U;
 
-    explicit KernelDispatcher(KernelTlsStorage tls_storage = {}) noexcept;
+    explicit KernelDispatcher(KernelTlsStorage tls_storage = {},
+                             KernelPoolStorage pool_storage = {}) noexcept;
 
     // Dispatches an imported xboxkrnl function using the Xenon register ABI.
     // A handled void function returns to the caller through LR (blr semantics).
@@ -70,6 +75,7 @@ public:
 private:
     KernelTlsStorage tls_storage_{};
     std::uint32_t tls_slot_limit_{};
+    mutable GuestPoolAllocator pool_allocator_;
     mutable std::mutex tls_mutex_;
     mutable std::array<std::uint64_t, maximum_tls_slots / 64U> allocated_tls_slots_{};
 };

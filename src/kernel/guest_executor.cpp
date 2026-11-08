@@ -36,8 +36,9 @@ namespace {
 } // namespace
 
 GuestExecutor::GuestExecutor(const loader::LoadedXexImage& image,
-                             KernelTlsStorage tls_storage)
-    : image_(image), dispatcher_(tls_storage) {
+                             KernelTlsStorage tls_storage,
+                             KernelPoolStorage pool_storage)
+    : image_(image), dispatcher_(tls_storage, pool_storage) {
     try {
         std::size_t total_imports = 0;
         for (const auto& library : image_.xex.import_libraries) {

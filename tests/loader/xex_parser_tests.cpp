@@ -532,6 +532,43 @@ int main() {
               loaded.image->xex.import_libraries[0].import_ordinals[11] == 293U &&
               loaded.image->xex.import_libraries[0].import_ordinals[12] == 270U,
           "loader decodes function-thunk records and Xbox kernel ordinals from PE bytes");
+    if (loaded) {
+        auto pool_image = *loaded.image;
+        auto& pool_imports = pool_image.xex.import_libraries[0];
+        pool_imports.import_record_addresses.push_back(0x83ff0U);
+        pool_imports.import_types.emplace_back(1U);
+        pool_imports.import_ordinals.emplace_back(
+            project360::kernel::KernelDispatcher::ex_allocate_pool_with_tag_ordinal);
+        pool_imports.import_record_addresses.push_back(0x83ff4U);
+        pool_imports.import_types.emplace_back(1U);
+        pool_imports.import_ordinals.emplace_back(
+            project360::kernel::KernelDispatcher::ex_free_pool_ordinal);
+
+        project360::memory::GuestMemory pool_guest_memory(4U * 1024U * 1024U);
+        const auto pool_bootstrap_mapping = pool_guest_memory.map_page(
+            0x70000000U, 0U, project360::memory::GuestPageAccess::read |
+                               project360::memory::GuestPageAccess::write);
+        const project360::kernel::GuestExecutor pool_executor(
+            pool_image, {}, {0x71000000U, 8192U});
+        project360::cpu::CpuState pool_state{};
+        pool_state.pc = 0x83ff0U;
+        pool_state.lr = 0x90001004U;
+        pool_state.gpr[3] = 0U;
+        pool_state.gpr[4] = 48U;
+        pool_state.gpr[5] = 0x54455354U;
+        const auto pool_allocate = pool_executor.step(pool_state, pool_guest_memory);
+        const auto pool_pointer = static_cast<std::uint32_t>(pool_state.gpr[3]);
+        pool_state.pc = 0x83ff4U;
+        pool_state.lr = 0x90001008U;
+        const auto pool_free = pool_executor.step(pool_state, pool_guest_memory);
+        check(pool_bootstrap_mapping &&
+                  pool_allocate.status == project360::cpu::StepStatus::executed &&
+                  pool_pointer == 0x71000000U &&
+                  pool_guest_memory.write_u32_be(pool_pointer, 0x600dbeefU) &&
+                  pool_free.status == project360::cpu::StepStatus::executed &&
+                  pool_state.pc == 0x90001008U,
+              "XEX function-import thunks allocate writable guest pool memory and free it through LR");
+    }
     std::uint32_t loaded_instruction = 0;
     check(guest_memory.fetch_u32_be(0x83000U, loaded_instruction) &&
               loaded_instruction == ((14U << 26U) | (3U << 21U) | 0x5000U),

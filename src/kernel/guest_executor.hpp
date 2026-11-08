@@ -22,7 +22,8 @@ struct GuestRunResult {
 class GuestExecutor {
 public:
     explicit GuestExecutor(const loader::LoadedXexImage& image,
-                           KernelTlsStorage tls_storage = {});
+                           KernelTlsStorage tls_storage = {},
+                           KernelPoolStorage pool_storage = {});
 
     [[nodiscard]] cpu::StepResult step(cpu::CpuState& state,
                                        memory::GuestMemory& memory) const;

@@ -115,16 +115,40 @@ constexpr std::uint32_t kMaximumIntegerTextLength = 0x10000U;
 
 } // namespace
 
-KernelDispatcher::KernelDispatcher(KernelTlsStorage tls_storage) noexcept
+KernelDispatcher::KernelDispatcher(KernelTlsStorage tls_storage,
+                                   KernelPoolStorage pool_storage) noexcept
     : tls_storage_(tls_storage),
       tls_slot_limit_(tls_storage.slot_count < maximum_tls_slots
                           ? tls_storage.slot_count
-                          : maximum_tls_slots) {}
+                          : maximum_tls_slots),
+      pool_allocator_(pool_storage) {}
 
 KernelDispatchStatus KernelDispatcher::dispatch(KernelImport import, cpu::CpuState& state,
                                                 memory::GuestMemory& memory) const noexcept {
     if (!equals_ascii_case_insensitive(import.library, "xboxkrnl.exe")) {
         return KernelDispatchStatus::unsupported_library;
+    }
+    if (import.ordinal == ex_allocate_pool_ordinal ||
+        import.ordinal == ex_allocate_pool_with_tag_ordinal) {
+        const auto pool_type = state.gpr[3];
+        const auto requested_bytes = state.gpr[4];
+        if (pool_type != 0U || requested_bytes > std::numeric_limits<std::uint32_t>::max() ||
+            (import.ordinal == ex_allocate_pool_with_tag_ordinal &&
+             state.gpr[5] > std::numeric_limits<std::uint32_t>::max())) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        state.gpr[3] = pool_allocator_.allocate(
+            memory, static_cast<std::uint32_t>(requested_bytes));
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
+    }
+    if (import.ordinal == ex_free_pool_ordinal) {
+        if (state.gpr[3] > std::numeric_limits<std::uint32_t>::max() ||
+            !pool_allocator_.release(static_cast<std::uint32_t>(state.gpr[3]))) {
+            return KernelDispatchStatus::invalid_guest_argument;
+        }
+        state.pc = state.lr & ~std::uint64_t{3U};
+        return KernelDispatchStatus::handled;
     }
     if (import.ordinal == ke_get_current_thread_ordinal) {
         constexpr std::uint64_t current_thread_offset = 0x100U;
