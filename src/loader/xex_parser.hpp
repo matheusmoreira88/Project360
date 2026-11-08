@@ -36,6 +36,13 @@ struct XexImportLibrary {
     std::vector<std::optional<std::uint16_t>> import_ordinals;
 };
 
+struct XexTlsInfo {
+    std::uint32_t slot_count{};
+    std::uint32_t raw_data_address{};
+    std::uint32_t data_size{};
+    std::uint32_t raw_data_size{};
+};
+
 struct XexMetadata {
     std::uint32_t module_flags{};
     std::uint32_t header_size{};
@@ -53,6 +60,7 @@ struct XexMetadata {
     std::optional<std::uint8_t> disc_number;
     std::optional<std::uint8_t> disc_count;
     std::optional<std::uint32_t> savegame_id;
+    std::optional<XexTlsInfo> tls_info;
     std::optional<std::uint32_t> entry_point;
     std::optional<std::uint32_t> image_base_address;
     std::optional<std::uint16_t> encryption_type;

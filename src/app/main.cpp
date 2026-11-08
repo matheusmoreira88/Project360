@@ -55,6 +55,14 @@ int inspect_xex(const std::filesystem::path& path) {
         std::cout << "Savegame ID: 0x" << std::hex << std::uppercase << *metadata.savegame_id
                   << '\n';
     }
+    if (metadata.tls_info) {
+        const auto& tls = *metadata.tls_info;
+        std::cout << "TLS metadata (not initialized for guest threads):\n"
+                  << "  Slot count: " << std::dec << tls.slot_count
+                  << "\n  Raw data address: 0x" << std::hex << std::uppercase
+                  << tls.raw_data_address << "\n  Data size: 0x" << tls.data_size
+                  << "\n  Raw data size: 0x" << tls.raw_data_size << '\n';
+    }
     if (metadata.entry_point) {
         std::cout << "Entry point value: 0x" << *metadata.entry_point << '\n';
     } else {

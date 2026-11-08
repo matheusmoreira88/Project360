@@ -24,6 +24,7 @@ constexpr std::uint32_t kEntryPointKey = 0x00010100U;
 constexpr std::uint32_t kImageBaseAddressKey = 0x00010201U;
 constexpr std::uint32_t kFileFormatInfoKey = 0x000003ffU;
 constexpr std::uint32_t kImportLibrariesKey = 0x000103ffU;
+constexpr std::uint32_t kTlsInfoKey = 0x00020104U;
 constexpr std::size_t kFixedHeaderSize = 0x18U;
 constexpr std::size_t kOptionalHeaderEntrySize = 8U;
 constexpr std::size_t kExecutionInfoSize = 0x18U;
@@ -352,6 +353,7 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
     bool found_execution_info = false;
     bool found_file_format_info = false;
     bool found_import_libraries = false;
+    bool found_tls_info = false;
     for (std::uint32_t i = 0; i < header_count; ++i) {
         const auto entry_offset = kFixedHeaderSize +
                                   static_cast<std::size_t>(i) * kOptionalHeaderEntrySize;
@@ -436,6 +438,19 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
             metadata.disc_number = std::to_integer<std::uint8_t>(file[value + 18U]);
             metadata.disc_count = std::to_integer<std::uint8_t>(file[value + 19U]);
             metadata.savegame_id = savegame_id;
+        } else if (key == kTlsInfoKey) {
+            if (found_tls_info) return {{}, "duplicate XEX TLS-info header"};
+            found_tls_info = true;
+            XexTlsInfo tls{};
+            if (!range_fits(value, 16U, header_size) ||
+                !range_fits(value, 16U, file.size()) ||
+                !read_be32(file, value, tls.slot_count) ||
+                !read_be32(file, value + 4U, tls.raw_data_address) ||
+                !read_be32(file, value + 8U, tls.data_size) ||
+                !read_be32(file, value + 12U, tls.raw_data_size)) {
+                return {{}, "XEX TLS-info payload is truncated or out of bounds"};
+            }
+            metadata.tls_info = tls;
         }
     }
 

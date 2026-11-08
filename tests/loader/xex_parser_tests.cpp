@@ -57,7 +57,7 @@ std::vector<std::byte> make_xex2() {
     write_be32(bytes, 0x04U, 0x00000081U);
     write_be32(bytes, 0x08U, 0x1000U);
     write_be32(bytes, 0x10U, 0x100U);
-    write_be32(bytes, 0x14U, 5U);
+    write_be32(bytes, 0x14U, 6U);
     write_be32(bytes, 0x18U, 0x00010100U); // Entry point (immediate).
     write_be32(bytes, 0x1cU, 0x83000U);
     write_be32(bytes, 0x20U, 0x00040006U); // Execution info (24-byte payload).
@@ -68,6 +68,8 @@ std::vector<std::byte> make_xex2() {
     write_be32(bytes, 0x34U, 0x82000U);
     write_be32(bytes, 0x38U, 0x000103ffU); // Import libraries (offset payload).
     write_be32(bytes, 0x3cU, 0x400U);
+    write_be32(bytes, 0x40U, 0x00020104U); // TLS info (16-byte payload).
+    write_be32(bytes, 0x44U, 0x320U);
     write_be32(bytes, 0x100U, 0x184U); // Security-info size.
     write_be32(bytes, 0x104U, 0x6000U); // Image size.
     write_be32(bytes, 0x210U, 0x82000U); // Security-info load address.
@@ -81,6 +83,10 @@ std::vector<std::byte> make_xex2() {
     bytes[0x312U] = std::byte{1};           // Disc number.
     bytes[0x313U] = std::byte{2};           // Disc count.
     write_be32(bytes, 0x314U, 0xaabbccddU); // Savegame ID.
+    write_be32(bytes, 0x320U, 64U);         // TLS slot count.
+    write_be32(bytes, 0x324U, 0x83040U);    // TLS raw-data address.
+    write_be32(bytes, 0x328U, 0x20U);       // TLS data size.
+    write_be32(bytes, 0x32cU, 0x10U);       // TLS raw-data size.
     write_be32(bytes, 0x380U, 8U);
     write_be32(bytes, 0x384U, 0U); // Encryption type and compression type are both zero.
     write_be32(bytes, 0x400U, 0x48U); // Import-libraries block size.
@@ -174,7 +180,7 @@ int main() {
               parsed.metadata->header_size == 0x1000U &&
               parsed.metadata->security_info_offset == 0x100U &&
               parsed.metadata->image_size == 0x6000U &&
-              parsed.metadata->optional_header_count == 5U &&
+              parsed.metadata->optional_header_count == 6U &&
               parsed.metadata->security_load_address == 0x82000U &&
               parsed.metadata->image_base_address == 0x82000U,
           "valid XEX2 headers expose bounded container metadata");
@@ -193,10 +199,30 @@ int main() {
               parsed.metadata->platform == 2U && parsed.metadata->executable_type == 1U &&
               parsed.metadata->disc_number == 1U && parsed.metadata->disc_count == 2U &&
               parsed.metadata->savegame_id == 0xaabbccddU &&
+              parsed.metadata->tls_info && parsed.metadata->tls_info->slot_count == 64U &&
+              parsed.metadata->tls_info->raw_data_address == 0x83040U &&
+              parsed.metadata->tls_info->data_size == 0x20U &&
+              parsed.metadata->tls_info->raw_data_size == 0x10U &&
               parsed.metadata->entry_point == 0x83000U &&
               parsed.metadata->encryption_type == 0U &&
               parsed.metadata->compression_type == 0U,
           "execution-info identifiers, versions, platform and disc fields decode in bounded big-endian form");
+
+    auto duplicate_tls = bytes;
+    write_be32(duplicate_tls, 0x14U, 7U);
+    write_be32(duplicate_tls, 0x48U, 0x00020104U);
+    write_be32(duplicate_tls, 0x4cU, 0x320U);
+    const auto duplicate_tls_result = parse_xex2(duplicate_tls);
+    check(!duplicate_tls_result && duplicate_tls_result.error.find("duplicate XEX TLS") !=
+                                       std::string::npos,
+          "duplicate TLS optional headers are rejected");
+
+    auto truncated_tls = bytes;
+    write_be32(truncated_tls, 0x44U, 0x0ff8U);
+    const auto truncated_tls_result = parse_xex2(truncated_tls);
+    check(!truncated_tls_result && truncated_tls_result.error.find("TLS-info") !=
+                                       std::string::npos,
+          "TLS payloads that extend past the declared header are rejected");
 
     auto described_pages = bytes;
     write_be32(described_pages, 0x100U, 0x19cU);
