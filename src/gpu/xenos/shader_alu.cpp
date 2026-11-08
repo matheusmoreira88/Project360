@@ -22,7 +22,7 @@ float select_xenos_operand(float lhs, float rhs, bool select_lhs) noexcept {
 }
 
 bool is_supported_vector_opcode(std::uint8_t opcode) noexcept {
-    return opcode <= 7U || (opcode >= 12U && opcode <= 17U);
+    return opcode <= 10U || (opcode >= 12U && opcode <= 17U);
 }
 
 float dot_product_xenos(const std::array<float, 4>& lhs, const std::array<float, 4>& rhs,
@@ -249,6 +249,15 @@ ShaderVectorAluResult evaluate_shader_vector_alu(const ShaderAluInstruction& ins
         case 7U:
             result.destination[lane] = source_1[lane] != source_2[lane] ? 1.0F : 0.0F;
             break;
+        case 8U:
+            result.destination[lane] = source_1[lane] - std::floor(source_1[lane]);
+            break;
+        case 9U:
+            result.destination[lane] = std::trunc(source_1[lane]);
+            break;
+        case 10U:
+            result.destination[lane] = std::floor(source_1[lane]);
+            break;
         case 12U:
             result.destination[lane] = source_1[lane] == 0.0F ? source_2[lane] : source_3[lane];
             break;
@@ -318,7 +327,7 @@ execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
     if (instruction.vector_clamp || instruction.scalar_clamp) {
         return {{}, 0.0F, "Clamped Xenos ALU results are not implemented"};
     }
-    if (!is_supported_vector_opcode(instruction.vector_opcode) || instruction.scalar_opcode > 10U) {
+    if (!is_supported_vector_opcode(instruction.vector_opcode) || instruction.scalar_opcode > 13U) {
         return {{}, 0.0F, "Unsupported Xenos vector/scalar ALU opcode pair"};
     }
 
@@ -383,6 +392,15 @@ execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
         break;
     case 10U: // SNES: a != 0 ? 1 : 0
         scalar_result = scalar_source.value[3] != 0.0F ? 1.0F : 0.0F;
+        break;
+    case 11U: // FRCS: a - floor(a)
+        scalar_result = scalar_source.value[3] - std::floor(scalar_source.value[3]);
+        break;
+    case 12U: // TRUNCS: truncate toward zero
+        scalar_result = std::trunc(scalar_source.value[3]);
+        break;
+    case 13U: // FLOORS: round toward negative infinity
+        scalar_result = std::floor(scalar_source.value[3]);
         break;
     default:
         return {{}, 0.0F, "Unsupported Xenos scalar ALU opcode"};

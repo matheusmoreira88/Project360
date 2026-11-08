@@ -126,7 +126,7 @@ void test_shader_vector_alu_reference_subset() {
           "Xenos vector MUL evaluates all four lanes from decoded opcode fields");
 
     auto unsupported = add;
-    unsupported.vector_opcode = 8U;
+    unsupported.vector_opcode = 11U;
     const auto unsupported_result = evaluate_shader_vector_alu(
         unsupported, source_1, source_2, previous);
     auto predicated = add;
@@ -208,6 +208,31 @@ void test_shader_vector_alu_comparisons() {
                                    ordered_left, unordered_right, previous);
     check(!unordered && unordered.destination == std::array<float, 4>{},
           "Xenos MAX/MIN reject unordered operands until Xenos NaN behavior is verified");
+}
+
+void test_shader_vector_alu_rounding() {
+    using namespace project360::gpu::xenos;
+    const std::array<float, 4> source{-1.25F, 1.25F, -0.0F, std::numeric_limits<float>::infinity()};
+    const std::array<float, 4> other{};
+    const std::array<float, 4> previous{};
+    const auto evaluate = [&](std::uint8_t opcode) {
+        const auto instruction = decode_shader_alu_instruction(
+            {0x000f0000U, 0U, static_cast<std::uint32_t>(opcode) << 24U});
+        return evaluate_shader_vector_alu(instruction, source, other, previous);
+    };
+
+    const auto fraction = evaluate(8U);
+    const auto truncated = evaluate(9U);
+    const auto floored = evaluate(10U);
+    check(fraction && fraction.destination[0] == 0.75F && fraction.destination[1] == 0.25F &&
+              fraction.destination[2] == 0.0F && !std::signbit(fraction.destination[2]) &&
+              std::isnan(fraction.destination[3]) && truncated &&
+              truncated.destination[0] == -1.0F && truncated.destination[1] == 1.0F &&
+              truncated.destination[2] == 0.0F && std::signbit(truncated.destination[2]) &&
+              std::isinf(truncated.destination[3]) && floored && floored.destination[0] == -2.0F &&
+              floored.destination[1] == 1.0F && floored.destination[2] == 0.0F &&
+              std::signbit(floored.destination[2]) && std::isinf(floored.destination[3]),
+          "Xenos FRC/TRUNC/FLOOR handle negative fractions, signed zero and infinity");
 }
 
 void test_shader_vector_alu_dot_products() {
@@ -484,6 +509,20 @@ void test_shader_alu_add_mul_pair_execution() {
               nan_not_equal.registers[5] == std::array<float, 4>{1.0F, 1.0F, 1.0F, 1.0F},
           "Xenos scalar compare-select and SNES follow the documented unordered expressions");
 
+    auto negative_fraction_registers = registers;
+    negative_fraction_registers[3][3] = -1.25F;
+    const auto scalar_fraction = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 11U, 4U, 5U, 0U, 0x0fU), negative_fraction_registers);
+    const auto scalar_truncate = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 12U, 4U, 5U, 0U, 0x0fU), negative_fraction_registers);
+    const auto scalar_floor = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 13U, 4U, 5U, 0U, 0x0fU), negative_fraction_registers);
+    check(scalar_fraction && scalar_fraction.previous_scalar == 0.75F &&
+              scalar_fraction.registers[5] == std::array<float, 4>{0.75F, 0.75F, 0.75F, 0.75F} &&
+              scalar_truncate && scalar_truncate.previous_scalar == -1.0F && scalar_floor &&
+              scalar_floor.previous_scalar == -2.0F,
+          "Xenos FRCS/TRUNCS/FLOORS apply floor and truncation to src3.w");
+
     const auto multiply_pair = encode_pair(1U, 2U, 1U, 1U, 0x03U, 0x0cU);
     const auto multiplied = execute_shader_alu_add_mul_pair(multiply_pair, registers);
     check(multiplied &&
@@ -620,7 +659,7 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
           "Xenos EXEC carries scalar previous-result state between ordered ALU slots");
 
     auto invalid_ucode = ucode;
-    invalid_ucode[2][2] = (invalid_ucode[2][2] & ~(0x1fU << 24U)) | (8U << 24U);
+    invalid_ucode[2][2] = (invalid_ucode[2][2] & ~(0x1fU << 24U)) | (11U << 24U);
     const auto rejected = execute_shader_exec_block(
         exec, invalid_ucode, fetch_constants, memory, initial_registers, {}, float_constants);
     const auto out_of_range = execute_shader_exec_block(
@@ -1500,6 +1539,7 @@ int main() {
     test_shader_alu_word_decode();
     test_shader_vector_alu_reference_subset();
     test_shader_vector_alu_comparisons();
+    test_shader_vector_alu_rounding();
     test_shader_vector_alu_dot_products();
     test_shader_vector_alu_legacy_multiplication();
     test_shader_alu_temporary_source_resolution();
