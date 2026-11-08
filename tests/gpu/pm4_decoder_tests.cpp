@@ -178,6 +178,29 @@ void test_shader_vector_alu_comparisons() {
     check(std::signbit(maximum.destination[2]) && !std::signbit(minimum.destination[2]),
           "Xenos MAX/MIN preserve the source selected by their signed-zero tie rules");
 
+    const std::array<float, 4> condition{-0.0F, -1.0F, 1.0F, nan};
+    const std::array<float, 4> conditional_source_1{10.0F, 20.0F, 30.0F, 40.0F};
+    const std::array<float, 4> conditional_source_2{100.0F, 200.0F, 300.0F, 400.0F};
+    const auto evaluate_conditional = [&](std::uint8_t opcode) {
+        const auto instruction = decode_shader_alu_instruction(
+            {0x000f0000U, 0U, static_cast<std::uint32_t>(opcode) << 24U});
+        return evaluate_shader_vector_alu(instruction, condition, conditional_source_1, previous,
+                                          conditional_source_2);
+    };
+    const auto condition_equal_zero = evaluate_conditional(12U);
+    const auto condition_greater_equal_zero = evaluate_conditional(13U);
+    const auto condition_greater_zero = evaluate_conditional(14U);
+    check(condition_equal_zero &&
+              condition_equal_zero.destination ==
+                  std::array<float, 4>{10.0F, 200.0F, 300.0F, 400.0F} &&
+              condition_greater_equal_zero &&
+              condition_greater_equal_zero.destination ==
+                  std::array<float, 4>{10.0F, 200.0F, 30.0F, 400.0F} &&
+              condition_greater_zero &&
+              condition_greater_zero.destination ==
+                  std::array<float, 4>{100.0F, 200.0F, 30.0F, 400.0F},
+          "Xenos CNDE/CNDGE/CNDGT select source lanes from zero comparisons, including NaN");
+
     auto unordered_right = ordered_right;
     unordered_right[1] = std::numeric_limits<float>::quiet_NaN();
     const auto unordered =
@@ -351,6 +374,16 @@ void test_shader_vector_alu_from_encoded_temporaries() {
         unsupported_source, registers, previous);
     check(!rejected && rejected.destination == std::array<float, 4>{},
           "encoded vector evaluation rejects an unresolved constant source without a result");
+
+    auto conditional_registers = registers;
+    conditional_registers[2] = {1.0F, -2.0F, 0.0F, -1.0F};
+    conditional_registers[4] = {100.0F, 200.0F, 300.0F, 400.0F};
+    const auto encoded_conditional = decode_shader_alu_instruction({0x000f0000U, 0U, 0xed040302U});
+    const auto conditional = evaluate_shader_vector_alu_from_temporaries(
+        encoded_conditional, conditional_registers, previous);
+    check(conditional &&
+              conditional.destination == std::array<float, 4>{10.0F, 200.0F, 30.0F, 400.0F},
+          "encoded Xenos CNDGE resolves and selects its third temporary source");
 }
 
 void test_shader_alu_add_mul_pair_execution() {
@@ -410,6 +443,14 @@ void test_shader_alu_add_mul_pair_execution() {
     check(maximized && maximized.registers[4] == std::array<float, 4>{10.0F, 20.0F, 30.0F, 40.0F} &&
               maximized.previous_scalar == 13.0F,
           "Xenos ALU pair executes vector MAX alongside scalar ADDS");
+
+    auto conditional_registers = registers;
+    conditional_registers[1] = {1.0F, -2.0F, 0.0F, -1.0F};
+    const auto conditional_pair = execute_shader_alu_add_mul_pair(
+        encode_pair(13U, 0U, 4U, 5U, 0x0fU, 0U), conditional_registers);
+    check(conditional_pair &&
+              conditional_pair.registers[4] == std::array<float, 4>{10.0F, 6.0F, 30.0F, 8.0F},
+          "Xenos ALU pair executes CNDGE using vector src2/src3 lanes");
 
     const auto compare_pair = encode_pair(7U, 0U, 4U, 5U, 0x0fU, 0x0fU);
     const auto compared = execute_shader_alu_add_mul_pair(compare_pair, registers);
