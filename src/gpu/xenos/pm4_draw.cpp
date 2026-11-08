@@ -16,6 +16,7 @@ constexpr std::uint8_t kDrawIndx = 0x22U;
 constexpr std::uint8_t kDrawIndx2 = 0x36U;
 constexpr std::uint8_t kImLoad = 0x27U;
 constexpr std::uint8_t kImLoadImmediate = 0x2bU;
+constexpr std::uint8_t kLoadAluConstant = 0x2fU;
 constexpr std::uint8_t kSetBinMask = 0x50U;
 constexpr std::uint8_t kSetBinSelect = 0x51U;
 constexpr std::uint8_t kSetBinMaskLow = 0x60U;
@@ -425,6 +426,44 @@ Pm4DrawStreamResult process_pm4_draw_stream(
                     active_vertex_shader = loaded.shader;
                 } else {
                     active_pixel_shader = loaded.shader;
+                }
+                continue;
+            }
+
+            if (packet.type == PacketType::type3_command &&
+                packet.opcode == kLoadAluConstant) {
+                if (packet.payload_word_count != 3U) {
+                    return {{}, {},
+                            "PM4_LOAD_ALU_CONSTANT requires address, offset/type and size dwords",
+                            packet.header_word_offset};
+                }
+                const auto source_address = read_u32_be(packet_stream, 4U) & 0x3fffffffU;
+                const auto offset_type = read_u32_be(packet_stream, 8U);
+                const auto constant_type = (offset_type >> 16U) & 0xffU;
+                if (constant_type != 0U) {
+                    return {{}, {}, "PM4_LOAD_ALU_CONSTANT only supports the ALU constant bank",
+                            packet.header_word_offset};
+                }
+                const auto size_dwords = read_u32_be(packet_stream, 12U) & 0xfffU;
+                if (size_dwords == 0U) {
+                    return {{}, {}, "PM4_LOAD_ALU_CONSTANT size must be nonzero",
+                            packet.header_word_offset};
+                }
+                const auto register_base = 0x4000U + (offset_type & 0x7ffU);
+                if (register_base > registers.size() ||
+                    size_dwords > registers.size() - register_base) {
+                    return {{}, {}, "PM4_LOAD_ALU_CONSTANT exceeds the configured register file",
+                            packet.header_word_offset};
+                }
+
+                std::vector<std::byte> constant_bytes(
+                    static_cast<std::size_t>(size_dwords) * sizeof(std::uint32_t));
+                if (!memory.read_physical(source_address, constant_bytes)) {
+                    return {{}, {}, "PM4_LOAD_ALU_CONSTANT exceeds guest physical memory",
+                            packet.header_word_offset};
+                }
+                for (std::size_t i = 0U; i < size_dwords; ++i) {
+                    registers[register_base + i] = read_u32_be(constant_bytes, i * 4U);
                 }
                 continue;
             }

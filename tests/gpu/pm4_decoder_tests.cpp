@@ -1264,6 +1264,34 @@ void test_pm4_sequential_draw_dispatch() {
         std::byte{0U}, std::byte{2U}, std::byte{0U},
     };
     check(memory.load(0x10U, index_bytes), "PM4 draw-dispatch index fixture loads");
+    const std::array<std::uint32_t, 4> alu_constant_words{
+        std::bit_cast<std::uint32_t>(4.25F), std::bit_cast<std::uint32_t>(-2.0F),
+        std::bit_cast<std::uint32_t>(0.5F), std::bit_cast<std::uint32_t>(9.0F)};
+    std::array<std::byte, 16> alu_constant_bytes{};
+    for (std::size_t i = 0U; i < alu_constant_words.size(); ++i) {
+        const auto value = alu_constant_words[i];
+        alu_constant_bytes[i * 4U] = static_cast<std::byte>((value >> 24U) & 0xffU);
+        alu_constant_bytes[i * 4U + 1U] = static_cast<std::byte>((value >> 16U) & 0xffU);
+        alu_constant_bytes[i * 4U + 2U] = static_cast<std::byte>((value >> 8U) & 0xffU);
+        alu_constant_bytes[i * 4U + 3U] = static_cast<std::byte>(value & 0xffU);
+    }
+    check(memory.load(0x60U, alu_constant_bytes),
+          "PM4 ALU constant fixture stores big-endian float dwords in guest memory");
+    const std::array<std::uint32_t, 4> second_alu_constant_words{
+        std::bit_cast<std::uint32_t>(-1.0F), std::bit_cast<std::uint32_t>(2.0F),
+        std::bit_cast<std::uint32_t>(3.0F), std::bit_cast<std::uint32_t>(4.0F)};
+    std::array<std::byte, 16> second_alu_constant_bytes{};
+    for (std::size_t i = 0U; i < second_alu_constant_words.size(); ++i) {
+        const auto value = second_alu_constant_words[i];
+        second_alu_constant_bytes[i * 4U] = static_cast<std::byte>((value >> 24U) & 0xffU);
+        second_alu_constant_bytes[i * 4U + 1U] =
+            static_cast<std::byte>((value >> 16U) & 0xffU);
+        second_alu_constant_bytes[i * 4U + 2U] =
+            static_cast<std::byte>((value >> 8U) & 0xffU);
+        second_alu_constant_bytes[i * 4U + 3U] = static_cast<std::byte>(value & 0xffU);
+    }
+    check(memory.load(0x70U, second_alu_constant_bytes),
+          "PM4 second ALU constant fixture stores a distinct float4 in guest memory");
 
     const auto pack_control_flow = [](std::uint32_t first_word0,
                                       std::uint32_t first_word1,
@@ -1291,6 +1319,10 @@ void test_pm4_sequential_draw_dispatch() {
     append_u32_be(stream, 0xc0000000U | (1U << 16U) | (0x27U << 8U)); // IM_LOAD.
     append_u32_be(stream, 0x80U); // Guest physical shader address, vertex stage.
     append_u32_be(stream, 6U);   // Start 0, six dwords.
+    append_u32_be(stream, 0xc0000000U | (2U << 16U) | (0x2fU << 8U)); // LOAD_ALU_CONSTANT.
+    append_u32_be(stream, 0x60U); // Physical source address.
+    append_u32_be(stream, 36U);  // ALU float4 c9 starts at dword index 36, type 0.
+    append_u32_be(stream, 4U);   // Four dwords (one float4 constant).
     append_u32_be(stream, (2U << 16U) | 0x2100U); // VGT_MAX/MIN/INDX_OFFSET.
     append_u32_be(stream, 0x00ffffffU);
     append_u32_be(stream, 0U);
@@ -1326,6 +1358,10 @@ void test_pm4_sequential_draw_dispatch() {
     append_u32_be(stream, 0U);
     append_u32_be(stream, 0U);
     append_u32_be(stream, 0U);
+    append_u32_be(stream, 0xc0000000U | (2U << 16U) | (0x2fU << 8U));
+    append_u32_be(stream, 0x70U); // Reload c9 from a distinct physical address.
+    append_u32_be(stream, 36U);
+    append_u32_be(stream, 4U);
     append_u32_be(stream, 0xc0000000U | (7U << 16U) | (0x2bU << 8U)); // IM_LOAD_IMMEDIATE.
     append_u32_be(stream, 1U); // Pixel stage.
     append_u32_be(stream, 6U); // Start 0, six dwords.
@@ -1348,7 +1384,7 @@ void test_pm4_sequential_draw_dispatch() {
           "PM4 stream prepares both draws before exposing their state snapshots");
     if (!dispatched || dispatched.draws.size() != 2U) return;
     constexpr std::array<std::uint8_t, 1> required_fetch_slots{7U};
-    constexpr std::array<std::uint8_t, 1> required_alu_constants{7U};
+    constexpr std::array<std::uint8_t, 2> required_alu_constants{7U, 9U};
     const auto first_fetch_bank = decode_vertex_fetch_descriptor_bank(
         dispatched.draws[0].register_snapshot, required_fetch_slots);
     const auto second_fetch_bank = decode_vertex_fetch_descriptor_bank(
@@ -1371,6 +1407,10 @@ void test_pm4_sequential_draw_dispatch() {
               second_fetch_bank.descriptors[7U].size_dwords == 3U && first_alu_bank &&
               second_alu_bank && first_alu_bank.constants[7U][0] == 1.5F &&
               second_alu_bank.constants[7U][0] == 2.5F &&
+              first_alu_bank.constants[9U] ==
+                  std::array<float, 4>{4.25F, -2.0F, 0.5F, 9.0F} &&
+              second_alu_bank.constants[9U] ==
+                  std::array<float, 4>{-1.0F, 2.0F, 3.0F, 4.0F} &&
               dispatched.draws[0].vertex_shader &&
               dispatched.draws[0].vertex_shader->stage == ShaderStage::vertex &&
               dispatched.draws[0].vertex_shader->source_address == 0x80U &&
@@ -1472,6 +1512,31 @@ void test_pm4_sequential_draw_dispatch() {
     check(!selected_bin_shader_load && selected_bin_shader_load.draws.empty() &&
               selected_bin_shader_load.error.find("requires an address") != std::string::npos,
           "PM4 bin-mask low/high state selects predicated shader packets transactionally");
+
+    std::vector<std::uint8_t> out_of_bounds_constant_load;
+    append_u32_be(out_of_bounds_constant_load,
+                  0xc0000000U | (2U << 16U) | (0x2fU << 8U));
+    append_u32_be(out_of_bounds_constant_load, 0xfcU);
+    append_u32_be(out_of_bounds_constant_load, 9U);
+    append_u32_be(out_of_bounds_constant_load, 4U);
+    const auto rejected_constant_load = process_pm4_draw_stream(
+        out_of_bounds_constant_load, initial_registers, memory);
+    check(!rejected_constant_load && rejected_constant_load.draws.empty() &&
+              rejected_constant_load.final_registers.empty() &&
+              rejected_constant_load.error.find("guest physical memory") != std::string::npos,
+          "PM4_LOAD_ALU_CONSTANT rejects out-of-range guest memory transactionally");
+
+    std::vector<std::uint8_t> unsupported_constant_bank;
+    append_u32_be(unsupported_constant_bank,
+                  0xc0000000U | (2U << 16U) | (0x2fU << 8U));
+    append_u32_be(unsupported_constant_bank, 0x60U);
+    append_u32_be(unsupported_constant_bank, (1U << 16U) | 9U);
+    append_u32_be(unsupported_constant_bank, 4U);
+    const auto rejected_constant_bank = process_pm4_draw_stream(
+        unsupported_constant_bank, initial_registers, memory);
+    check(!rejected_constant_bank && rejected_constant_bank.final_registers.empty() &&
+              rejected_constant_bank.error.find("only supports the ALU") != std::string::npos,
+          "PM4_LOAD_ALU_CONSTANT rejects unsupported constant banks explicitly");
 }
 
 void test_xenos_scissor_register_resolution() {
