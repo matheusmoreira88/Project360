@@ -35,6 +35,14 @@ struct ShaderExecPairDecodeResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct ShaderExecProgramDecodeResult {
+    std::vector<ShaderExecInstruction> control_flow;
+    std::uint32_t control_flow_record_count{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct ShaderExecResult {
     ShaderAluTemporaryRegisterBank registers{};
     std::uint8_t instructions_executed{};
@@ -75,6 +83,15 @@ struct ShaderExecSequenceResult {
 // support and addresses separately.
 [[nodiscard]] ShaderExecPairDecodeResult decode_shader_exec_pairs(
     std::span<const std::array<std::uint32_t, 3>> packed_pairs);
+
+// Decodes the control-flow prefix of a complete shader microcode record array.
+// EXEC addresses are indexes into that same complete array, so callers can
+// pass the original array to the reference executor without rebasing offsets.
+// The prefix length is explicit because guessing it from instruction contents
+// can misclassify ALU/VFETCH words as control flow.
+[[nodiscard]] ShaderExecProgramDecodeResult decode_shader_exec_program(
+    std::span<const std::array<std::uint32_t, 3>> complete_ucode,
+    std::uint32_t control_flow_record_count);
 
 // Executes one EXEC/EXEC_END or bool-constant COND_EXEC/COND_EXEC_END block in
 // declared sequence order. Conditional blocks require absolute addressing and

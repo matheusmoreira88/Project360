@@ -54,6 +54,42 @@ ShaderExecPairDecodeResult decode_shader_exec_pairs(
     return result;
 }
 
+ShaderExecProgramDecodeResult decode_shader_exec_program(
+    std::span<const std::array<std::uint32_t, 3>> complete_ucode,
+    std::uint32_t control_flow_record_count) {
+    constexpr std::uint32_t maximum_control_flow_record_count = 2048U;
+    if (complete_ucode.empty() || control_flow_record_count == 0U) {
+        return {{}, 0U, "Xenos shader microcode or control-flow prefix is empty"};
+    }
+    if (control_flow_record_count > maximum_control_flow_record_count ||
+        control_flow_record_count > complete_ucode.size()) {
+        return {{}, 0U, "Xenos shader control-flow prefix exceeds available records"};
+    }
+
+    const auto pair_count = static_cast<std::size_t>(control_flow_record_count);
+    auto decoded = decode_shader_exec_pairs(complete_ucode.first(pair_count));
+    if (!decoded) return {{}, 0U, decoded.error};
+
+    for (std::size_t index = 0U; index < decoded.instructions.size(); ++index) {
+        const auto& instruction = decoded.instructions[index];
+        const auto opcode = instruction.opcode;
+        const bool has_exec_payload = (opcode >= 1U && opcode <= 8U) ||
+                                      opcode == 13U || opcode == 14U;
+        if (!has_exec_payload) continue;
+
+        const auto start = static_cast<std::size_t>(instruction.instruction_address);
+        const auto count = static_cast<std::size_t>(instruction.instruction_count);
+        if (start < pair_count || start > complete_ucode.size() ||
+            count > complete_ucode.size() - start) {
+            return {{}, 0U,
+                    "Xenos EXEC block " + std::to_string(index) +
+                        " addresses records outside the executable shader section"};
+        }
+    }
+
+    return {std::move(decoded.instructions), control_flow_record_count, {}};
+}
+
 ShaderExecResult execute_shader_exec_block(
     const ShaderExecInstruction& exec,
     std::span<const std::array<std::uint32_t, 3>> ucode,

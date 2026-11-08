@@ -749,6 +749,33 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
               empty_control_flow.instructions.empty() && oversized_result.instructions.empty(),
           "Xenos packed control-flow decoder rejects empty and oversized inputs without partial output");
 
+    const auto pack_control_flow = [](std::uint32_t first_word0,
+                                      std::uint32_t first_word1,
+                                      std::uint32_t second_word0,
+                                      std::uint32_t second_word1) {
+        return std::array<std::uint32_t, 3>{
+            first_word0, first_word1 | (second_word0 << 16U),
+            (second_word0 >> 16U) | (second_word1 << 16U)};
+    };
+    const auto exec_header = pack_control_flow(1U | (1U << 12U), 1U << 12U,
+                                               1U | (1U << 12U), 2U << 12U);
+    const std::array<std::array<std::uint32_t, 3>, 2> complete_ucode{
+        exec_header, std::array<std::uint32_t, 3>{0U, 0U, 0U}};
+    const auto shader_program = decode_shader_exec_program(complete_ucode, 1U);
+    check(shader_program && shader_program.control_flow_record_count == 1U &&
+              shader_program.control_flow.size() == 2U &&
+              shader_program.control_flow[0].instruction_address == 1U &&
+              shader_program.control_flow[1].opcode == 2U,
+          "Xenos complete shader parser validates its explicit control-flow prefix and absolute EXEC address");
+    const auto oversized_prefix = decode_shader_exec_program(complete_ucode, 3U);
+    auto invalid_address_ucode = complete_ucode;
+    invalid_address_ucode[0] = pack_control_flow(2U | (1U << 12U), 1U << 12U,
+                                                  1U | (1U << 12U), 2U << 12U);
+    const auto invalid_address_program = decode_shader_exec_program(invalid_address_ucode, 1U);
+    check(!oversized_prefix && !invalid_address_program &&
+              oversized_prefix.control_flow.empty() && invalid_address_program.control_flow.empty(),
+          "Xenos complete shader parser rejects out-of-buffer prefix and EXEC ranges transactionally");
+
     project360::memory::GuestMemory memory(128U);
     const std::array<std::byte, 32> vertex_data{
         std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0},
@@ -782,6 +809,24 @@ void test_shader_exec_block_ordered_alu_and_vfetch() {
             10U | (0x0fU << 16U), 0U,
             (1U << 31U) | (3U << 16U) | (1U << 30U) | (4U << 8U) | 4U |
                 (1U << 29U) | (1U << 24U)}};
+
+    auto executable_complete_ucode = complete_ucode;
+    executable_complete_ucode[1U] = ucode[0U];
+    const auto runnable_shader = decode_shader_exec_program(executable_complete_ucode, 1U);
+    ShaderAluFloatConstantBank runnable_constants{};
+    runnable_constants[5U] = {0.0F, 0.0F, -1.0F, 0.0F};
+    const auto runnable_result = runnable_shader
+                                     ? execute_shader_exec_sequence(
+                                           runnable_shader.control_flow, executable_complete_ucode,
+                                           fetch_constants, memory, {}, {}, runnable_constants)
+                                     : ShaderExecSequenceResult{};
+    if (!runnable_shader || !runnable_result) {
+        std::cerr << "Xenos complete shader execution diagnostic: "
+                  << (runnable_shader ? runnable_result.error : runnable_shader.error) << '\n';
+    }
+    check(runnable_shader && runnable_result && runnable_result.ended_shader &&
+              runnable_result.instructions_executed == 2U,
+          "Xenos parsed EXEC addresses run directly against the complete unrebased microcode array");
 
     // Two sequence bits per instruction: ALU, VFETCH, ALU. The serialize bit
     // is retained in metadata; this reference executor commits each operation
