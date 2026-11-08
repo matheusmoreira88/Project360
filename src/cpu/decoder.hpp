@@ -143,6 +143,7 @@ enum class Opcode {
     floating_negate,
     floating_absolute,
     floating_negative_absolute,
+    floating_select,
     floating_compare_unordered,
     floating_compare_ordered,
     trap_word,
@@ -154,6 +155,7 @@ struct DecodedInstruction {
     std::uint8_t rt{};
     std::uint8_t ra{};
     std::uint8_t rb{};
+    std::uint8_t frc{};
     std::uint8_t bf{};
     std::uint8_t bfa{};
     CrLogicalOperation cr_logical_operation{};

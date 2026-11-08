@@ -104,6 +104,14 @@ std::uint32_t fpr_compare(std::uint8_t bf, std::uint8_t fra, std::uint8_t frb,
            (static_cast<std::uint32_t>(xo) << 1U);
 }
 
+std::uint32_t fpr_select(std::uint8_t frt, std::uint8_t fra, std::uint8_t frc,
+                         std::uint8_t frb, bool record = false) {
+    return (63U << 26U) | (static_cast<std::uint32_t>(frc) << 21U) |
+           (static_cast<std::uint32_t>(frb) << 16U) |
+           (static_cast<std::uint32_t>(fra) << 11U) |
+           (static_cast<std::uint32_t>(frt) << 6U) | (23U << 1U) | (record ? 1U : 0U);
+}
+
 std::uint32_t add_xo(std::uint8_t rd, std::uint8_t ra, std::uint8_t rb, std::uint16_t xo,
                      bool overflow_enable = false, bool record = false) {
     return (31U << 26U) | (static_cast<std::uint32_t>(rd) << 21U) |
@@ -1370,6 +1378,51 @@ void test_floating_point_sign_and_move_instructions() {
     const auto unsupported = cpu::decode(fpr_unary(2, 1, 21));
     check(!reserved && !unsupported,
           "reserved unary FPR fields and unsupported arithmetic opcodes are diagnosed");
+}
+
+void test_floating_point_select_instruction() {
+    using namespace project360;
+    memory::GuestMemory mem(24);
+    put_word(mem, 0, fpr_select(4, 1, 3, 2));       // fsel f4,f1,f3,f2
+    put_word(mem, 4, fpr_select(5, 6, 3, 2));       // fsel f5,f6,f3,f2
+    put_word(mem, 8, fpr_select(3, 7, 3, 2, true)); // fsel. f3,f7,f3,f2
+    put_word(mem, 12, fpr_select(8, 8, 3, 2));      // fsel f8,f8,f3,f2
+    put_word(mem, 16, fpr_select(9, 9, 3, 2));      // fsel f9,f9,f3,f2
+
+    cpu::CpuState state{};
+    state.fpr[1] = std::bit_cast<std::uint64_t>(1.0);
+    state.fpr[2] = std::bit_cast<std::uint64_t>(42.0);
+    state.fpr[3] = std::bit_cast<std::uint64_t>(43.0);
+    state.fpr[6] = std::bit_cast<std::uint64_t>(-1.0);
+    state.fpr[7] = 0x8000000000000000ULL; // -0 compares equal to zero
+    state.fpr[8] = 0x7ff8000000001234ULL; // quiet NaN selects FRB
+    state.fpr[9] = 0xfff0000000000001ULL; // signaling NaN selects FRB
+    state.cr = 0x12345678U;
+    state.fpscr = 0xa0000000U;
+
+    const cpu::Interpreter interpreter{};
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.fpr[4] == std::bit_cast<std::uint64_t>(43.0) && state.cr == 0x12345678U &&
+              state.fpscr == 0xa0000000U,
+          "fsel chooses FRC for a positive selector without changing CR or FPSCR");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.fpr[5] == std::bit_cast<std::uint64_t>(42.0),
+          "fsel chooses FRB for a negative selector");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.fpr[3] == std::bit_cast<std::uint64_t>(43.0) &&
+              ((state.cr >> 24U) & 0xfU) == 0xaU && state.fpscr == 0xa0000000U,
+          "fsel treats negative zero as equal to zero and records FPSCR summary in CR1");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.fpr[8] == std::bit_cast<std::uint64_t>(42.0),
+          "fsel sends quiet NaN selectors to FRB");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed &&
+              state.fpr[9] == std::bit_cast<std::uint64_t>(42.0),
+          "fsel routes signaling NaN selectors without altering FPSCR");
 }
 
 void test_floating_point_compare_instructions() {
@@ -3271,6 +3324,7 @@ int main() {
     test_doubleword_memory_instructions();
     test_floating_point_load_store_transfers();
     test_floating_point_sign_and_move_instructions();
+    test_floating_point_select_instruction();
     test_floating_point_compare_instructions();
     test_indexed_memory_instructions();
     test_indexed_update_memory_instructions();

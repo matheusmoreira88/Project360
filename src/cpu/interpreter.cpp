@@ -369,6 +369,20 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr_field(state, 1U, (state.fpscr >> 28U) & 0xfU);
         break;
     }
+    case Opcode::floating_select: {
+        constexpr std::uint64_t kSignBit = 0x8000000000000000ULL;
+        constexpr std::uint64_t kExponentMask = 0x7ff0000000000000ULL;
+        constexpr std::uint64_t kFractionMask = 0x000fffffffffffffULL;
+        const auto selector = state.fpr[ins.ra];
+        const bool is_nan = (selector & kExponentMask) == kExponentMask &&
+                            (selector & kFractionMask) != 0U;
+        const bool is_zero = (selector & ~kSignBit) == 0U;
+        const bool select_c = !is_nan && ((selector & kSignBit) == 0U || is_zero);
+        const auto selected = select_c ? state.fpr[ins.frc] : state.fpr[ins.rb];
+        state.fpr[ins.rt] = selected;
+        if (ins.record) set_cr_field(state, 1U, (state.fpscr >> 28U) & 0xfU);
+        break;
+    }
     case Opcode::floating_compare_unordered:
     case Opcode::floating_compare_ordered: {
         constexpr std::uint64_t kExponentMask = 0x7ff0000000000000ULL;
