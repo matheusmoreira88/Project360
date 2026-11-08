@@ -199,6 +199,19 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.record) set_cr0(state, value);
         break;
     }
+    case Opcode::count_leading_zeros_word: {
+        const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);
+        const auto value = static_cast<std::uint64_t>(std::countl_zero(source));
+        state.gpr[ins.ra] = value;
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
+    case Opcode::count_leading_zeros_doubleword: {
+        const auto value = static_cast<std::uint64_t>(std::countl_zero(state.gpr[ins.rt]));
+        state.gpr[ins.ra] = value;
+        if (ins.record) set_cr0(state, value);
+        break;
+    }
     case Opcode::shift_left_word:
     case Opcode::shift_right_word: {
         const auto source = static_cast<std::uint32_t>(state.gpr[ins.rt]);

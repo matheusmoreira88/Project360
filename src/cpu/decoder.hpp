@@ -39,6 +39,8 @@ enum class Opcode {
     shift_right_doubleword,
     shift_right_algebraic_doubleword,
     rotate_left_word_mask,
+    count_leading_zeros_word,
+    count_leading_zeros_doubleword,
     subf,
     subfc,
     subfe,

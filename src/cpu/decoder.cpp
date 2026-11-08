@@ -235,6 +235,13 @@ DecodeResult decode(std::uint32_t word) {
             ins.record = (word & 1U) != 0U;
             return {ins, {}};
         }
+        if (xo10 == 26U || xo10 == 58U) {
+            if (ins.rb != 0U) return {{}, "count-leading-zeros reserved field is nonzero"};
+            ins.opcode = xo10 == 26U ? Opcode::count_leading_zeros_word
+                                     : Opcode::count_leading_zeros_doubleword;
+            ins.record = (word & 1U) != 0U;
+            return {ins, {}};
+        }
         if (xo == 0U || xo == 32U) {
             if ((word & (1U << 22U)) != 0U) return {{}, "compare register reserved bit is set"};
             if ((word & 1U) != 0U) return {{}, "compare register record bit is reserved"};

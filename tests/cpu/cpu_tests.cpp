@@ -373,6 +373,51 @@ void test_doubleword_shift_instructions() {
           "zero-count srad copies its source and clears CA");
 }
 
+void test_leading_zero_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(32);
+    put_word(mem, 0, logical_x(3, 1, 0, 26)); // cntlzw r3,r1
+    put_word(mem, 4, logical_x(4, 2, 0, 26, true)); // cntlzw. r4,r2
+    put_word(mem, 8, logical_x(5, 6, 0, 58)); // cntlzd r5,r6
+    put_word(mem, 12, logical_x(7, 8, 0, 58, true)); // cntlzd. r7,r8
+    put_word(mem, 16, logical_x(9, 10, 0, 58, true)); // cntlzd. r9,r10
+
+    cpu::CpuState state{};
+    state.gpr[1] = 0xffffffff00800000ULL; // high word is ignored by cntlzw
+    state.gpr[2] = 0;
+    state.gpr[6] = 0x0000800000000000ULL;
+    state.gpr[8] = 0x8000000000000001ULL;
+    state.gpr[10] = 0;
+    state.xer = 0x80000000U; // SO is reflected by record forms
+
+    const cpu::Interpreter interpreter{};
+    auto result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[3] == 8 &&
+              state.cr == 0 && state.xer == 0x80000000U,
+          "cntlzw examines only the low word and leaves CR/XER unchanged without Rc");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[4] == 32 &&
+              (state.cr >> 28U) == 5U && state.xer == 0x80000000U,
+          "cntlzw. returns 32 for zero and records GT plus SO in CR0");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[5] == 16 &&
+              (state.cr >> 28U) == 5U,
+          "cntlzd counts leading zeros across all 64 source bits");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[7] == 0 &&
+              (state.cr >> 28U) == 3U,
+          "cntlzd. returns zero when the high bit is set and records EQ plus SO");
+    result = interpreter.step(state, mem);
+    check(result.status == cpu::StepStatus::executed && state.gpr[9] == 64 &&
+              (state.cr >> 28U) == 5U && state.xer == 0x80000000U,
+          "cntlzd. returns 64 for zero without changing XER");
+
+    const auto bad_word_form = cpu::decode(logical_x(3, 1, 1, 26));
+    const auto bad_doubleword_form = cpu::decode(logical_x(3, 1, 1, 58));
+    check(!bad_word_form && !bad_doubleword_form,
+          "cntlzw and cntlzd diagnose a nonzero reserved RB field");
+}
+
 void test_memory_and_endianness() {
     using namespace project360;
     memory::GuestMemory mem(512);
@@ -1165,6 +1210,7 @@ int main() {
     test_carry_immediate_and_subtract_arithmetic();
     test_logical_shift_and_rotate_instructions();
     test_doubleword_shift_instructions();
+    test_leading_zero_instructions();
     test_memory_and_endianness();
     test_byte_and_halfword_memory_instructions();
     test_load_store_update_instructions();
