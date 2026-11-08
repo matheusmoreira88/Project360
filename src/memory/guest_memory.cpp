@@ -1,5 +1,6 @@
 #include "memory/guest_memory.hpp"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <new>
@@ -238,6 +239,47 @@ bool GuestMemory::load(std::uint64_t address, std::span<const std::byte> data) n
     const auto start = static_cast<std::size_t>(address);
     for (std::size_t i = 0; i < data.size(); ++i) {
         bytes_[start + i] = data[i];
+    }
+    return true;
+}
+
+bool GuestMemory::fill(std::uint64_t address, std::size_t length, std::byte value) noexcept {
+    if (length == 0U) return true;
+    if (address > std::numeric_limits<std::uint64_t>::max() - (length - 1U)) return false;
+    if (!mapping_enabled_) {
+        if (!contains(address, length)) return false;
+        const auto start = static_cast<std::size_t>(address);
+        std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(start),
+                    static_cast<std::ptrdiff_t>(length), value);
+        return true;
+    }
+
+    // Validate every page first so a later permission or mapping failure cannot
+    // leave the beginning of a guest range modified.
+    const auto last_address = address + static_cast<std::uint64_t>(length - 1U);
+    auto current = address;
+    while (true) {
+        std::uint64_t physical = 0;
+        if (!translate(current, GuestPageAccess::write, physical)) return false;
+        const auto remaining_in_page = static_cast<std::size_t>(
+            page_size - (current & (page_size - 1U)));
+        const auto remaining = static_cast<std::size_t>(last_address - current + 1U);
+        if (remaining <= remaining_in_page) break;
+        current += static_cast<std::uint64_t>(remaining_in_page);
+    }
+
+    current = address;
+    auto remaining = length;
+    while (remaining != 0U) {
+        std::uint64_t physical = 0;
+        (void)translate(current, GuestPageAccess::write, physical);
+        const auto page_offset = static_cast<std::size_t>(current & (page_size - 1U));
+        const auto chunk = std::min(remaining, static_cast<std::size_t>(page_size) - page_offset);
+        const auto start = static_cast<std::size_t>(physical);
+        std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(start),
+                    static_cast<std::ptrdiff_t>(chunk), value);
+        current += static_cast<std::uint64_t>(chunk);
+        remaining -= chunk;
     }
     return true;
 }

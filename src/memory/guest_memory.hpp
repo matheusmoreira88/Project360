@@ -40,6 +40,8 @@ public:
     [[nodiscard]] bool write_u64_be(std::uint64_t address, std::uint64_t value) noexcept;
     [[nodiscard]] bool fetch_u32_be(std::uint64_t address, std::uint32_t& value) const noexcept;
     [[nodiscard]] bool load(std::uint64_t address, std::span<const std::byte> data) noexcept;
+    [[nodiscard]] bool fill(std::uint64_t address, std::size_t length,
+                            std::byte value) noexcept;
 
     // Mapping mode is opt-in; the default remains the bounded flat memory used by CPU tests.
     [[nodiscard]] bool map_page(std::uint64_t virtual_base, std::uint64_t physical_base,

@@ -85,6 +85,31 @@ int main() {
               !memory.fetch_u32_be(0x300000, word),
           "no-access protection blocks instruction fetch");
 
+    GuestMemory fill_memory(3U * static_cast<std::size_t>(GuestMemory::page_size));
+    const std::array<project360::memory::GuestPageMapping, 2> fill_pages{{
+        {0x400000U, 0U, GuestPageAccess::read | GuestPageAccess::write},
+        {0x401000U, 2U * GuestMemory::page_size,
+         GuestPageAccess::read | GuestPageAccess::write},
+    }};
+    check(fill_memory.map_pages(fill_pages), "non-contiguous pages map for range fill");
+    check(fill_memory.fill(0x400ffeU, 4U, std::byte{0x5a}),
+          "range fill crosses virtual pages with non-contiguous physical backing");
+    std::uint8_t filled = 0;
+    check(fill_memory.read_u8(0x400ffeU, filled) && filled == 0x5aU &&
+              fill_memory.read_u8(0x401001U, filled) && filled == 0x5aU,
+          "range fill writes every byte through virtual mappings");
+    const std::array<project360::memory::GuestPageMapping, 2> fill_partial{{
+        {0x500000U, GuestMemory::page_size, GuestPageAccess::read | GuestPageAccess::write},
+        {0x501000U, 0U, GuestPageAccess::read},
+    }};
+    check(fill_memory.map_pages(fill_partial), "partial-permission range maps for fill test");
+    check(!fill_memory.fill(0x500ffeU, 4U, std::byte{0x33}) &&
+              fill_memory.read_u8(0x500ffeU, filled) && filled == 0U,
+          "range fill validates the complete destination before modifying any byte");
+    check(fill_memory.fill(UINT64_MAX, 0U, std::byte{0x11}) &&
+              !fill_memory.fill(UINT64_MAX - 1U, 4U, std::byte{0x11}),
+          "zero-length fill is a no-op and wrapped guest ranges fail safely");
+
     GuestMemory transactional(2U * static_cast<std::size_t>(GuestMemory::page_size));
     const std::array<project360::memory::GuestPageMapping, 2> duplicate_batch{{
         {0x8000U, 0U, GuestPageAccess::read},
