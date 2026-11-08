@@ -416,12 +416,26 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
                 return {{}, "XEX execution-info payload is out of bounds"};
             }
             std::uint32_t media_id = 0;
+            std::uint32_t title_version = 0;
+            std::uint32_t base_version = 0;
             std::uint32_t title_id = 0;
-            if (!read_be32(file, value, media_id) || !read_be32(file, value + 12U, title_id)) {
+            std::uint32_t savegame_id = 0;
+            if (!read_be32(file, value, media_id) ||
+                !read_be32(file, value + 4U, title_version) ||
+                !read_be32(file, value + 8U, base_version) ||
+                !read_be32(file, value + 12U, title_id) ||
+                !read_be32(file, value + 20U, savegame_id)) {
                 return {{}, "XEX execution-info payload is truncated"};
             }
             metadata.media_id = media_id;
+            metadata.title_version = title_version;
+            metadata.base_version = base_version;
             metadata.title_id = title_id;
+            metadata.platform = std::to_integer<std::uint8_t>(file[value + 16U]);
+            metadata.executable_type = std::to_integer<std::uint8_t>(file[value + 17U]);
+            metadata.disc_number = std::to_integer<std::uint8_t>(file[value + 18U]);
+            metadata.disc_count = std::to_integer<std::uint8_t>(file[value + 19U]);
+            metadata.savegame_id = savegame_id;
         }
     }
 

@@ -73,7 +73,14 @@ std::vector<std::byte> make_xex2() {
     write_be32(bytes, 0x210U, 0x82000U); // Security-info load address.
     write_be32(bytes, 0x280U, 0U);      // Page-descriptor count.
     write_be32(bytes, 0x300U, 0x12345678U); // Media ID.
+    write_be32(bytes, 0x304U, 0x00010005U); // Title version.
+    write_be32(bytes, 0x308U, 0x00010002U); // Base version.
     write_be32(bytes, 0x30cU, 0x545408A7U); // Title ID.
+    bytes[0x310U] = std::byte{2};           // Platform.
+    bytes[0x311U] = std::byte{1};           // Executable type.
+    bytes[0x312U] = std::byte{1};           // Disc number.
+    bytes[0x313U] = std::byte{2};           // Disc count.
+    write_be32(bytes, 0x314U, 0xaabbccddU); // Savegame ID.
     write_be32(bytes, 0x380U, 8U);
     write_be32(bytes, 0x384U, 0U); // Encryption type and compression type are both zero.
     write_be32(bytes, 0x400U, 0x48U); // Import-libraries block size.
@@ -181,10 +188,15 @@ int main() {
           "XEX import metadata exposes a bounded library name, version and record address");
     check(parsed.metadata && parsed.metadata->title_id == 0x545408a7U &&
               parsed.metadata->media_id == 0x12345678U &&
+              parsed.metadata->title_version == 0x00010005U &&
+              parsed.metadata->base_version == 0x00010002U &&
+              parsed.metadata->platform == 2U && parsed.metadata->executable_type == 1U &&
+              parsed.metadata->disc_number == 1U && parsed.metadata->disc_count == 2U &&
+              parsed.metadata->savegame_id == 0xaabbccddU &&
               parsed.metadata->entry_point == 0x83000U &&
               parsed.metadata->encryption_type == 0U &&
               parsed.metadata->compression_type == 0U,
-          "execution-info and entry-point headers are decoded as big-endian values");
+          "execution-info identifiers, versions, platform and disc fields decode in bounded big-endian form");
 
     auto described_pages = bytes;
     write_be32(described_pages, 0x100U, 0x19cU);

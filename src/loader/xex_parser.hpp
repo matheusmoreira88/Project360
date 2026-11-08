@@ -46,6 +46,13 @@ struct XexMetadata {
     std::uint32_t optional_header_count{};
     std::optional<std::uint32_t> title_id;
     std::optional<std::uint32_t> media_id;
+    std::optional<std::uint32_t> title_version;
+    std::optional<std::uint32_t> base_version;
+    std::optional<std::uint8_t> platform;
+    std::optional<std::uint8_t> executable_type;
+    std::optional<std::uint8_t> disc_number;
+    std::optional<std::uint8_t> disc_count;
+    std::optional<std::uint32_t> savegame_id;
     std::optional<std::uint32_t> entry_point;
     std::optional<std::uint32_t> image_base_address;
     std::optional<std::uint16_t> encryption_type;

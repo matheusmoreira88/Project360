@@ -34,6 +34,27 @@ int inspect_xex(const std::filesystem::path& path) {
     } else {
         std::cout << "Media ID: not present\n";
     }
+    if (metadata.title_version) {
+        std::cout << "Title version: 0x" << *metadata.title_version << '\n';
+    }
+    if (metadata.base_version) {
+        std::cout << "Base version: 0x" << *metadata.base_version << '\n';
+    }
+    if (metadata.platform) {
+        std::cout << "Platform: " << std::dec << static_cast<unsigned>(*metadata.platform) << '\n';
+    }
+    if (metadata.executable_type) {
+        std::cout << "Executable type: " << std::dec
+                  << static_cast<unsigned>(*metadata.executable_type) << '\n';
+    }
+    if (metadata.disc_number && metadata.disc_count) {
+        std::cout << "Disc: " << std::dec << static_cast<unsigned>(*metadata.disc_number) << "/"
+                  << static_cast<unsigned>(*metadata.disc_count) << '\n';
+    }
+    if (metadata.savegame_id) {
+        std::cout << "Savegame ID: 0x" << std::hex << std::uppercase << *metadata.savegame_id
+                  << '\n';
+    }
     if (metadata.entry_point) {
         std::cout << "Entry point value: 0x" << *metadata.entry_point << '\n';
     } else {
