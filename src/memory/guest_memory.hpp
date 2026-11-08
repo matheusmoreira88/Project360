@@ -19,6 +19,8 @@ public:
     [[nodiscard]] bool write_u16_be(std::uint64_t address, std::uint16_t value) noexcept;
     [[nodiscard]] bool read_u32_be(std::uint64_t address, std::uint32_t& value) const noexcept;
     [[nodiscard]] bool write_u32_be(std::uint64_t address, std::uint32_t value) noexcept;
+    [[nodiscard]] bool read_u64_be(std::uint64_t address, std::uint64_t& value) const noexcept;
+    [[nodiscard]] bool write_u64_be(std::uint64_t address, std::uint64_t value) noexcept;
     [[nodiscard]] bool load(std::uint64_t address, std::span<const std::byte> data) noexcept;
 
 private:

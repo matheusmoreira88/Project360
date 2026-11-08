@@ -90,6 +90,26 @@ DecodeResult decode(std::uint32_t word) {
         }
         return {ins, {}};
     }
+    case 58:
+    case 62: {
+        const auto ds_xo = word & 0x3U;
+        if (primary == 58U) {
+            if (ds_xo > 1U) return {{}, "unsupported or reserved load DS-form subopcode"};
+            ins.opcode = Opcode::ld;
+            ins.update = ds_xo == 1U;
+            if (ins.update && (ins.ra == 0U || ins.rt == ins.ra)) {
+                return {{}, "ldu requires RA != 0 and RT != RA"};
+            }
+        } else {
+            if (ds_xo > 1U) return {{}, "reserved store DS-form subopcode"};
+            ins.opcode = Opcode::std;
+            ins.update = ds_xo == 1U;
+            if (ins.update && ins.ra == 0U) return {{}, "stdu requires RA != 0"};
+        }
+        const auto ds = static_cast<std::uint16_t>((word >> 2U) & 0x3fffU);
+        ins.immediate = std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(ds << 2U));
+        return {ins, {}};
+    }
     case 46:
     case 47:
         ins.opcode = primary == 46U ? Opcode::lmw : Opcode::stmw;
@@ -141,18 +161,21 @@ DecodeResult decode(std::uint32_t word) {
         const auto xo = static_cast<std::uint16_t>((word >> 1U) & 0x1ffU);
         const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
         const bool oe = (word & (1U << 10U)) != 0U;
-        if (xo10 == 23U || xo10 == 55U || xo10 == 87U || xo10 == 119U ||
+        if (xo10 == 21U || xo10 == 53U || xo10 == 149U || xo10 == 181U ||
+            xo10 == 23U || xo10 == 55U || xo10 == 87U || xo10 == 119U ||
             xo10 == 279U || xo10 == 331U || xo10 == 343U || xo10 == 375U ||
             xo10 == 151U || xo10 == 183U || xo10 == 215U || xo10 == 247U ||
             xo10 == 407U || xo10 == 439U || xo10 == 534U || xo10 == 662U ||
             xo10 == 790U || xo10 == 918U) {
             if ((word & 1U) != 0U) return {{}, "indexed load/store record bit is reserved"};
             switch (xo10) {
+            case 21: case 53: ins.opcode = Opcode::ld; break;
             case 23: case 55: ins.opcode = Opcode::lwz; break;
             case 87: case 119: ins.opcode = Opcode::lbz; break;
             case 279: case 331: ins.opcode = Opcode::lhz; break;
             case 343: case 375: ins.opcode = Opcode::lha; break;
             case 151: case 183: ins.opcode = Opcode::stw; break;
+            case 149: case 181: ins.opcode = Opcode::std; break;
             case 215: case 247: ins.opcode = Opcode::stb; break;
             case 407: case 439: ins.opcode = Opcode::sth; break;
             case 534: ins.opcode = Opcode::lwbrx; break;
@@ -162,11 +185,13 @@ DecodeResult decode(std::uint32_t word) {
             default: break;
             }
             ins.indexed = true;
-            ins.update = xo10 == 55U || xo10 == 119U || xo10 == 331U || xo10 == 375U ||
-                         xo10 == 183U || xo10 == 247U || xo10 == 439U;
+            ins.update = xo10 == 53U || xo10 == 55U || xo10 == 119U || xo10 == 331U ||
+                         xo10 == 375U || xo10 == 181U || xo10 == 183U || xo10 == 247U ||
+                         xo10 == 439U;
             if (ins.update && ins.ra == 0U) return {{}, "indexed update requires RA != 0"};
-            const bool is_load = ins.opcode == Opcode::lbz || ins.opcode == Opcode::lhz ||
-                                 ins.opcode == Opcode::lha || ins.opcode == Opcode::lwz;
+            const bool is_load = ins.opcode == Opcode::ld || ins.opcode == Opcode::lbz ||
+                                 ins.opcode == Opcode::lhz || ins.opcode == Opcode::lha ||
+                                 ins.opcode == Opcode::lwz;
             if (ins.update && is_load && ins.rt == ins.ra) {
                 return {{}, "indexed update load requires RT != RA"};
             }

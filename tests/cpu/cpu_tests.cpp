@@ -27,6 +27,15 @@ std::uint32_t d_form(std::uint8_t op, std::uint8_t rt, std::uint8_t ra, std::uin
            (static_cast<std::uint32_t>(ra) << 16U) | imm;
 }
 
+std::uint32_t ds_form(std::uint8_t op, std::uint8_t rt, std::uint8_t ra,
+                      std::int16_t displacement, std::uint8_t xo = 0) {
+    const auto bits = static_cast<std::uint16_t>(displacement);
+    const auto ds = static_cast<std::uint32_t>((bits >> 2U) & 0x3fffU);
+    return (static_cast<std::uint32_t>(op) << 26U) |
+           (static_cast<std::uint32_t>(rt) << 21U) |
+           (static_cast<std::uint32_t>(ra) << 16U) | (ds << 2U) | (xo & 0x3U);
+}
+
 std::uint32_t add(std::uint8_t rd, std::uint8_t ra, std::uint8_t rb, bool record = false) {
     return (31U << 26U) | (static_cast<std::uint32_t>(rd) << 21U) |
            (static_cast<std::uint32_t>(ra) << 16U) | (static_cast<std::uint32_t>(rb) << 11U) |
@@ -411,6 +420,85 @@ void test_load_store_update_instructions() {
     check(store_fault.status == cpu::StepStatus::fault && store_fault_state.gpr[1] == 28 &&
               store_fault_state.pc == 0,
           "failed update store leaves the base register unchanged");
+}
+
+void test_doubleword_memory_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(512);
+    constexpr std::uint64_t first = 0x0123456789abcdefULL;
+    constexpr std::uint64_t second = 0xfedcba9876543210ULL;
+    constexpr std::uint64_t third = 0x80000000ffffffffULL;
+    check(mem.write_u64_be(0x108, first) && mem.write_u64_be(0x118, second) &&
+              mem.write_u64_be(0x130, third),
+          "seed aligned doubleword data");
+
+    put_word(mem, 0, d_form(14, 1, 0, 0x100)); // addi r1,r0,0x100
+    put_word(mem, 4, ds_form(58, 3, 1, 8)); // ld r3,8(r1)
+    put_word(mem, 8, ds_form(62, 3, 1, 16)); // std r3,16(r1)
+    put_word(mem, 12, ds_form(58, 4, 1, 24, 1)); // ldu r4,24(r1)
+    put_word(mem, 16, ds_form(62, 4, 1, 8, 1)); // stdu r4,8(r1)
+    put_word(mem, 20, d_form(14, 2, 0, 16)); // addi r2,r0,16
+    put_word(mem, 24, indexed_memory(5, 1, 2, 21)); // ldx r5,r1,r2
+    put_word(mem, 28, indexed_memory(5, 1, 2, 149)); // stdx r5,r1,r2
+    put_word(mem, 32, indexed_memory(6, 1, 2, 53)); // ldux r6,r1,r2
+    put_word(mem, 36, indexed_memory(6, 1, 2, 181)); // stdux r6,r1,r2
+    put_word(mem, 40, ds_form(58, 7, 1, -56)); // ld r7,-56(r1)
+    put_word(mem, 44, ds_form(58, 8, 0, 0x108)); // ld r8,0x108(r0)
+
+    cpu::CpuState state{};
+    const auto result = cpu::Interpreter{}.run(state, mem, 12);
+    std::uint64_t stored_first = 0;
+    std::uint64_t stored_second = 0;
+    std::uint64_t stored_third = 0;
+    std::uint64_t stored_updated = 0;
+    check(result.status == cpu::StepStatus::instruction_limit_reached,
+          "DS-form and indexed doubleword program executes");
+    check(state.gpr[3] == first && state.gpr[4] == second && state.gpr[5] == third &&
+              state.gpr[6] == third && state.gpr[7] == first && state.gpr[8] == first,
+          "ld/ldu/ldx/ldux preserve the full 64-bit value and EA rules");
+    check(state.gpr[1] == 0x140U,
+          "DS-form and indexed update loads/stores commit RA after success");
+    check(mem.read_u64_be(0x110, stored_first) && stored_first == first &&
+              mem.read_u64_be(0x120, stored_second) && stored_second == second &&
+              mem.read_u64_be(0x130, stored_third) && stored_third == third &&
+              mem.read_u64_be(0x140, stored_updated) && stored_updated == third,
+          "std/stdu/stdx/stdux store big-endian doublewords");
+
+    const auto negative_disp = cpu::decode(ds_form(58, 7, 1, -8));
+    const auto bad_load_alias = cpu::decode(ds_form(58, 1, 1, 8, 1));
+    const auto bad_load_zero_base = cpu::decode(ds_form(58, 2, 0, 8, 1));
+    const auto bad_store_zero_base = cpu::decode(ds_form(62, 2, 0, 0, 1));
+    const auto unsupported_lwa = cpu::decode(ds_form(58, 3, 1, 0, 2));
+    const auto reserved_store_form = cpu::decode(ds_form(62, 3, 1, 0, 3));
+    const auto bad_indexed_load_alias = cpu::decode(indexed_memory(1, 1, 2, 53));
+    const auto bad_indexed_store_zero_base = cpu::decode(indexed_memory(2, 0, 2, 181));
+    const auto bad_indexed_record = cpu::decode(indexed_memory(2, 1, 2, 21, true));
+    check(negative_disp && negative_disp.instruction.immediate == -8,
+          "DS-form displacement sign-extends and retains its byte scale");
+    check(!bad_load_alias && !bad_load_zero_base && !bad_store_zero_base &&
+              !unsupported_lwa && !reserved_store_form && !bad_indexed_load_alias &&
+              !bad_indexed_store_zero_base && !bad_indexed_record,
+          "invalid update operands, unsupported lwa and reserved DS/X-form bits fault at decode");
+
+    memory::GuestMemory fault_mem(64);
+    put_word(fault_mem, 0, ds_form(58, 3, 1, 0)); // ld r3,0(r1)
+    cpu::CpuState fault_state{};
+    fault_state.gpr[1] = 4;
+    fault_state.gpr[3] = 0xabcdef0123456789ULL;
+    const auto unaligned_load = cpu::Interpreter{}.step(fault_state, fault_mem);
+    check(unaligned_load.status == cpu::StepStatus::fault && fault_state.gpr[3] == 0xabcdef0123456789ULL &&
+              fault_state.pc == 0,
+          "unaligned ld faults without changing target or PC");
+
+    memory::GuestMemory update_fault_mem(64);
+    put_word(update_fault_mem, 0, ds_form(58, 4, 1, 8, 1)); // ldu r4,8(r1)
+    cpu::CpuState update_fault_state{};
+    update_fault_state.gpr[1] = 56;
+    update_fault_state.gpr[4] = 0x55;
+    const auto update_fault = cpu::Interpreter{}.step(update_fault_state, update_fault_mem);
+    check(update_fault.status == cpu::StepStatus::fault && update_fault_state.gpr[1] == 56 &&
+              update_fault_state.gpr[4] == 0x55 && update_fault_state.pc == 0,
+          "out-of-range ldu does not commit either destination or base register");
 }
 
 void test_indexed_memory_instructions() {
@@ -992,6 +1080,14 @@ void test_memory_bounds_and_alignment() {
           "unaligned halfword access rejected");
     check(!mem.read_u16_be(8, halfword) && !mem.write_u16_be(8, 0x5678U),
           "out-of-range halfword access rejected");
+    std::uint64_t doubleword = 0;
+    check(mem.write_u64_be(0, 0x0123456789abcdefULL) &&
+              mem.read_u64_be(0, doubleword) && doubleword == 0x0123456789abcdefULL,
+          "aligned 64-bit big-endian round trip succeeds");
+    check(!mem.read_u64_be(4, doubleword) && !mem.write_u64_be(4, 0xffffffffffffffffULL),
+          "unaligned doubleword access rejected");
+    check(!mem.read_u64_be(8, doubleword) && !mem.write_u64_be(8, 0xffffffffffffffffULL),
+          "out-of-range doubleword access rejected");
     std::uint8_t byte = 0;
     check(mem.write_u8(7, 0xabU) && mem.read_u8(7, byte) && byte == 0xabU,
           "byte access succeeds at the final guest address");
@@ -1009,6 +1105,7 @@ int main() {
     test_memory_and_endianness();
     test_byte_and_halfword_memory_instructions();
     test_load_store_update_instructions();
+    test_doubleword_memory_instructions();
     test_indexed_memory_instructions();
     test_indexed_update_memory_instructions();
     test_byte_reversed_indexed_memory_instructions();

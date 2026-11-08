@@ -404,6 +404,15 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.update) state.gpr[ins.ra] = address;
         break;
     }
+    case Opcode::ld: {
+        const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
+        const auto address = base + offset;
+        std::uint64_t value = 0;
+        if (!memory.read_u64_be(address, value)) return fault("ld alignment or address fault");
+        state.gpr[ins.rt] = value;
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
     case Opcode::lhbrx: {
         const auto address = base + state.gpr[ins.rb];
         std::uint16_t value = 0;
@@ -428,6 +437,15 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         const auto address = base + offset;
         if (!memory.write_u32_be(address, static_cast<std::uint32_t>(state.gpr[ins.rt]))) {
             return fault("stw alignment or address fault");
+        }
+        if (ins.update) state.gpr[ins.ra] = address;
+        break;
+    }
+    case Opcode::std: {
+        const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
+        const auto address = base + offset;
+        if (!memory.write_u64_be(address, state.gpr[ins.rt])) {
+            return fault("std alignment or address fault");
         }
         if (ins.update) state.gpr[ins.ra] = address;
         break;

@@ -68,6 +68,27 @@ bool GuestMemory::write_u32_be(std::uint64_t address, std::uint32_t value) noexc
     return true;
 }
 
+bool GuestMemory::read_u64_be(std::uint64_t address, std::uint64_t& value) const noexcept {
+    if ((address & 7U) != 0U || !contains(address, 8)) return false;
+    const auto start = static_cast<std::size_t>(address);
+    std::uint64_t result = 0;
+    for (std::size_t i = 0; i < 8; ++i) {
+        result = (result << 8U) | std::to_integer<std::uint64_t>(bytes_[start + i]);
+    }
+    value = result;
+    return true;
+}
+
+bool GuestMemory::write_u64_be(std::uint64_t address, std::uint64_t value) noexcept {
+    if ((address & 7U) != 0U || !contains(address, 8)) return false;
+    const auto start = static_cast<std::size_t>(address);
+    for (std::size_t i = 0; i < 8; ++i) {
+        const auto shift = static_cast<unsigned>((7U - static_cast<unsigned>(i)) * 8U);
+        bytes_[start + i] = static_cast<std::byte>((value >> shift) & 0xffU);
+    }
+    return true;
+}
+
 bool GuestMemory::load(std::uint64_t address, std::span<const std::byte> data) noexcept {
     if (!contains(address, data.size())) {
         return false;
