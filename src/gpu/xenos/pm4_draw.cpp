@@ -1,9 +1,11 @@
 #include "gpu/xenos/pm4_draw.hpp"
 
 #include "gpu/xenos/registers.hpp"
+#include "gpu/xenos/pm4_registers.hpp"
 #include "memory/guest_memory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <new>
 #include <utility>
 
@@ -229,6 +231,80 @@ DrawStateApplyResult apply_draw_command_state(std::span<const DrawCommand> comma
         }
     }
     return {};
+}
+
+Pm4DrawStreamResult process_pm4_draw_stream(
+    std::span<const std::uint8_t> stream,
+    std::span<const std::uint32_t> initial_registers,
+    const memory::GuestMemory& memory,
+    PrimitiveAssemblyOptions options) {
+    constexpr std::uint8_t draw_indx_opcode = 0x22U;
+    constexpr std::uint8_t draw_indx2_opcode = 0x36U;
+    constexpr std::size_t maximum_prepared_draws = 256U;
+    constexpr std::size_t maximum_prepared_indices = 4'194'304U;
+
+    try {
+        const auto decoded = decode_pm4(stream);
+        if (!decoded) return {{}, {}, decoded.error, decoded.error_word_offset};
+
+        auto registers = std::vector<std::uint32_t>(initial_registers.begin(),
+                                                    initial_registers.end());
+        Pm4DrawStreamResult result{};
+        std::size_t prepared_index_count = 0U;
+        for (const auto& packet : decoded.packets) {
+            const auto byte_offset = packet.header_word_offset * 4U;
+            const auto packet_byte_size =
+                (static_cast<std::size_t>(packet.payload_word_count) + 1U) * 4U;
+            auto packet_stream = stream.subspan(byte_offset, packet_byte_size);
+            auto local_packet = packet;
+            local_packet.header_word_offset = 0U;
+            local_packet.payload_word_offset = 1U;
+            const std::array<Packet, 1> packet_list{local_packet};
+
+            if (packet.type != PacketType::type3_command ||
+                (packet.opcode != draw_indx_opcode && packet.opcode != draw_indx2_opcode)) {
+                const auto applied = apply_register_packets(packet_list, packet_stream, registers);
+                if (!applied) {
+                    return {{}, {}, applied.error, packet.header_word_offset};
+                }
+                continue;
+            }
+
+            const auto draw_decode = decode_draw_commands(packet_list, packet_stream);
+            if (!draw_decode || draw_decode.commands.size() != 1U) {
+                return {{}, {}, draw_decode.error.empty()
+                                     ? "PM4 draw packet did not produce exactly one draw"
+                                     : draw_decode.error,
+                        packet.header_word_offset};
+            }
+            auto command = draw_decode.commands.front();
+            command.header_word_offset = packet.header_word_offset;
+            const std::array<DrawCommand, 1> command_list{command};
+            const auto state_applied = apply_draw_command_state(command_list, registers);
+            if (!state_applied) {
+                return {{}, {}, state_applied.error, packet.header_word_offset};
+            }
+            auto geometry = prepare_draw_geometry(command, memory, registers, options);
+            if (!geometry) {
+                return {{}, {}, "PM4 draw geometry preparation failed: " + geometry.error,
+                        packet.header_word_offset};
+            }
+            if (result.draws.size() >= maximum_prepared_draws) {
+                return {{}, {}, "PM4 draw stream exceeds the 256-draw limit",
+                        packet.header_word_offset};
+            }
+            if (geometry.indices.size() > maximum_prepared_indices - prepared_index_count) {
+                return {{}, {}, "PM4 draw stream exceeds the 4,194,304-index limit",
+                        packet.header_word_offset};
+            }
+            prepared_index_count += geometry.indices.size();
+            result.draws.push_back({std::move(command), std::move(geometry)});
+        }
+        result.final_registers = std::move(registers);
+        return result;
+    } catch (const std::bad_alloc&) {
+        return {{}, {}, "Not enough host memory to process the PM4 draw stream", 0U};
+    }
 }
 
 IndexFetchResult fetch_draw_indices(const DrawCommand& command,

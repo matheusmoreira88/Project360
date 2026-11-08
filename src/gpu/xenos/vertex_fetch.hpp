@@ -32,6 +32,13 @@ struct VertexFetchDecodeResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct VertexFetchDescriptorBankResult {
+    std::array<VertexFetchDescriptor, 96> descriptors{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct VertexFetchWordsResult {
     std::vector<std::uint32_t> words;
     std::string error;
@@ -118,6 +125,13 @@ struct VertexFetchInstructionDecodeResult {
 // invalid fetch-constant types are deliberately rejected.
 [[nodiscard]] VertexFetchDecodeResult decode_vertex_fetch_descriptor(
     std::uint32_t dword0, std::uint32_t dword1);
+
+// Resolves only the requested vertex-fetch slots from the Xenos fetch-constant
+// register bank (two dwords per slot). Texture fetch descriptors share this
+// register space but use a different six-dword layout and are not decoded here.
+[[nodiscard]] VertexFetchDescriptorBankResult decode_vertex_fetch_descriptor_bank(
+    std::span<const std::uint32_t> register_file,
+    std::span<const std::uint8_t> required_slots);
 
 // Reads a bounded dword range from the descriptor's physical guest buffer and
 // applies its documented per-dword endian mode. Vertex format conversion and

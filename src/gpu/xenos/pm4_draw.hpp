@@ -74,6 +74,20 @@ struct PrimitiveAssemblyResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct PreparedDrawCommand {
+    DrawCommand command{};
+    PrimitiveAssemblyResult geometry{};
+};
+
+struct Pm4DrawStreamResult {
+    std::vector<PreparedDrawCommand> draws;
+    std::vector<std::uint32_t> final_registers;
+    std::string error;
+    std::size_t error_word_offset{};
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct VertexIndexTransform {
     std::uint32_t offset{};
     std::uint32_t minimum{};
@@ -97,6 +111,17 @@ struct VertexIndexTransformReadResult {
 // to a flat Xenos register span. It does not read guest index memory or render.
 [[nodiscard]] DrawStateApplyResult apply_draw_command_state(
     std::span<const DrawCommand> commands, std::span<std::uint32_t> registers);
+
+// Processes a bounded subset of PM4 packets in stream order, applying register
+// writes before each draw and preparing that draw's DMA/auto-index geometry
+// against the register snapshot at that point. Output is limited to 256 draws
+// and 4,194,304 total prepared indexes. Unsupported commands fail.
+// Failure is transactional: no prepared draws or final register state escapes.
+[[nodiscard]] Pm4DrawStreamResult process_pm4_draw_stream(
+    std::span<const std::uint8_t> stream,
+    std::span<const std::uint32_t> initial_registers,
+    const memory::GuestMemory& memory,
+    PrimitiveAssemblyOptions options = {});
 
 // Fetches DMA indices or generates auto-indices from guest memory. It applies
 // the supported Xenos byte-swap modes and rejects unavailable or ambiguous data.

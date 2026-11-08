@@ -1171,6 +1171,63 @@ void test_draw_packet_metadata_decoding() {
           "immediate-index draw reports unsupported semantics explicitly");
 }
 
+void test_pm4_sequential_draw_dispatch() {
+    using namespace project360::gpu::xenos;
+    project360::memory::GuestMemory memory(0x100U);
+    const std::array<std::byte, 6> index_bytes{
+        std::byte{0U}, std::byte{0U}, std::byte{1U},
+        std::byte{0U}, std::byte{2U}, std::byte{0U},
+    };
+    check(memory.load(0x10U, index_bytes), "PM4 draw-dispatch index fixture loads");
+
+    std::vector<std::uint8_t> stream;
+    append_u32_be(stream, (2U << 16U) | 0x2100U); // VGT_MAX/MIN/INDX_OFFSET.
+    append_u32_be(stream, 0x00ffffffU);
+    append_u32_be(stream, 0U);
+    append_u32_be(stream, 0U);
+    append_u32_be(stream, 0xc0000000U | (2U << 16U) | (0x2dU << 8U)); // SET_CONSTANT.
+    append_u32_be(stream, (1U << 16U) | 14U); // Fetch slot 7, two dwords per slot.
+    append_u32_be(stream, (0x10U << 2U) | 3U); // Base 0x40, vertex-buffer type.
+    append_u32_be(stream, 3U << 2U); // Three dwords.
+    const auto append_dma_draw = [&stream]() {
+        append_u32_be(stream, 0xc0000000U | (3U << 16U) | (0x22U << 8U));
+        append_u32_be(stream, 0U); // Visibility-query token.
+        append_u32_be(stream, (3U << 16U) | 4U); // Three 16-bit DMA triangle indexes.
+        append_u32_be(stream, 0x10U);
+        append_u32_be(stream, 3U);
+    };
+    append_dma_draw();
+    append_u32_be(stream, 0x2102U); // Change vertex-index offset before draw two.
+    append_u32_be(stream, 1U);
+    append_dma_draw();
+
+    std::vector<std::uint32_t> initial_registers(0x5000U, 0U);
+    const auto dispatched = process_pm4_draw_stream(stream, initial_registers, memory);
+    constexpr std::array<std::uint8_t, 1> required_fetch_slots{7U};
+    const auto fetch_bank = decode_vertex_fetch_descriptor_bank(
+        dispatched.final_registers, required_fetch_slots);
+    check(dispatched && dispatched.draws.size() == 2U &&
+              dispatched.draws[0].command.header_word_offset == 8U &&
+              dispatched.draws[1].command.header_word_offset == 15U &&
+              dispatched.draws[0].geometry.indices ==
+                  std::vector<std::uint32_t>{0U, 1U, 2U} &&
+              dispatched.draws[1].geometry.indices ==
+                  std::vector<std::uint32_t>{1U, 2U, 3U} &&
+              dispatched.final_registers[register_index::vgt_indx_offset] == 1U &&
+              fetch_bank && fetch_bank.descriptors[7U].base_address_bytes == 0x40U &&
+              fetch_bank.descriptors[7U].size_dwords == 3U,
+          "PM4 dispatch snapshots each draw and resolves SET_CONSTANT vertex-fetch descriptors");
+
+    auto unsupported_stream = stream;
+    append_u32_be(unsupported_stream, 0xc0000000U | (0x7fU << 8U));
+    append_u32_be(unsupported_stream, 0U);
+    const auto rejected =
+        process_pm4_draw_stream(unsupported_stream, initial_registers, memory);
+    check(!rejected && rejected.draws.empty() && rejected.final_registers.empty() &&
+              rejected.error_word_offset == stream.size() / 4U,
+          "PM4 draw dispatch rejects unsupported later commands without partial output");
+}
+
 void test_dma_index_fetch() {
     using namespace project360::gpu::xenos;
     project360::memory::GuestMemory memory(0x4000U);
@@ -1768,6 +1825,7 @@ int main() {
     test_type3_constant_uploads();
     test_unimplemented_commands_fail_explicitly();
     test_draw_packet_metadata_decoding();
+    test_pm4_sequential_draw_dispatch();
     test_dma_index_fetch();
     test_primitive_assembly();
     test_vertex_shader_index_transform();

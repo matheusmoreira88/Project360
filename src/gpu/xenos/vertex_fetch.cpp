@@ -134,6 +134,34 @@ VertexFetchDecodeResult decode_vertex_fetch_descriptor(std::uint32_t dword0,
     return {{static_cast<std::uint64_t>(address_dwords) * 4U, size_dwords, endian}, {}};
 }
 
+VertexFetchDescriptorBankResult decode_vertex_fetch_descriptor_bank(
+    std::span<const std::uint32_t> register_file,
+    std::span<const std::uint8_t> required_slots) {
+    constexpr std::size_t fetch_register_base = 0x4800U;
+    constexpr std::size_t descriptor_dword_count = 2U;
+    constexpr std::size_t descriptor_count = 96U;
+    VertexFetchDescriptorBankResult result{};
+    for (const auto slot : required_slots) {
+        if (slot >= descriptor_count) {
+            return {{}, "Vertex fetch slot exceeds the 96-entry Xenos fetch-constant bank"};
+        }
+        const auto first_register = fetch_register_base +
+                                    static_cast<std::size_t>(slot) * descriptor_dword_count;
+        if (first_register > register_file.size() ||
+            descriptor_dword_count > register_file.size() - first_register) {
+            return {{}, "Register file does not contain vertex fetch slot " +
+                            std::to_string(slot)};
+        }
+        const auto decoded = decode_vertex_fetch_descriptor(
+            register_file[first_register], register_file[first_register + 1U]);
+        if (!decoded) {
+            return {{}, "Vertex fetch slot " + std::to_string(slot) + ": " + decoded.error};
+        }
+        result.descriptors[slot] = decoded.descriptor;
+    }
+    return result;
+}
+
 VertexFetchWordsResult read_vertex_fetch_words(const VertexFetchDescriptor& descriptor,
                                                const memory::GuestMemory& memory,
                                                std::uint32_t first_dword,

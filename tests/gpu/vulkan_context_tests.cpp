@@ -1,4 +1,5 @@
 #include "gpu/vulkan/vulkan_context.hpp"
+#include "gpu/xenos/pm4_draw.hpp"
 #include "gpu/xenos/registers.hpp"
 #include "gpu/xenos/shader_execution.hpp"
 #include "memory/guest_memory.hpp"
@@ -74,15 +75,6 @@ int main() {
         return 1;
     }
 
-    const auto fetch_descriptor =
-        decode_vertex_fetch_descriptor((0x80U << 2U) | 3U, 24U << 2U);
-    if (!fetch_descriptor) {
-        std::cerr << "FAIL: synthetic VFETCH descriptor is invalid: " << fetch_descriptor.error
-                  << '\n';
-        return 1;
-    }
-    std::array<VertexFetchDescriptor, 8> fetch_constants{};
-    fetch_constants[7] = fetch_descriptor.descriptor;
     const auto encode_vfetch = [](std::uint8_t destination, std::uint32_t offset_dwords) {
         return std::array<std::uint32_t, 3>{
             (static_cast<std::uint32_t>(destination) << 12U) | (1U << 19U) | (2U << 20U) |
@@ -106,18 +98,43 @@ int main() {
             {2U | ((0b10U | (0b10U << 2U)) << 16U) | (2U << 12U), 2U << 12U}),
     };
 
-    project360::gpu::xenos::DrawCommand draw_command{};
-    draw_command.source = project360::gpu::xenos::DrawSource::dma;
-    draw_command.index_count = 3U;
-    draw_command.primitive_type = 4U;
-    draw_command.dma_base = 0x100U;
-    draw_command.dma_size = 3U;
-    std::vector<std::uint32_t> draw_registers(
-        project360::gpu::xenos::register_index::vgt_indx_offset + 1U, 0U);
-    draw_registers[project360::gpu::xenos::register_index::vgt_max_vtx_indx] = 0x00ffffffU;
-    const auto prepared_geometry =
-        project360::gpu::xenos::prepare_draw_geometry(draw_command, shader_memory,
-                                                       draw_registers);
+    const auto append_pm4_u32 = [](std::vector<std::uint8_t>& bytes, std::uint32_t value) {
+        bytes.push_back(static_cast<std::uint8_t>(value >> 24U));
+        bytes.push_back(static_cast<std::uint8_t>(value >> 16U));
+        bytes.push_back(static_cast<std::uint8_t>(value >> 8U));
+        bytes.push_back(static_cast<std::uint8_t>(value));
+    };
+    std::vector<std::uint8_t> pm4_draw_stream;
+    append_pm4_u32(pm4_draw_stream, (2U << 16U) | 0x2100U); // VGT_MAX/MIN/INDX_OFFSET.
+    append_pm4_u32(pm4_draw_stream, 0x00ffffffU);
+    append_pm4_u32(pm4_draw_stream, 0U);
+    append_pm4_u32(pm4_draw_stream, 0U);
+    append_pm4_u32(pm4_draw_stream, 0xc0000000U | (2U << 16U) | (0x2dU << 8U));
+    append_pm4_u32(pm4_draw_stream, (1U << 16U) | 14U); // Fetch slot 7.
+    append_pm4_u32(pm4_draw_stream, (0x80U << 2U) | 3U); // Guest base 0x200.
+    append_pm4_u32(pm4_draw_stream, 24U << 2U); // 24 vertex dwords.
+    append_pm4_u32(pm4_draw_stream, 0xc0000000U | (3U << 16U) | (0x22U << 8U));
+    append_pm4_u32(pm4_draw_stream, 0U); // Visibility-query token.
+    append_pm4_u32(pm4_draw_stream, (3U << 16U) | 4U); // Triangle list, DMA, 3 indexes.
+    append_pm4_u32(pm4_draw_stream, 0x100U);
+    append_pm4_u32(pm4_draw_stream, 3U);
+    std::vector<std::uint32_t> draw_registers(0x5000U, 0U);
+    const auto draw_dispatch = process_pm4_draw_stream(
+        pm4_draw_stream, draw_registers, shader_memory);
+    if (!draw_dispatch || draw_dispatch.draws.size() != 1U) {
+        std::cerr << "FAIL: PM4 stream did not prepare its DMA draw"
+                  << (draw_dispatch ? "" : ": " + draw_dispatch.error) << '\n';
+        return 1;
+    }
+    const auto& prepared_geometry = draw_dispatch.draws[0].geometry;
+    constexpr std::array<std::uint8_t, 1> required_fetch_slots{7U};
+    const auto fetch_bank = decode_vertex_fetch_descriptor_bank(
+        draw_dispatch.final_registers, required_fetch_slots);
+    if (!fetch_bank) {
+        std::cerr << "FAIL: PM4 fetch constants did not decode: " << fetch_bank.error << '\n';
+        return 1;
+    }
+    const auto& fetch_constants = fetch_bank.descriptors;
     const auto vertex_batch = execute_shader_exec_vertex_batch(
         vertex_exec_blocks, vertex_ucode, fetch_constants, shader_memory,
         prepared_geometry.indices, {}, {});
