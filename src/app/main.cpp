@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
 #include <string_view>
 
@@ -38,6 +37,12 @@ int inspect_xex(const std::filesystem::path& path) {
     } else {
         std::cout << "Entry point: not present in XEX optional headers\n";
     }
+    std::cout << "Encryption type: ";
+    if (metadata.encryption_type) std::cout << std::dec << *metadata.encryption_type << '\n';
+    else std::cout << "not present\n";
+    std::cout << "Compression type: ";
+    if (metadata.compression_type) std::cout << *metadata.compression_type << '\n';
+    else std::cout << "not present\n";
     return 0;
 }
 
@@ -63,13 +68,25 @@ int run_smoke_program() {
     return 0;
 }
 
-int main(int argc, char** argv) {
-    if (argc == 3 && std::string_view(argv[1]) == "--inspect-xex") {
-        return inspect_xex(std::filesystem::path(argv[2]));
-    }
+int run_command_line(int argc, bool inspect, const std::filesystem::path& path) {
+    if (inspect) return inspect_xex(path);
     if (argc != 1) {
         std::cerr << "Usage: project360 [--inspect-xex <path>]\n";
         return 2;
     }
     return run_smoke_program();
 }
+
+#if defined(_WIN32)
+int wmain(int argc, wchar_t** argv) {
+    const bool inspect = argc == 3 && std::wstring_view(argv[1]) == L"--inspect-xex";
+    const auto path = inspect ? std::filesystem::path(argv[2]) : std::filesystem::path{};
+    return run_command_line(argc, inspect, path);
+}
+#else
+int main(int argc, char** argv) {
+    const bool inspect = argc == 3 && std::string_view(argv[1]) == "--inspect-xex";
+    const auto path = inspect ? std::filesystem::path(argv[2]) : std::filesystem::path{};
+    return run_command_line(argc, inspect, path);
+}
+#endif

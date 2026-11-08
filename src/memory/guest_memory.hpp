@@ -10,6 +10,12 @@ namespace project360::memory {
 
 enum class GuestPageAccess : std::uint8_t { none = 0, read = 1, write = 2, execute = 4 };
 
+struct GuestPageMapping {
+    std::uint64_t virtual_base{};
+    std::uint64_t physical_base{};
+    GuestPageAccess access{GuestPageAccess::none};
+};
+
 [[nodiscard]] constexpr GuestPageAccess operator|(GuestPageAccess left,
                                                    GuestPageAccess right) noexcept {
     return static_cast<GuestPageAccess>(static_cast<std::uint8_t>(left) |
@@ -38,11 +44,15 @@ public:
     // Mapping mode is opt-in; the default remains the bounded flat memory used by CPU tests.
     [[nodiscard]] bool map_page(std::uint64_t virtual_base, std::uint64_t physical_base,
                                 GuestPageAccess access);
+    [[nodiscard]] bool map_pages(std::span<const GuestPageMapping> mappings);
     [[nodiscard]] bool unmap_page(std::uint64_t virtual_base) noexcept;
     [[nodiscard]] bool protect_page(std::uint64_t virtual_base,
                                     GuestPageAccess access) noexcept;
     [[nodiscard]] bool translate(std::uint64_t virtual_address, GuestPageAccess access,
                                  std::uint64_t& physical_address) const noexcept;
+    [[nodiscard]] bool page_mapped(std::uint64_t virtual_base) const noexcept;
+    [[nodiscard]] bool physical_range_mapped(std::uint64_t physical_base,
+                                             std::size_t length) const noexcept;
     [[nodiscard]] bool page_mapping_enabled() const noexcept { return mapping_enabled_; }
 
 private:

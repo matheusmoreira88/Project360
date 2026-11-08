@@ -1,5 +1,9 @@
 #include "loader/xex_parser.hpp"
 
+#include "cpu/cpu_state.hpp"
+#include "cpu/interpreter.hpp"
+#include "memory/guest_memory.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -27,6 +31,11 @@ void write_be32(std::vector<std::byte>& bytes, std::size_t offset, std::uint32_t
     bytes[offset + 3U] = static_cast<std::byte>(value & 0xffU);
 }
 
+void write_be16(std::vector<std::byte>& bytes, std::size_t offset, std::uint16_t value) {
+    bytes[offset] = static_cast<std::byte>((value >> 8U) & 0xffU);
+    bytes[offset + 1U] = static_cast<std::byte>(value & 0xffU);
+}
+
 void write_le16(std::vector<std::byte>& bytes, std::size_t offset, std::uint16_t value) {
     bytes[offset] = static_cast<std::byte>(value & 0xffU);
     bytes[offset + 1U] = static_cast<std::byte>((value >> 8U) & 0xffU);
@@ -45,16 +54,23 @@ std::vector<std::byte> make_xex2() {
     write_be32(bytes, 0x04U, 0x00000081U);
     write_be32(bytes, 0x08U, 0x1000U);
     write_be32(bytes, 0x10U, 0x100U);
-    write_be32(bytes, 0x14U, 2U);
+    write_be32(bytes, 0x14U, 4U);
     write_be32(bytes, 0x18U, 0x00010100U); // Entry point (immediate).
-    write_be32(bytes, 0x1cU, 0x82000U);
+    write_be32(bytes, 0x1cU, 0x83000U);
     write_be32(bytes, 0x20U, 0x00040006U); // Execution info (24-byte payload).
     write_be32(bytes, 0x24U, 0x300U);
+    write_be32(bytes, 0x28U, 0x000003ffU); // File-format info (offset payload).
+    write_be32(bytes, 0x2cU, 0x380U);
+    write_be32(bytes, 0x30U, 0x00010201U); // Image base (immediate/pointer field).
+    write_be32(bytes, 0x34U, 0x82000U);
     write_be32(bytes, 0x100U, 0x184U); // Security-info size.
     write_be32(bytes, 0x104U, 0x6000U); // Image size.
+    write_be32(bytes, 0x210U, 0x82000U); // Security-info load address.
     write_be32(bytes, 0x280U, 0U);      // Page-descriptor count.
     write_be32(bytes, 0x300U, 0x12345678U); // Media ID.
     write_be32(bytes, 0x30cU, 0x545408A7U); // Title ID.
+    write_be32(bytes, 0x380U, 8U);
+    write_be32(bytes, 0x384U, 0U); // Encryption type and compression type are both zero.
     return bytes;
 }
 
@@ -101,11 +117,15 @@ int main() {
               parsed.metadata->header_size == 0x1000U &&
               parsed.metadata->security_info_offset == 0x100U &&
               parsed.metadata->image_size == 0x6000U &&
-              parsed.metadata->optional_header_count == 2U,
+              parsed.metadata->optional_header_count == 4U &&
+              parsed.metadata->security_load_address == 0x82000U &&
+              parsed.metadata->image_base_address == 0x82000U,
           "valid XEX2 headers expose bounded container metadata");
     check(parsed.metadata && parsed.metadata->title_id == 0x545408a7U &&
               parsed.metadata->media_id == 0x12345678U &&
-              parsed.metadata->entry_point == 0x82000U,
+              parsed.metadata->entry_point == 0x83000U &&
+              parsed.metadata->encryption_type == 0U &&
+              parsed.metadata->compression_type == 0U,
           "execution-info and entry-point headers are decoded as big-endian values");
 
     const std::vector<std::byte> truncated(bytes.begin(), bytes.begin() + 20);
@@ -186,6 +206,84 @@ int main() {
     write_le32(bad_pe_section, 0x178U + 20U, 0xfffffff0U);
     check(!project360::loader::parse_xbox_pe32(bad_pe_section),
           "PE section raw ranges outside the image are rejected");
+
+    auto loadable_pe = make_xbox_pe32();
+    write_be32(loadable_pe, 0x200U, (14U << 26U) | (3U << 21U) | 5U); // addi r3,r0,5
+    auto loadable_xex = make_xex2();
+    loadable_xex.insert(loadable_xex.end(), loadable_pe.begin(), loadable_pe.end());
+    project360::memory::GuestMemory guest_memory(0x4000U);
+    const auto loaded = project360::loader::load_xex2_uncompressed(loadable_xex,
+                                                                    guest_memory, 0U);
+    check(loaded && loaded.image->image_base == 0x82000U &&
+              loaded.image->entry_point == 0x83000U && loaded.image->mapped_size == 0x2000U,
+          "unencrypted uncompressed XEX2 maps decoded Xbox PE image pages");
+    std::uint32_t loaded_instruction = 0;
+    check(guest_memory.fetch_u32_be(0x83000U, loaded_instruction) &&
+              loaded_instruction == ((14U << 26U) | (3U << 21U) | 5U),
+          "loader copies executable PE section bytes to the mapped guest address");
+    std::uint8_t loaded_byte = 0;
+    check(guest_memory.read_u8(0x82000U, loaded_byte) && loaded_byte == 'M' &&
+              !guest_memory.fetch_u32_be(0x82000U, loaded_instruction) &&
+              !guest_memory.write_u8(0x83000U, 0U),
+          "loader gives headers read-only pages and applies section execute/write permissions");
+    project360::cpu::CpuState guest_cpu{};
+    guest_cpu.pc = loaded.image ? loaded.image->entry_point : 0U;
+    const auto executed = project360::cpu::Interpreter{}.step(guest_cpu, guest_memory);
+    check(executed.status == project360::cpu::StepStatus::executed &&
+              guest_cpu.gpr[3] == 5U && guest_cpu.pc == 0x83004U,
+          "interpreter executes a homebrew instruction from a loaded XEX test image");
+
+    {
+        std::ofstream output(test_path, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char*>(loadable_xex.data()),
+                     static_cast<std::streamsize>(loadable_xex.size()));
+    }
+    project360::memory::GuestMemory file_guest_memory(0x4000U);
+    const auto loaded_from_file = project360::loader::load_xex2_file(
+        test_path, file_guest_memory, 0U);
+    check(loaded_from_file && loaded_from_file.image->entry_point == 0x83000U,
+          "bounded file loader reads and maps a synthetic unencrypted XEX image");
+    std::filesystem::remove(test_path, remove_error);
+
+    auto encrypted_xex = loadable_xex;
+    write_be16(encrypted_xex, 0x384U, 1U);
+    project360::memory::GuestMemory rejected_memory(0x4000U);
+    const auto encrypted_result = project360::loader::load_xex2_uncompressed(
+        encrypted_xex, rejected_memory, 0U);
+    check(!encrypted_result && !rejected_memory.page_mapping_enabled(),
+          "encrypted XEX images are rejected without mapping or decrypting any bytes");
+
+    auto compressed_xex = loadable_xex;
+    write_be16(compressed_xex, 0x386U, 1U);
+    project360::memory::GuestMemory compressed_memory(0x4000U);
+    const auto compressed_result = project360::loader::load_xex2_uncompressed(
+        compressed_xex, compressed_memory, 0U);
+    check(!compressed_result && !compressed_memory.page_mapping_enabled(),
+          "compressed XEX images are rejected before changing guest mappings");
+
+    auto relocated_xex = loadable_xex;
+    write_be32(relocated_xex, 0x34U, 0x84000U);
+    project360::memory::GuestMemory relocation_memory(0x4000U);
+    const auto relocation_result = project360::loader::load_xex2_uncompressed(
+        relocated_xex, relocation_memory, 0U);
+    check(!relocation_result && !relocation_memory.page_mapping_enabled(),
+          "loader rejects a mismatched image base until relocation support exists");
+
+    project360::memory::GuestMemory overlapping_memory(0x4000U);
+    check(overlapping_memory.map_page(0x90000U, 0U,
+                                      project360::memory::GuestPageAccess::read),
+          "fixture reserves an existing physical guest page");
+    const auto overlapping_result = project360::loader::load_xex2_uncompressed(
+        loadable_xex, overlapping_memory, 0U);
+    check(!overlapping_result && overlapping_memory.page_mapped(0x90000U) &&
+              !overlapping_memory.page_mapped(0x82000U),
+          "loader rejects occupied physical backing without changing existing mappings");
+
+    project360::memory::GuestMemory small_memory(0x1000U);
+    const auto small_memory_result = project360::loader::load_xex2_uncompressed(
+        loadable_xex, small_memory, 0U);
+    check(!small_memory_result && !small_memory.page_mapping_enabled(),
+          "insufficient backing memory is rejected before changing the guest map");
 
     if (failures != 0) {
         std::cerr << failures << " XEX parser test(s) failed\n";

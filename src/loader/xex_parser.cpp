@@ -1,13 +1,16 @@
 #include "loader/xex_parser.hpp"
 
-#include <array>
+#include "memory/guest_memory.hpp"
+
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <new>
+#include <utility>
 #include <vector>
 
 namespace project360::loader {
@@ -18,6 +21,8 @@ constexpr std::uint32_t kXex2Magic = 0x58455832U;
 constexpr std::uint32_t kXexpMagic = 0x58455825U;
 constexpr std::uint32_t kExecutionInfoKey = 0x00040006U;
 constexpr std::uint32_t kEntryPointKey = 0x00010100U;
+constexpr std::uint32_t kImageBaseAddressKey = 0x00010201U;
+constexpr std::uint32_t kFileFormatInfoKey = 0x000003ffU;
 constexpr std::size_t kFixedHeaderSize = 0x18U;
 constexpr std::size_t kOptionalHeaderEntrySize = 8U;
 constexpr std::size_t kExecutionInfoSize = 0x18U;
@@ -37,6 +42,13 @@ bool read_le16(std::span<const std::byte> bytes, std::size_t offset, std::uint16
     if (offset > bytes.size() || bytes.size() - offset < 2U) return false;
     value = static_cast<std::uint16_t>(std::to_integer<std::uint16_t>(bytes[offset]) |
                                        (std::to_integer<std::uint16_t>(bytes[offset + 1U]) << 8U));
+    return true;
+}
+
+bool read_be16(std::span<const std::byte> bytes, std::size_t offset, std::uint16_t& value) {
+    if (offset > bytes.size() || bytes.size() - offset < 2U) return false;
+    value = static_cast<std::uint16_t>((std::to_integer<std::uint16_t>(bytes[offset]) << 8U) |
+                                       std::to_integer<std::uint16_t>(bytes[offset + 1U]));
     return true;
 }
 
@@ -91,8 +103,11 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
 
     std::uint32_t security_size = 0;
     std::uint32_t image_size = 0;
+    std::uint32_t security_load_address = 0;
     if (!read_be32(file, security_offset, security_size) ||
         !read_be32(file, static_cast<std::size_t>(security_offset) + 4U, image_size) ||
+        !read_be32(file, static_cast<std::size_t>(security_offset) + 0x110U,
+                   security_load_address) ||
         security_size < kSecurityInfoMinimumSize ||
         !range_fits(security_offset, security_size, header_size)) {
         return {{}, "XEX2 security-info block is truncated or has an invalid size"};
@@ -112,8 +127,10 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
     metadata.header_size = header_size;
     metadata.security_info_offset = security_offset;
     metadata.image_size = image_size;
+    metadata.security_load_address = security_load_address;
     metadata.optional_header_count = header_count;
     bool found_execution_info = false;
+    bool found_file_format_info = false;
     for (std::uint32_t i = 0; i < header_count; ++i) {
         const auto entry_offset = kFixedHeaderSize +
                                   static_cast<std::size_t>(i) * kOptionalHeaderEntrySize;
@@ -125,6 +142,23 @@ XexParseResult parse_xex2(std::span<const std::byte> file) {
         if (key == kEntryPointKey) {
             if (metadata.entry_point) return {{}, "duplicate XEX entry-point header"};
             metadata.entry_point = value;
+        } else if (key == kImageBaseAddressKey) {
+            if (metadata.image_base_address) return {{}, "duplicate XEX image-base header"};
+            metadata.image_base_address = value;
+        } else if (key == kFileFormatInfoKey) {
+            if (found_file_format_info) return {{}, "duplicate XEX file-format header"};
+            found_file_format_info = true;
+            std::uint32_t info_size = 0;
+            std::uint16_t encryption_type = 0;
+            std::uint16_t compression_type = 0;
+            if (!range_fits(value, 8U, header_size) || !read_be32(file, value, info_size) ||
+                info_size < 8U || !range_fits(value, info_size, header_size) ||
+                !read_be16(file, static_cast<std::size_t>(value) + 4U, encryption_type) ||
+                !read_be16(file, static_cast<std::size_t>(value) + 6U, compression_type)) {
+                return {{}, "XEX file-format info is truncated or out of bounds"};
+            }
+            metadata.encryption_type = encryption_type;
+            metadata.compression_type = compression_type;
         } else if (key == kExecutionInfoKey) {
             if (found_execution_info) return {{}, "duplicate XEX execution-info header"};
             found_execution_info = true;
@@ -283,6 +317,184 @@ PeParseResult parse_xbox_pe32(std::span<const std::byte> image) {
     }
     if (!entry_is_executable) return {{}, "PE entry point is not inside an executable section"};
     return {metadata, {}};
+}
+
+XexLoadResult load_xex2_uncompressed(std::span<const std::byte> file,
+                                     memory::GuestMemory& memory,
+                                     std::uint64_t physical_base) {
+    constexpr std::uint64_t kMaximumImageSize = 512ULL * 1024ULL * 1024ULL;
+    constexpr std::size_t kPageSize = static_cast<std::size_t>(memory::GuestMemory::page_size);
+    constexpr std::uint32_t kSectionExecutable = 0x20000000U;
+    constexpr std::uint32_t kSectionReadable = 0x40000000U;
+    constexpr std::uint32_t kSectionWritable = 0x80000000U;
+
+    const auto xex_result = parse_xex2(file);
+    if (!xex_result) return {{}, xex_result.error};
+    const auto& xex = *xex_result.metadata;
+    if (!xex.encryption_type || !xex.compression_type) {
+        return {{}, "XEX2 file-format information is required to load the image"};
+    }
+    if (*xex.encryption_type != 0U) {
+        return {{}, "encrypted XEX2 images are unsupported; no decryption was attempted"};
+    }
+    if (*xex.compression_type != 0U) {
+        return {{}, "compressed XEX2 images are unsupported by this loader"};
+    }
+    if (xex.header_size >= file.size()) return {{}, "XEX2 image payload is empty"};
+
+    const auto pe_bytes = file.subspan(xex.header_size);
+    const auto pe_result = parse_xbox_pe32(pe_bytes);
+    if (!pe_result) return {{}, pe_result.error};
+    const auto& pe = *pe_result.metadata;
+    const std::uint64_t image_base =
+        xex.image_base_address.value_or(xex.security_load_address);
+    if (image_base != pe.image_base) {
+        return {{}, "XEX image base differs from PE preferred base; relocations are unsupported"};
+    }
+    if ((image_base & (memory::GuestMemory::page_size - 1U)) != 0U || pe.image_size == 0U ||
+        pe.image_size > kMaximumImageSize ||
+        image_base + pe.image_size > 0x100000000ULL) {
+        return {{}, "Xbox PE image base or mapped size is outside the supported range"};
+    }
+
+    const auto mapped_size =
+        (static_cast<std::uint64_t>(pe.image_size) + kPageSize - 1U) &
+        ~(static_cast<std::uint64_t>(kPageSize) - 1U);
+    if (image_base + mapped_size > 0x100000000ULL) {
+        return {{}, "rounded Xbox PE page range exceeds the 32-bit guest address space"};
+    }
+    if (physical_base % kPageSize != 0U || mapped_size > memory.size() ||
+        !memory.contains(physical_base, static_cast<std::size_t>(mapped_size))) {
+        return {{}, "guest physical backing range is too small or misaligned"};
+    }
+    if (memory.physical_range_mapped(physical_base, static_cast<std::size_t>(mapped_size))) {
+        return {{}, "guest physical backing range overlaps an existing mapping"};
+    }
+    const auto page_count = static_cast<std::size_t>(mapped_size / kPageSize);
+    std::vector<memory::GuestPageAccess> page_access;
+    try {
+        page_access.assign(page_count, memory::GuestPageAccess::none);
+    } catch (const std::bad_alloc&) {
+        return {{}, "not enough host memory for XEX page permissions"};
+    }
+    const auto header_page_count =
+        (static_cast<std::size_t>(pe.headers_size) + kPageSize - 1U) / kPageSize;
+    for (std::size_t page = 0; page < header_page_count; ++page) {
+        page_access[page] = memory::GuestPageAccess::read;
+    }
+    for (const auto& section : pe.sections) {
+        const auto extent = std::max(section.virtual_size, section.raw_size);
+        if (extent == 0U) continue;
+        auto access = memory::GuestPageAccess::none;
+        if ((section.characteristics & kSectionReadable) != 0U) {
+            access = access | memory::GuestPageAccess::read;
+        }
+        if ((section.characteristics & kSectionWritable) != 0U) {
+            access = access | memory::GuestPageAccess::write;
+        }
+        if ((section.characteristics & kSectionExecutable) != 0U) {
+            access = access | memory::GuestPageAccess::execute;
+        }
+        const auto first_page = static_cast<std::size_t>(section.virtual_address / kPageSize);
+        const auto last_byte = static_cast<std::uint64_t>(section.virtual_address) + extent - 1U;
+        const auto last_page = static_cast<std::size_t>(last_byte / kPageSize);
+        if (last_page >= page_access.size()) return {{}, "PE section exceeds mapped image pages"};
+        for (auto page = first_page; page <= last_page; ++page) {
+            page_access[page] = page_access[page] | access;
+        }
+    }
+
+    const auto entry_point = xex.entry_point.value_or(
+        static_cast<std::uint32_t>(image_base + pe.entry_point_rva));
+    if (entry_point < image_base || entry_point >= image_base + pe.image_size) {
+        return {{}, "XEX entry point is outside the PE image"};
+    }
+    const auto entry_rva = static_cast<std::uint32_t>(entry_point - image_base);
+    const auto entry_section = std::find_if(pe.sections.begin(), pe.sections.end(),
+                                            [&](const PeSectionMetadata& section) {
+        const auto extent = std::max(section.virtual_size, section.raw_size);
+        return (section.characteristics & kSectionExecutable) != 0U &&
+               entry_rva >= section.virtual_address &&
+               static_cast<std::uint64_t>(entry_rva) - section.virtual_address < extent;
+    });
+    if (entry_section == pe.sections.end()) {
+        return {{}, "XEX entry point is not inside an executable PE section"};
+    }
+
+    std::vector<memory::GuestPageMapping> mappings;
+    try {
+        mappings.reserve(page_count);
+        for (std::size_t page = 0; page < page_count; ++page) {
+            mappings.push_back({image_base + page * kPageSize,
+                                physical_base + page * kPageSize, page_access[page]});
+        }
+    } catch (const std::bad_alloc&) {
+        return {{}, "not enough host memory to prepare XEX page mappings"};
+    }
+    if (!memory.map_pages(mappings)) {
+        return {{}, "XEX image mappings overlap or could not be allocated"};
+    }
+
+    const std::array<std::byte, kPageSize> zero_page{};
+    for (std::size_t offset = 0; offset < mapped_size; offset += kPageSize) {
+        if (!memory.load(physical_base + offset, zero_page)) {
+            for (std::size_t page = 0; page < page_count; ++page) {
+                (void)memory.unmap_page(image_base + page * kPageSize);
+            }
+            return {{}, "failed to initialize mapped XEX image memory"};
+        }
+    }
+    if (!memory.load(physical_base, pe_bytes.first(pe.headers_size))) {
+        for (std::size_t page = 0; page < page_count; ++page) {
+            (void)memory.unmap_page(image_base + page * kPageSize);
+        }
+        return {{}, "failed to copy PE headers into guest memory"};
+    }
+    for (const auto& section : pe.sections) {
+        if (section.raw_size == 0U) continue;
+        const auto source = pe_bytes.subspan(section.raw_offset, section.raw_size);
+        if (!memory.load(physical_base + section.virtual_address, source)) {
+            for (std::size_t page = 0; page < page_count; ++page) {
+                (void)memory.unmap_page(image_base + page * kPageSize);
+            }
+            return {{}, "failed to copy a PE section into guest memory"};
+        }
+    }
+
+    LoadedXexImage loaded{};
+    loaded.xex = xex;
+    loaded.pe = pe;
+    loaded.image_base = static_cast<std::uint32_t>(image_base);
+    loaded.entry_point = entry_point;
+    loaded.mapped_size = static_cast<std::size_t>(mapped_size);
+    return {std::move(loaded), {}};
+}
+
+XexLoadResult load_xex2_file(const std::filesystem::path& path, memory::GuestMemory& memory,
+                             std::uint64_t physical_base) {
+    constexpr std::uint64_t kMaximumXexFileSize = 512ULL * 1024ULL * 1024ULL;
+    std::error_code size_error;
+    const auto file_size = std::filesystem::file_size(path, size_error);
+    if (size_error) return {{}, "unable to read XEX file size: " + size_error.message()};
+    if (file_size == 0U || file_size > kMaximumXexFileSize ||
+        file_size > std::numeric_limits<std::size_t>::max()) {
+        return {{}, "XEX file size is empty or exceeds the loader's 512 MiB limit"};
+    }
+
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {{}, "unable to open XEX file for loading"};
+    std::vector<std::byte> contents;
+    try {
+        contents.resize(static_cast<std::size_t>(file_size));
+    } catch (const std::bad_alloc&) {
+        return {{}, "not enough host memory to read the XEX file"};
+    }
+    input.read(reinterpret_cast<char*>(contents.data()),
+               static_cast<std::streamsize>(contents.size()));
+    if (input.gcount() != static_cast<std::streamsize>(contents.size())) {
+        return {{}, "unable to read the complete XEX file"};
+    }
+    return load_xex2_uncompressed(contents, memory, physical_base);
 }
 
 } // namespace project360::loader

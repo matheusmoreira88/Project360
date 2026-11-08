@@ -1,6 +1,8 @@
 #include "memory/guest_memory.hpp"
 
+#include <array>
 #include <limits>
+#include <new>
 
 namespace project360::memory {
 
@@ -16,15 +18,42 @@ bool GuestMemory::contains(std::uint64_t address, std::size_t length) const noex
 
 bool GuestMemory::map_page(std::uint64_t virtual_base, std::uint64_t physical_base,
                            GuestPageAccess access) {
-    if ((virtual_base & (page_size - 1U)) != 0U ||
-        (physical_base & (page_size - 1U)) != 0U ||
-        virtual_base > std::numeric_limits<std::uint64_t>::max() - (page_size - 1U) ||
-        !contains(physical_base, static_cast<std::size_t>(page_size)) ||
-        page_mappings_.contains(virtual_base)) {
+    const std::array<GuestPageMapping, 1> mapping{{{virtual_base, physical_base, access}}};
+    return map_pages(mapping);
+}
+
+bool GuestMemory::map_pages(std::span<const GuestPageMapping> mappings) {
+    for (const auto& mapping : mappings) {
+        if ((mapping.virtual_base & (page_size - 1U)) != 0U ||
+            (mapping.physical_base & (page_size - 1U)) != 0U ||
+            mapping.virtual_base > std::numeric_limits<std::uint64_t>::max() - (page_size - 1U) ||
+            !contains(mapping.physical_base, static_cast<std::size_t>(page_size)) ||
+            page_mappings_.contains(mapping.virtual_base)) {
+            return false;
+        }
+    }
+
+    std::size_t inserted = 0;
+    try {
+        for (; inserted < mappings.size(); ++inserted) {
+            const auto& mapping = mappings[inserted];
+            const auto result = page_mappings_.emplace(
+                mapping.virtual_base, PageMapping{mapping.physical_base, mapping.access});
+            if (!result.second) break;
+        }
+    } catch (const std::bad_alloc&) {
+        for (std::size_t i = 0; i < inserted; ++i) {
+            page_mappings_.erase(mappings[i].virtual_base);
+        }
         return false;
     }
-    page_mappings_.emplace(virtual_base, PageMapping{physical_base, access});
-    mapping_enabled_ = true;
+    if (inserted != mappings.size()) {
+        for (std::size_t i = 0; i < inserted; ++i) {
+            page_mappings_.erase(mappings[i].virtual_base);
+        }
+        return false;
+    }
+    if (!mappings.empty()) mapping_enabled_ = true;
     return true;
 }
 
@@ -57,6 +86,25 @@ bool GuestMemory::translate(std::uint64_t virtual_address, GuestPageAccess acces
     if ((granted & requested) != requested) return false;
     physical_address = found->second.physical_base + (virtual_address - page_base);
     return contains(physical_address, 1U);
+}
+
+bool GuestMemory::page_mapped(std::uint64_t virtual_base) const noexcept {
+    if ((virtual_base & (page_size - 1U)) != 0U) return false;
+    return page_mappings_.contains(virtual_base);
+}
+
+bool GuestMemory::physical_range_mapped(std::uint64_t physical_base,
+                                        std::size_t length) const noexcept {
+    if (length == 0U || physical_base > std::numeric_limits<std::uint64_t>::max() - length) {
+        return false;
+    }
+    const auto end = physical_base + static_cast<std::uint64_t>(length);
+    for (const auto& [virtual_base, mapping] : page_mappings_) {
+        (void)virtual_base;
+        const auto mapped_end = mapping.physical_base + page_size;
+        if (mapping.physical_base < end && physical_base < mapped_end) return true;
+    }
+    return false;
 }
 
 bool GuestMemory::resolve(std::uint64_t address, std::size_t length, GuestPageAccess access,

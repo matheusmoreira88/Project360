@@ -85,6 +85,22 @@ int main() {
               !memory.fetch_u32_be(0x300000, word),
           "no-access protection blocks instruction fetch");
 
+    GuestMemory transactional(2U * static_cast<std::size_t>(GuestMemory::page_size));
+    const std::array<project360::memory::GuestPageMapping, 2> duplicate_batch{{
+        {0x8000U, 0U, GuestPageAccess::read},
+        {0x8000U, GuestMemory::page_size, GuestPageAccess::read},
+    }};
+    check(!transactional.map_pages(duplicate_batch) &&
+              !transactional.page_mapping_enabled() && !transactional.page_mapped(0x8000U),
+          "invalid multi-page mapping batches leave the address space unchanged");
+    const std::array<project360::memory::GuestPageMapping, 2> valid_batch{{
+        {0x8000U, 0U, GuestPageAccess::read},
+        {0x9000U, GuestMemory::page_size, GuestPageAccess::read},
+    }};
+    check(transactional.map_pages(valid_batch) && transactional.page_mapped(0x8000U) &&
+              transactional.page_mapped(0x9000U),
+          "valid multi-page mapping batches commit all mappings");
+
     if (failures != 0) {
         std::cerr << failures << " memory test(s) failed\n";
         return 1;
