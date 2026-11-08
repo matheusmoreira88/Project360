@@ -69,6 +69,13 @@ struct VertexFetchExecutionResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct VertexFetchBatchResult {
+    std::vector<std::array<float, 4>> destination_components;
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct VertexFetchInstruction {
     std::uint8_t fetch_constant_index{};
     std::uint8_t format{};
@@ -145,6 +152,16 @@ struct VertexFetchInstructionDecodeResult {
 [[nodiscard]] VertexFetchExecutionResult execute_vertex_fetch_attribute(
     const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
     const memory::GuestMemory& memory, const std::array<float, 4>& source_register,
+    const std::array<float, 4>& missing_component_values,
+    const std::array<float, 4>& previous_destination);
+
+// Evaluates one attribute fetch for each already-remapped draw vertex index.
+// The selected source lane receives that vertex index; the batch is all-or-
+// error so callers never mistake partial output for a complete attribute.
+[[nodiscard]] VertexFetchBatchResult execute_vertex_fetch_attribute_batch(
+    const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
+    const memory::GuestMemory& memory, std::span<const std::uint32_t> vertex_indices,
+    const std::array<float, 4>& source_register_template,
     const std::array<float, 4>& missing_component_values,
     const std::array<float, 4>& previous_destination);
 

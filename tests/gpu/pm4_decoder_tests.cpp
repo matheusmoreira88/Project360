@@ -800,6 +800,37 @@ void test_vfetch_instruction_and_attribute_range() {
         check(!failed_execution && failed_execution.error.find("outside") != std::string::npos,
               "VFETCH execution propagates invalid source-index failures without a result");
 
+        const std::array<std::byte, 8> batch_data{
+            std::byte{0x00}, std::byte{0x3c}, std::byte{0x00}, std::byte{0xc0},
+            std::byte{0x00}, std::byte{0x38}, std::byte{0x00}, std::byte{0x34}};
+        const auto batch_loaded = memory.load(104U, batch_data);
+        const auto batch_descriptor = decode_vertex_fetch_descriptor((24U << 2U) | 3U,
+                                                                       4U << 2U);
+        constexpr std::array<std::uint32_t, 2> batch_indices{0U, 1U};
+        const auto batch = batch_loaded && batch_descriptor
+                               ? execute_vertex_fetch_attribute_batch(
+                                     execution_instruction, batch_descriptor.descriptor, memory,
+                                     batch_indices, {99.0F, 98.0F, 97.0F, 96.0F},
+                                     {7.0F, 8.0F, 9.0F, 10.0F},
+                                     {11.0F, 12.0F, 13.0F, 14.0F})
+                               : VertexFetchBatchResult{{}, "Invalid batch fixture"};
+        check(batch && batch.destination_components.size() == 2U &&
+                  batch.destination_components[0] == std::array<float, 4>{1.0F, -2.0F, 9.0F,
+                                                                           10.0F} &&
+                  batch.destination_components[1] == std::array<float, 4>{0.5F, 0.25F, 9.0F,
+                                                                           10.0F},
+              "VFETCH batch resolves each prepared vertex index through the encoded source lane");
+        constexpr std::array<std::uint32_t, 2> invalid_batch_indices{0U, 4U};
+        const auto failed_batch = batch_descriptor
+                                      ? execute_vertex_fetch_attribute_batch(
+                                            execution_instruction,
+                                            batch_descriptor.descriptor, memory,
+                                            invalid_batch_indices, {}, {7.0F, 8.0F, 9.0F, 10.0F},
+                                            {11.0F, 12.0F, 13.0F, 14.0F})
+                                      : VertexFetchBatchResult{{}, "Invalid batch fixture"};
+        check(!failed_batch && failed_batch.destination_components.empty(),
+              "VFETCH batch rejects out-of-range attributes without exposing partial output");
+
         const std::array<std::byte, 16> float_vector{
             std::byte{0x00}, std::byte{0x00}, std::byte{0x80}, std::byte{0x3f},
             std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0xc0},

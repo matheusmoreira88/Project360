@@ -387,4 +387,35 @@ VertexFetchExecutionResult execute_vertex_fetch_attribute(
     return {index.index, source, destination.components, {}};
 }
 
+VertexFetchBatchResult execute_vertex_fetch_attribute_batch(
+    const VertexFetchInstruction& instruction, const VertexFetchDescriptor& descriptor,
+    const memory::GuestMemory& memory, std::span<const std::uint32_t> vertex_indices,
+    const std::array<float, 4>& source_register_template,
+    const std::array<float, 4>& missing_component_values,
+    const std::array<float, 4>& previous_destination) {
+    if (instruction.source_swizzle >= source_register_template.size()) {
+        return {{}, "VFETCH source swizzle selects an invalid register lane"};
+    }
+
+    VertexFetchBatchResult result{};
+    try {
+        result.destination_components.reserve(vertex_indices.size());
+        for (const auto vertex_index : vertex_indices) {
+            if (vertex_index > 0x00ffffffU) {
+                return {{}, "Prepared draw vertex index exceeds the exact 24-bit VFETCH range"};
+            }
+            auto source_register = source_register_template;
+            source_register[instruction.source_swizzle] = static_cast<float>(vertex_index);
+            const auto fetched = execute_vertex_fetch_attribute(
+                instruction, descriptor, memory, source_register, missing_component_values,
+                previous_destination);
+            if (!fetched) return {{}, fetched.error};
+            result.destination_components.push_back(fetched.destination_components);
+        }
+    } catch (const std::bad_alloc&) {
+        return {{}, "Not enough host memory for the VFETCH attribute batch"};
+    }
+    return result;
+}
+
 } // namespace project360::gpu::xenos
