@@ -1947,10 +1947,13 @@ void test_texture_fetch_constant_metadata() {
             (2U << 8U) | (1U << 6U) | (3U << 4U) | (2U << 2U) | 2U,
         (0xabcdeU << 12U) | (1U << 11U) | (1U << 10U) | (2U << 8U) | (3U << 6U) |
             0x25U,
-        0x11223344U,
-        0x55667788U,
-        0x99aabbccU,
-        0xddeeff00U,
+        63U | (31U << 13U) | (3U << 26U),
+        (1U << 31U) | (6U << 28U) | (5U << 25U) | (3U << 23U) | (1U << 21U) |
+            (2U << 19U) | (0x3dU << 13U) | (0xabcU << 1U) | 1U,
+        (3U << 27U) | (0x1eU << 22U) | (0x3feU << 12U) | (1U << 11U) |
+            (1U << 10U) | (9U << 6U) | (3U << 2U) | 3U,
+        (0x23456U << 12U) | (1U << 11U) | (1U << 9U) | (0xdU << 5U) |
+            (2U << 3U) | (1U << 2U) | 2U,
     };
     const auto decoded = decode_texture_fetch_constant(words);
     check(static_cast<bool>(decoded), "texture fetch constant accepts the texture type tag");
@@ -1967,6 +1970,52 @@ void test_texture_fetch_constant_metadata() {
               decoded.constant.nearest_clamp_policy &&
               decoded.constant.base_address_bytes == 0xabcde000U,
           "texture fetch constant decodes storage fields and page-based address");
+    check(decoded.constant.dimension == TextureDataDimension::two_d_or_stacked &&
+              decoded.constant.width == 64U && decoded.constant.height == 32U &&
+              decoded.constant.depth_or_layers == 4U,
+          "2D texture dimensions decode their minus-one fields");
+    check(decoded.constant.number_format == 1U && decoded.constant.component_swizzle == 0xabcU &&
+              decoded.constant.exponent_adjust == -3 && decoded.constant.magnification_filter == 2U &&
+              decoded.constant.minification_filter == 1U && decoded.constant.mip_filter == 3U &&
+              decoded.constant.anisotropic_filter == 5U && decoded.constant.arbitrary_filter == 6U &&
+              decoded.constant.border_size,
+          "texture fetch constant decodes numeric format, swizzle and filter metadata");
+    check(decoded.constant.mip_min_level == 3U && decoded.constant.mip_max_level == 9U &&
+              decoded.constant.lod_bias == -2 &&
+              decoded.constant.gradient_exponent_adjust_h == -2 &&
+              decoded.constant.gradient_exponent_adjust_v == 3 &&
+              decoded.constant.magnification_anisotropic_walk &&
+              decoded.constant.minification_anisotropic_walk &&
+              decoded.constant.volume_magnification_filter &&
+              decoded.constant.volume_minification_filter,
+          "texture fetch constant decodes signed LOD and mip policy fields");
+    check(decoded.constant.border_color == 2U && decoded.constant.force_bc_w_to_max &&
+              decoded.constant.tri_clamp == 2U && decoded.constant.anisotropic_bias == -3 &&
+              decoded.constant.packed_mips &&
+              decoded.constant.mip_address_bytes == 0x23456000U,
+          "texture fetch constant decodes border and mip address fields");
+
+    auto size_words = words;
+    size_words[5] &= ~(0x3U << 9U);
+    size_words[5] |= 0U << 9U;
+    size_words[2] = 16U;
+    const auto one_d = decode_texture_fetch_constant(size_words);
+    size_words[5] = (size_words[5] & ~(0x3U << 9U)) | (2U << 9U);
+    size_words[2] = 7U | (9U << 11U) | (2U << 22U);
+    const auto three_d = decode_texture_fetch_constant(size_words);
+    size_words[5] = (size_words[5] & ~(0x3U << 9U)) | (3U << 9U);
+    size_words[2] = 0x1fffU | (0x1fffU << 13U) | (0x3fU << 26U);
+    const auto cube = decode_texture_fetch_constant(size_words);
+    check(one_d && one_d.constant.width == 17U && one_d.constant.height == 1U &&
+              one_d.constant.depth_or_layers == 1U,
+          "1D texture dimensions decode as a width with unit height and depth");
+    check(three_d && three_d.constant.width == 8U && three_d.constant.height == 10U &&
+              three_d.constant.depth_or_layers == 3U,
+          "3D texture dimensions decode their width, height and depth fields");
+    check(cube && cube.constant.dimension == TextureDataDimension::cube &&
+              cube.constant.width == 8192U && cube.constant.height == 8192U &&
+              cube.constant.depth_or_layers == 64U,
+          "cube texture dimensions decode without narrowing encoded maxima");
     auto not_texture = words;
     not_texture[0] = (not_texture[0] & ~0x3U) | 0x3U;
     check(!decode_texture_fetch_constant(not_texture),

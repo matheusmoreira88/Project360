@@ -11,6 +11,12 @@ constexpr std::size_t kFetchConstantRegisterBase = 0x4800U;
 constexpr std::size_t kTextureFetchDwordCount = 6U;
 constexpr std::size_t kTextureFetchSlotCount = 32U;
 
+std::int32_t sign_extend(std::uint32_t value, std::uint8_t width) {
+    const auto sign_bit = 1U << (width - 1U);
+    if ((value & sign_bit) == 0U) return static_cast<std::int32_t>(value);
+    return static_cast<std::int32_t>(value) - static_cast<std::int32_t>(1U << width);
+}
+
 } // namespace
 
 TextureFetchDecodeResult decode_texture_fetch_constant(
@@ -40,6 +46,55 @@ TextureFetchDecodeResult decode_texture_fetch_constant(
     constant.stacked = (dwords[1] & (1U << 10U)) != 0U;
     constant.nearest_clamp_policy = (dwords[1] & (1U << 11U)) != 0U;
     constant.base_address_bytes = ((dwords[1] >> 12U) & 0x000fffffU) << 12U;
+
+    constant.dimension = static_cast<TextureDataDimension>((dwords[5] >> 9U) & 0x3U);
+    switch (constant.dimension) {
+    case TextureDataDimension::one_d:
+        constant.width = (dwords[2] & 0x00ffffffU) + 1U;
+        constant.height = 1U;
+        constant.depth_or_layers = 1U;
+        break;
+    case TextureDataDimension::two_d_or_stacked:
+    case TextureDataDimension::cube:
+        constant.width = (dwords[2] & 0x1fffU) + 1U;
+        constant.height = ((dwords[2] >> 13U) & 0x1fffU) + 1U;
+        constant.depth_or_layers = ((dwords[2] >> 26U) & 0x3fU) + 1U;
+        break;
+    case TextureDataDimension::three_d:
+        constant.width = (dwords[2] & 0x7ffU) + 1U;
+        constant.height = ((dwords[2] >> 11U) & 0x7ffU) + 1U;
+        constant.depth_or_layers = ((dwords[2] >> 22U) & 0x3ffU) + 1U;
+        break;
+    }
+
+    constant.number_format = static_cast<std::uint8_t>(dwords[3] & 0x1U);
+    constant.component_swizzle = static_cast<std::uint16_t>((dwords[3] >> 1U) & 0xfffU);
+    constant.exponent_adjust = static_cast<std::int8_t>(sign_extend((dwords[3] >> 13U) & 0x3fU, 6U));
+    constant.magnification_filter = static_cast<std::uint8_t>((dwords[3] >> 19U) & 0x3U);
+    constant.minification_filter = static_cast<std::uint8_t>((dwords[3] >> 21U) & 0x3U);
+    constant.mip_filter = static_cast<std::uint8_t>((dwords[3] >> 23U) & 0x3U);
+    constant.anisotropic_filter = static_cast<std::uint8_t>((dwords[3] >> 25U) & 0x7U);
+    constant.arbitrary_filter = static_cast<std::uint8_t>((dwords[3] >> 28U) & 0x7U);
+    constant.border_size = (dwords[3] & 0x80000000U) != 0U;
+
+    constant.volume_magnification_filter = (dwords[4] & 0x1U) != 0U;
+    constant.volume_minification_filter = (dwords[4] & 0x2U) != 0U;
+    constant.mip_min_level = static_cast<std::uint8_t>((dwords[4] >> 2U) & 0xfU);
+    constant.mip_max_level = static_cast<std::uint8_t>((dwords[4] >> 6U) & 0xfU);
+    constant.magnification_anisotropic_walk = (dwords[4] & (1U << 10U)) != 0U;
+    constant.minification_anisotropic_walk = (dwords[4] & (1U << 11U)) != 0U;
+    constant.lod_bias = static_cast<std::int16_t>(sign_extend((dwords[4] >> 12U) & 0x3ffU, 10U));
+    constant.gradient_exponent_adjust_h =
+        static_cast<std::int8_t>(sign_extend((dwords[4] >> 22U) & 0x1fU, 5U));
+    constant.gradient_exponent_adjust_v =
+        static_cast<std::int8_t>(sign_extend((dwords[4] >> 27U) & 0x1fU, 5U));
+
+    constant.border_color = static_cast<std::uint8_t>(dwords[5] & 0x3U);
+    constant.force_bc_w_to_max = (dwords[5] & (1U << 2U)) != 0U;
+    constant.tri_clamp = static_cast<std::uint8_t>((dwords[5] >> 3U) & 0x3U);
+    constant.anisotropic_bias = static_cast<std::int8_t>(sign_extend((dwords[5] >> 5U) & 0xfU, 4U));
+    constant.packed_mips = (dwords[5] & (1U << 11U)) != 0U;
+    constant.mip_address_bytes = ((dwords[5] >> 12U) & 0x000fffffU) << 12U;
 
     return {constant, {}};
 }
