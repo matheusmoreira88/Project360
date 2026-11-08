@@ -1265,7 +1265,32 @@ void test_pm4_sequential_draw_dispatch() {
     };
     check(memory.load(0x10U, index_bytes), "PM4 draw-dispatch index fixture loads");
 
+    const auto pack_control_flow = [](std::uint32_t first_word0,
+                                      std::uint32_t first_word1,
+                                      std::uint32_t second_word0,
+                                      std::uint32_t second_word1) {
+        return std::array<std::uint32_t, 3>{
+            first_word0, first_word1 | (second_word0 << 16U),
+            (second_word0 >> 16U) | (second_word1 << 16U)};
+    };
+    const auto exec_pair = pack_control_flow(1U | (1U << 12U), 1U << 12U,
+                                             1U | (1U << 12U), 2U << 12U);
+    const std::array<std::uint32_t, 6> guest_shader_dwords{
+        exec_pair[0U], exec_pair[1U], exec_pair[2U], 0U, 0U, 0U};
+    std::vector<std::uint8_t> guest_shader_bytes;
+    for (const auto dword : guest_shader_dwords) append_u32_be(guest_shader_bytes, dword);
+    std::vector<std::byte> guest_shader_storage;
+    guest_shader_storage.reserve(guest_shader_bytes.size());
+    for (const auto byte : guest_shader_bytes) {
+        guest_shader_storage.push_back(static_cast<std::byte>(byte));
+    }
+    check(memory.load(0x80U, guest_shader_storage),
+          "PM4 shader-load fixture stores a packed vertex program in guest physical memory");
+
     std::vector<std::uint8_t> stream;
+    append_u32_be(stream, 0xc0000000U | (1U << 16U) | (0x27U << 8U)); // IM_LOAD.
+    append_u32_be(stream, 0x80U); // Guest physical shader address, vertex stage.
+    append_u32_be(stream, 6U);   // Start 0, six dwords.
     append_u32_be(stream, (2U << 16U) | 0x2100U); // VGT_MAX/MIN/INDX_OFFSET.
     append_u32_be(stream, 0x00ffffffU);
     append_u32_be(stream, 0U);
@@ -1301,11 +1326,24 @@ void test_pm4_sequential_draw_dispatch() {
     append_u32_be(stream, 0U);
     append_u32_be(stream, 0U);
     append_u32_be(stream, 0U);
+    append_u32_be(stream, 0xc0000000U | (7U << 16U) | (0x2bU << 8U)); // IM_LOAD_IMMEDIATE.
+    append_u32_be(stream, 1U); // Pixel stage.
+    append_u32_be(stream, 6U); // Start 0, six dwords.
+    append_u32_be(stream, exec_pair[0U]);
+    append_u32_be(stream, exec_pair[1U]);
+    append_u32_be(stream, exec_pair[2U]);
+    append_u32_be(stream, 1U);
+    append_u32_be(stream, 0U);
+    append_u32_be(stream, 0U);
     const auto second_draw_word_offset = stream.size() / 4U;
     append_dma_draw();
 
     std::vector<std::uint32_t> initial_registers(0x5000U, 0U);
     const auto dispatched = process_pm4_draw_stream(stream, initial_registers, memory);
+    if (!dispatched) {
+        std::cerr << "PM4 shader-load integration diagnostic at word "
+                  << dispatched.error_word_offset << ": " << dispatched.error << '\n';
+    }
     check(dispatched && dispatched.draws.size() == 2U,
           "PM4 stream prepares both draws before exposing their state snapshots");
     if (!dispatched || dispatched.draws.size() != 2U) return;
@@ -1333,9 +1371,36 @@ void test_pm4_sequential_draw_dispatch() {
               second_fetch_bank.descriptors[7U].size_dwords == 3U && first_alu_bank &&
               second_alu_bank && first_alu_bank.constants[7U][0] == 1.5F &&
               second_alu_bank.constants[7U][0] == 2.5F &&
+              dispatched.draws[0].vertex_shader &&
+              dispatched.draws[0].vertex_shader->stage == ShaderStage::vertex &&
+              dispatched.draws[0].vertex_shader->source_address == 0x80U &&
+              dispatched.draws[0].vertex_shader->records.size() == 2U &&
+              !dispatched.draws[0].pixel_shader &&
+              dispatched.draws[1].vertex_shader == dispatched.draws[0].vertex_shader &&
+              dispatched.draws[1].pixel_shader &&
+              dispatched.draws[1].pixel_shader->stage == ShaderStage::pixel &&
+              dispatched.draws[1].pixel_shader->source_address == 0U &&
+              dispatched.draws[1].pixel_shader->records.size() == 2U &&
               dispatched.draws[0].register_snapshot[register_index::vgt_indx_offset] == 0U &&
               dispatched.draws[1].register_snapshot[register_index::vgt_indx_offset] == 1U,
           "PM4 dispatch retains independent per-draw fetch and ALU constant state");
+
+    if (dispatched.draws[0].vertex_shader) {
+        const auto parsed = decode_shader_exec_program(
+            dispatched.draws[0].vertex_shader->records, 1U);
+        ShaderAluFloatConstantBank constants{};
+        const auto executed = parsed
+                                  ? execute_shader_exec_sequence(
+                                        parsed.control_flow,
+                                        dispatched.draws[0].vertex_shader->records, {}, memory,
+                                        {}, {}, constants)
+                                  : ShaderExecSequenceResult{};
+        check(parsed && executed && executed.ended_shader &&
+                  executed.instructions_executed == 2U,
+              "PM4-loaded guest vertex microcode reaches the CPU shader reference executor");
+    } else {
+        check(false, "PM4-loaded guest vertex microcode reaches the CPU shader reference executor");
+    }
 
     auto unsupported_stream = stream;
     append_u32_be(unsupported_stream, 0xc0000000U | (0x7fU << 8U));
@@ -1345,6 +1410,30 @@ void test_pm4_sequential_draw_dispatch() {
     check(!rejected && rejected.draws.empty() && rejected.final_registers.empty() &&
               rejected.error_word_offset == stream.size() / 4U,
           "PM4 draw dispatch rejects unsupported later commands without partial output");
+
+    std::vector<std::uint8_t> incomplete_shader_load;
+    append_u32_be(incomplete_shader_load,
+                  0xc0000000U | (1U << 16U) | (0x27U << 8U)); // IM_LOAD.
+    append_u32_be(incomplete_shader_load, 0x80U);
+    append_u32_be(incomplete_shader_load, 5U); // Not a complete three-dword record count.
+    const auto rejected_incomplete_shader =
+        process_pm4_draw_stream(incomplete_shader_load, initial_registers, memory);
+    check(!rejected_incomplete_shader && rejected_incomplete_shader.draws.empty() &&
+              rejected_incomplete_shader.error.find("complete three-dword records") !=
+                  std::string::npos,
+          "PM4_IM_LOAD rejects partial microcode records transactionally");
+
+    std::vector<std::uint8_t> truncated_immediate_shader;
+    append_u32_be(truncated_immediate_shader,
+                  0xc0000000U | (6U << 16U) | (0x2bU << 8U)); // Seven payload dwords.
+    append_u32_be(truncated_immediate_shader, 1U); // Pixel stage.
+    append_u32_be(truncated_immediate_shader, 6U); // Declares six code dwords.
+    for (std::size_t i = 0U; i < 5U; ++i) append_u32_be(truncated_immediate_shader, 0U);
+    const auto rejected_truncated_immediate =
+        process_pm4_draw_stream(truncated_immediate_shader, initial_registers, memory);
+    check(!rejected_truncated_immediate && rejected_truncated_immediate.draws.empty() &&
+              rejected_truncated_immediate.error.find("payload must match") != std::string::npos,
+          "PM4_IM_LOAD_IMMEDIATE validates declared dwords against packet payload bounds");
 }
 
 void test_xenos_scissor_register_resolution() {

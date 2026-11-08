@@ -2,6 +2,8 @@
 
 The roadmap tracks evidence rather than estimated completion percentages.
 
+Latest GPU increment: PM4 `IM_LOAD` and `IM_LOAD_IMMEDIATE` now capture bounded vertex/pixel microcode into immutable draw snapshots. Synthetic tests connect captured vertex code to the explicit-prefix CPU EXEC reference runner and reject partial records/truncated packets. This does not execute external titles or render loaded game shaders; details are in [Xenos shader work](hardware/xenos_shader.md).
+
 | Phase | Status | Evidence / acceptance still needed |
 |---|---|---|
 | 0 — Foundation | Locally and remotely verified | CMake configure succeeded with CMake 4.3.1 and MSVC 19.51; Debug and Release builds completed; CTest passed in both configurations; smoke executable ran. Core Windows CI also passed on the Windows 2022 runner ([run 42451851612](https://github.com/matheusmoreira88/Project360/actions/runs/42451851612)). |

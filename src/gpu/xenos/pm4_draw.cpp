@@ -14,7 +14,10 @@ namespace {
 
 constexpr std::uint8_t kDrawIndx = 0x22U;
 constexpr std::uint8_t kDrawIndx2 = 0x36U;
+constexpr std::uint8_t kImLoad = 0x27U;
+constexpr std::uint8_t kImLoadImmediate = 0x2bU;
 constexpr std::uint32_t kDmaSizeWordMask = 0x00ffffffU;
+constexpr std::size_t kMaximumDrawSnapshotBytes = 32U * 1024U * 1024U;
 
 std::uint32_t swap_index_32(std::uint32_t value, std::uint32_t mode) {
     switch (mode) {
@@ -33,6 +36,50 @@ std::uint32_t read_u32_be(std::span<const std::uint8_t> bytes, std::size_t offse
            (static_cast<std::uint32_t>(bytes[offset + 1U]) << 16U) |
            (static_cast<std::uint32_t>(bytes[offset + 2U]) << 8U) |
            static_cast<std::uint32_t>(bytes[offset + 3U]);
+}
+
+std::uint32_t read_u32_be(std::span<const std::byte> bytes, std::size_t offset) {
+    return (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset])) << 24U) |
+           (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset + 1U]))
+            << 16U) |
+           (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset + 2U]))
+            << 8U) |
+           static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset + 3U]));
+}
+
+struct ShaderMicrocodeLoadResult {
+    std::shared_ptr<const ShaderMicrocode> shader;
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return shader != nullptr; }
+};
+
+ShaderMicrocodeLoadResult decode_shader_microcode(
+    std::uint32_t shader_type, std::uint32_t source_address, std::uint32_t start_dword,
+    std::uint32_t size_dwords, std::span<const std::byte> source_bytes) {
+    constexpr std::uint32_t maximum_size_dwords = 65'535U;
+    if (shader_type > static_cast<std::uint32_t>(ShaderStage::pixel)) {
+        return {nullptr, "PM4 shader load selects an unsupported shader stage"};
+    }
+    if (start_dword != 0U) {
+        return {nullptr, "PM4 shader load with a nonzero instruction-memory offset is unsupported"};
+    }
+    if (size_dwords == 0U || size_dwords > maximum_size_dwords || size_dwords % 3U != 0U) {
+        return {nullptr, "PM4 shader load size must contain complete three-dword records"};
+    }
+    const auto expected_bytes = static_cast<std::size_t>(size_dwords) * sizeof(std::uint32_t);
+    if (source_bytes.size() != expected_bytes) {
+        return {nullptr, "PM4 shader load data size does not match its declared dword count"};
+    }
+
+    auto shader = std::make_shared<ShaderMicrocode>();
+    shader->stage = static_cast<ShaderStage>(shader_type);
+    shader->source_address = source_address;
+    shader->records.resize(size_dwords / 3U);
+    for (std::size_t dword = 0U; dword < size_dwords; ++dword) {
+        shader->records[dword / 3U][dword % 3U] = read_u32_be(source_bytes, dword * 4U);
+    }
+    return {std::move(shader), {}};
 }
 
 DrawDecodeResult failure(std::string message, std::size_t word_offset) {
@@ -242,7 +289,7 @@ Pm4DrawStreamResult process_pm4_draw_stream(
     constexpr std::uint8_t draw_indx2_opcode = 0x36U;
     constexpr std::size_t maximum_prepared_draws = 256U;
     constexpr std::size_t maximum_prepared_indices = 4'194'304U;
-    constexpr std::size_t maximum_register_snapshot_bytes = 32U * 1024U * 1024U;
+    constexpr std::size_t maximum_register_snapshot_bytes = kMaximumDrawSnapshotBytes;
 
     try {
         const auto decoded = decode_pm4(stream);
@@ -253,6 +300,8 @@ Pm4DrawStreamResult process_pm4_draw_stream(
         Pm4DrawStreamResult result{};
         std::size_t prepared_index_count = 0U;
         std::size_t prepared_register_snapshot_bytes = 0U;
+        std::shared_ptr<const ShaderMicrocode> active_vertex_shader;
+        std::shared_ptr<const ShaderMicrocode> active_pixel_shader;
         for (const auto& packet : decoded.packets) {
             const auto byte_offset = packet.header_word_offset * 4U;
             const auto packet_byte_size =
@@ -262,6 +311,75 @@ Pm4DrawStreamResult process_pm4_draw_stream(
             local_packet.header_word_offset = 0U;
             local_packet.payload_word_offset = 1U;
             const std::array<Packet, 1> packet_list{local_packet};
+
+            if (packet.type == PacketType::type3_command &&
+                (packet.opcode == kImLoad || packet.opcode == kImLoadImmediate)) {
+                if (packet.predicated) {
+                    return {{}, {}, "Predicated PM4 shader loads require bin-selection state",
+                            packet.header_word_offset};
+                }
+
+                std::uint32_t shader_type = 0U;
+                std::uint32_t source_address = 0U;
+                std::uint32_t start_dword = 0U;
+                std::uint32_t size_dwords = 0U;
+                std::span<const std::byte> inline_bytes;
+                std::vector<std::byte> physical_bytes;
+
+                if (packet.opcode == kImLoad) {
+                    if (packet.payload_word_count != 2U) {
+                        return {{}, {}, "PM4_IM_LOAD requires an address and start/size dword",
+                                packet.header_word_offset};
+                    }
+                    const auto address_type = read_u32_be(packet_stream, 4U);
+                    shader_type = address_type & 0x3U;
+                    source_address = (address_type & ~0x3U) & 0x1fffffffU;
+                    const auto start_size = read_u32_be(packet_stream, 8U);
+                    start_dword = start_size >> 16U;
+                    size_dwords = start_size & 0xffffU;
+                    if (size_dwords == 0U || size_dwords % 3U != 0U) {
+                        return {{}, {}, "PM4_IM_LOAD size must contain complete three-dword records",
+                                packet.header_word_offset};
+                    }
+                    physical_bytes.resize(static_cast<std::size_t>(size_dwords) * 4U);
+                    if (!memory.read_physical(source_address, physical_bytes)) {
+                        return {{}, {}, "PM4_IM_LOAD shader bytes exceed guest physical memory",
+                                packet.header_word_offset};
+                    }
+                    inline_bytes = physical_bytes;
+                } else {
+                    if (packet.payload_word_count < 2U) {
+                        return {{}, {}, "PM4_IM_LOAD_IMMEDIATE requires stage and start/size dwords",
+                                packet.header_word_offset};
+                    }
+                    shader_type = read_u32_be(packet_stream, 4U);
+                    const auto start_size = read_u32_be(packet_stream, 8U);
+                    start_dword = start_size >> 16U;
+                    size_dwords = start_size & 0xffffU;
+                    if (size_dwords == 0U || size_dwords % 3U != 0U ||
+                        static_cast<std::size_t>(size_dwords) + 2U !=
+                            packet.payload_word_count) {
+                        return {{}, {},
+                                "PM4_IM_LOAD_IMMEDIATE payload must match complete three-dword records",
+                                packet.header_word_offset};
+                    }
+                    inline_bytes = std::as_bytes(
+                        packet_stream.subspan(12U, static_cast<std::size_t>(size_dwords) * 4U));
+                }
+
+                const auto loaded = decode_shader_microcode(shader_type, source_address,
+                                                            start_dword, size_dwords,
+                                                            inline_bytes);
+                if (!loaded) {
+                    return {{}, {}, loaded.error, packet.header_word_offset};
+                }
+                if (loaded.shader->stage == ShaderStage::vertex) {
+                    active_vertex_shader = loaded.shader;
+                } else {
+                    active_pixel_shader = loaded.shader;
+                }
+                continue;
+            }
 
             if (packet.type != PacketType::type3_command ||
                 (packet.opcode != draw_indx_opcode && packet.opcode != draw_indx2_opcode)) {
@@ -304,15 +422,28 @@ Pm4DrawStreamResult process_pm4_draw_stream(
                         packet.header_word_offset};
             }
             const auto register_snapshot_bytes = registers.size() * sizeof(std::uint32_t);
-            if (register_snapshot_bytes >
-                maximum_register_snapshot_bytes - prepared_register_snapshot_bytes) {
-                return {{}, {}, "PM4 draw stream exceeds the 32 MiB register snapshot limit",
+            const auto vertex_shader_bytes = active_vertex_shader
+                                                 ? active_vertex_shader->records.size() *
+                                                       sizeof(active_vertex_shader->records[0])
+                                                 : 0U;
+            const auto pixel_shader_bytes = active_pixel_shader
+                                                ? active_pixel_shader->records.size() *
+                                                      sizeof(active_pixel_shader->records[0])
+                                                : 0U;
+            const auto shader_snapshot_bytes = vertex_shader_bytes + pixel_shader_bytes;
+            if (register_snapshot_bytes > maximum_register_snapshot_bytes -
+                                              prepared_register_snapshot_bytes ||
+                shader_snapshot_bytes > maximum_register_snapshot_bytes -
+                                            prepared_register_snapshot_bytes -
+                                            register_snapshot_bytes) {
+                return {{}, {}, "PM4 draw stream exceeds the 32 MiB state/shader snapshot limit",
                         packet.header_word_offset};
             }
             prepared_index_count += geometry.indices.size();
-            prepared_register_snapshot_bytes += register_snapshot_bytes;
+            prepared_register_snapshot_bytes += register_snapshot_bytes + shader_snapshot_bytes;
             result.draws.push_back(
-                {std::move(command), std::move(geometry), registers});
+                {std::move(command), std::move(geometry), registers, active_vertex_shader,
+                 active_pixel_shader});
         }
         result.final_registers = std::move(registers);
         return result;

@@ -2,8 +2,10 @@
 
 #include "gpu/xenos/pm4_decoder.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -74,11 +76,22 @@ struct PrimitiveAssemblyResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+enum class ShaderStage : std::uint8_t { vertex, pixel };
+
+struct ShaderMicrocode {
+    ShaderStage stage{};
+    std::uint32_t source_address{};
+    std::vector<std::array<std::uint32_t, 3>> records;
+};
+
 struct PreparedDrawCommand {
     DrawCommand command{};
     PrimitiveAssemblyResult geometry{};
     // Register state after this draw's PM4 writes, before later packets mutate it.
     std::vector<std::uint32_t> register_snapshot;
+    // Immutable shader memories active when this draw packet was processed.
+    std::shared_ptr<const ShaderMicrocode> vertex_shader;
+    std::shared_ptr<const ShaderMicrocode> pixel_shader;
 };
 
 struct Pm4DrawStreamResult {
@@ -115,10 +128,11 @@ struct VertexIndexTransformReadResult {
     std::span<const DrawCommand> commands, std::span<std::uint32_t> registers);
 
 // Processes a bounded subset of PM4 packets in stream order, applying register
-// writes before each draw and preparing that draw's DMA/auto-index geometry
-// against the register snapshot at that point. Each prepared draw retains its
-// complete register snapshot, bounded to 32 MiB total across the result. Output
-// is limited to 256 draws and 4,194,304 total prepared indexes. Unsupported commands fail.
+// writes and shader IM_LOAD packets before each draw, then preparing that draw's
+// DMA/auto-index geometry against the register snapshot at that point. Each
+// prepared draw retains the immutable active shader memories and register file;
+// aggregate snapshots are bounded to 32 MiB. Output is limited to 256 draws and
+// 4,194,304 total prepared indexes. Unsupported commands fail.
 // Failure is transactional: no prepared draws or final register state escapes.
 [[nodiscard]] Pm4DrawStreamResult process_pm4_draw_stream(
     std::span<const std::uint8_t> stream,
