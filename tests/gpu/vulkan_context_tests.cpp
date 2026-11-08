@@ -6,6 +6,7 @@
 
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -75,7 +76,14 @@ int main() {
         return 1;
     }
     const std::array<std::byte, 16> alu_constant_data{};
-    if (!shader_memory.load(0x40U, alu_constant_data)) {
+    const std::array<std::byte, 16> shifted_alu_constant_data{
+        std::byte{0x3eU}, std::byte{0U}, std::byte{0U}, std::byte{0U},
+        std::byte{0U},    std::byte{0U}, std::byte{0U}, std::byte{0U},
+        std::byte{0U},    std::byte{0U}, std::byte{0U}, std::byte{0U},
+        std::byte{0U},    std::byte{0U}, std::byte{0U}, std::byte{0U},
+    };
+    if (!shader_memory.load(0x40U, alu_constant_data) ||
+        !shader_memory.load(0x50U, shifted_alu_constant_data)) {
         std::cerr << "FAIL: could not seed synthetic guest ALU constant memory\n";
         return 1;
     }
@@ -153,10 +161,19 @@ int main() {
     append_pm4_u32(pm4_draw_stream, (3U << 16U) | 4U); // Triangle list, DMA, 3 indexes.
     append_pm4_u32(pm4_draw_stream, 0x100U);
     append_pm4_u32(pm4_draw_stream, 3U);
+    append_pm4_u32(pm4_draw_stream, 0xc0000000U | (2U << 16U) | (0x2fU << 8U));
+    append_pm4_u32(pm4_draw_stream, 0x50U); // Reload c7 with X=0.125 for draw two.
+    append_pm4_u32(pm4_draw_stream, 28U);
+    append_pm4_u32(pm4_draw_stream, 4U);
+    append_pm4_u32(pm4_draw_stream, 0xc0000000U | (3U << 16U) | (0x22U << 8U));
+    append_pm4_u32(pm4_draw_stream, 0U);
+    append_pm4_u32(pm4_draw_stream, (3U << 16U) | 4U);
+    append_pm4_u32(pm4_draw_stream, 0x100U);
+    append_pm4_u32(pm4_draw_stream, 3U);
     std::vector<std::uint32_t> draw_registers(0x5000U, 0U);
     const auto draw_dispatch = process_pm4_draw_stream(
         pm4_draw_stream, draw_registers, shader_memory);
-    if (!draw_dispatch || draw_dispatch.draws.size() != 1U) {
+    if (!draw_dispatch || draw_dispatch.draws.size() != 2U) {
         std::cerr << "FAIL: PM4 stream did not prepare its DMA draw"
                   << (draw_dispatch ? "" : ": " + draw_dispatch.error) << '\n';
         return 1;
@@ -199,6 +216,25 @@ int main() {
         shader_boolean_constants);
     if (!vertex_batch) {
         std::cerr << "FAIL: synthetic Xenos vertex batch failed: " << vertex_batch.error << '\n';
+        return 1;
+    }
+    const auto shifted_constant_bank = decode_shader_alu_float_constant_bank(
+        draw_dispatch.draws[1U].register_snapshot, required_alu_constants);
+    const auto shifted_vertex_batch = execute_pm4_draw_vertex_batch(
+        draw_dispatch.draws[1U], vertex_exec_blocks, vertex_ucode, shader_memory, {}, {},
+        shader_boolean_constants);
+    if (!shifted_constant_bank ||
+        shifted_constant_bank.constants[7U] !=
+            std::array<float, 4>{0.125F, 0.0F, 0.0F, 0.0F} ||
+        !shifted_vertex_batch || shifted_vertex_batch.vertices.size() !=
+                                     vertex_batch.vertices.size() ||
+        shifted_vertex_batch.vertices.empty() ||
+        std::abs((shifted_vertex_batch.vertices[0U].position[0] -
+                  vertex_batch.vertices[0U].position[0]) -
+                 0.125F) > 1.0e-6F) {
+        std::cerr << "FAIL: guest-memory c7 did not change the vertex reference output by 0.125"
+                  << (shifted_constant_bank ? "" : ": " + shifted_constant_bank.error)
+                  << (shifted_vertex_batch ? "" : ": " + shifted_vertex_batch.error) << '\n';
         return 1;
     }
     auto missing_vertex_descriptor_draw = draw_dispatch.draws[0];
