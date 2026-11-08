@@ -83,7 +83,7 @@ int main() {
             (offset_dwords << 8U) | 8U,
         };
     };
-    const std::array<std::array<std::uint32_t, 3>, 5> vertex_ucode{
+    const std::array<std::array<std::uint32_t, 3>, 6> vertex_ucode{
         encode_vfetch(1U, 0U),
         encode_vfetch(3U, 4U),
         std::array<std::uint32_t, 3>{(0x0fU << 16U) | 2U, 0U,
@@ -92,14 +92,19 @@ int main() {
                                     0xe0030201U},
         std::array<std::uint32_t, 3>{(1U << 15U) | (0x0fU << 16U), 0U,
                                     0xe0030203U},
+        encode_vfetch(5U, 0U), // Slot 8 is referenced only by a skipped conditional block.
     };
-    const std::array<ShaderExecInstruction, 2> vertex_exec_blocks{
+    const std::array<ShaderExecInstruction, 3> vertex_exec_blocks{
+        decode_shader_exec_instruction(
+            {5U | (1U << 12U) | (0b01U << 16U),
+             (3U << 12U) | (1U << 11U) | (1U << 8U)}),
         decode_shader_exec_instruction(
             {(0b11U | (0b11U << 2U) | (0b10U << 4U)) << 16U | (3U << 12U),
              1U << 12U}),
         decode_shader_exec_instruction(
             {3U | ((0b10U | (0b10U << 2U)) << 16U) | (2U << 12U), 2U << 12U}),
     };
+    constexpr std::array<bool, 1> shader_boolean_constants{false};
 
     const auto append_pm4_u32 = [](std::vector<std::uint8_t>& bytes, std::uint32_t value) {
         bytes.push_back(static_cast<std::uint8_t>(value >> 24U));
@@ -153,7 +158,8 @@ int main() {
         return 1;
     }
     const auto vertex_batch = execute_pm4_draw_vertex_batch(
-        draw_dispatch.draws[0], vertex_exec_blocks, vertex_ucode, shader_memory, {}, {});
+        draw_dispatch.draws[0], vertex_exec_blocks, vertex_ucode, shader_memory, {}, {},
+        shader_boolean_constants);
     if (!vertex_batch) {
         std::cerr << "FAIL: synthetic Xenos vertex batch failed: " << vertex_batch.error << '\n';
         return 1;
@@ -163,7 +169,7 @@ int main() {
     missing_vertex_descriptor_draw.register_snapshot[0x480fU] = 0U;
     const auto missing_vertex_descriptor_batch = execute_pm4_draw_vertex_batch(
         missing_vertex_descriptor_draw, vertex_exec_blocks, vertex_ucode, shader_memory,
-        {}, {});
+        {}, {}, shader_boolean_constants);
     if (missing_vertex_descriptor_batch || !missing_vertex_descriptor_batch.vertices.empty() ||
         missing_vertex_descriptor_batch.error.find("VFETCH resources") == std::string::npos) {
         std::cerr << "FAIL: PM4 draw executor accepted a missing referenced VFETCH descriptor\n";
@@ -172,7 +178,8 @@ int main() {
     constexpr std::array<std::uint32_t, 3> out_of_range_vertex_indices{0U, 1U, 3U};
     const auto failed_vertex_batch = execute_shader_exec_vertex_batch(
         vertex_exec_blocks, vertex_ucode, fetch_constants, shader_memory,
-        out_of_range_vertex_indices, {}, {}, alu_constant_bank.constants);
+        out_of_range_vertex_indices, {}, {}, alu_constant_bank.constants,
+        shader_boolean_constants);
     if (failed_vertex_batch || !failed_vertex_batch.vertices.empty() ||
         failed_vertex_batch.error.find("item 2 (index 3)") == std::string::npos) {
         std::cerr << "FAIL: Xenos vertex batch exposed partial outputs after VFETCH failure\n";
