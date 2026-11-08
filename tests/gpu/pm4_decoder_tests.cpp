@@ -559,6 +559,61 @@ void test_shader_alu_add_mul_pair_execution() {
               scalar_floor.previous_scalar == -2.0F,
           "Xenos FRCS/TRUNCS/FLOORS apply floor and truncation to src3.w");
 
+    auto reciprocal_registers = registers;
+    reciprocal_registers[3][3] = 2.0F;
+    const auto rcpc_finite = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 17U, 4U, 5U, 0U, 0x0fU), reciprocal_registers);
+    const auto rcpf_finite = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 18U, 4U, 5U, 0U, 0x0fU), reciprocal_registers);
+    auto reciprocal_positive_zero_registers = reciprocal_registers;
+    reciprocal_positive_zero_registers[3][3] = 0.0F;
+    const auto rcpc_positive_zero = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 17U, 4U, 5U, 0U, 0x0fU), reciprocal_positive_zero_registers);
+    const auto rcpf_positive_zero = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 18U, 4U, 5U, 0U, 0x0fU), reciprocal_positive_zero_registers);
+    auto reciprocal_negative_zero_registers = reciprocal_registers;
+    reciprocal_negative_zero_registers[3][3] = -0.0F;
+    const auto rcpc_negative_zero = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 17U, 4U, 5U, 0U, 0x0fU), reciprocal_negative_zero_registers);
+    const auto rcpf_negative_zero = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 18U, 4U, 5U, 0U, 0x0fU), reciprocal_negative_zero_registers);
+    auto reciprocal_nan_registers = reciprocal_registers;
+    reciprocal_nan_registers[3][3] = std::numeric_limits<float>::quiet_NaN();
+    const auto rcpc_nan = execute_shader_alu_add_mul_pair(encode_pair(0U, 17U, 4U, 5U, 0U, 0x0fU),
+                                                          reciprocal_nan_registers);
+    const auto rcpf_nan = execute_shader_alu_add_mul_pair(encode_pair(0U, 18U, 4U, 5U, 0U, 0x0fU),
+                                                          reciprocal_nan_registers);
+    auto reciprocal_positive_infinity_registers = reciprocal_registers;
+    reciprocal_positive_infinity_registers[3][3] = std::numeric_limits<float>::infinity();
+    const auto rcpc_positive_infinity = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 17U, 4U, 5U, 0U, 0x0fU), reciprocal_positive_infinity_registers);
+    auto reciprocal_negative_infinity_registers = reciprocal_registers;
+    reciprocal_negative_infinity_registers[3][3] = -std::numeric_limits<float>::infinity();
+    const auto rcpf_negative_infinity = execute_shader_alu_add_mul_pair(
+        encode_pair(0U, 18U, 4U, 5U, 0U, 0x0fU), reciprocal_negative_infinity_registers);
+    auto reciprocal_one_registers = reciprocal_registers;
+    reciprocal_one_registers[3][3] = 1.0F;
+    const auto rcpc_one = execute_shader_alu_add_mul_pair(encode_pair(0U, 17U, 4U, 5U, 0U, 0x0fU),
+                                                          reciprocal_one_registers);
+    const auto rcp_ieee = execute_shader_alu_add_mul_pair(encode_pair(0U, 19U, 4U, 5U, 0U, 0x0fU),
+                                                          reciprocal_registers);
+    check(rcpc_finite && rcpc_finite.previous_scalar == 0.5F && rcpf_finite &&
+              rcpf_finite.previous_scalar == 0.5F && rcpc_positive_zero &&
+              rcpc_positive_zero.previous_scalar == std::numeric_limits<float>::max() &&
+              rcpf_positive_zero && rcpf_positive_zero.previous_scalar == 0.0F &&
+              !std::signbit(rcpf_positive_zero.previous_scalar) && rcpc_negative_zero &&
+              rcpc_negative_zero.previous_scalar == -std::numeric_limits<float>::max() &&
+              rcpf_negative_zero && rcpf_negative_zero.previous_scalar == 0.0F &&
+              std::signbit(rcpf_negative_zero.previous_scalar) && rcpc_nan &&
+              std::isnan(rcpc_nan.previous_scalar) && rcpf_nan &&
+              std::isnan(rcpf_nan.previous_scalar) && rcpc_positive_infinity &&
+              rcpc_positive_infinity.previous_scalar == 0.0F && rcpf_negative_infinity &&
+              rcpf_negative_infinity.previous_scalar == 0.0F &&
+              std::signbit(rcpf_negative_infinity.previous_scalar) && rcpc_one &&
+              rcpc_one.previous_scalar == 1.0F && !rcp_ieee,
+          "Xenos RCPC/RCPF clamp reciprocal overflow, preserve signed zero and NaN, and "
+          "special-case one");
+
     const auto multiply_pair = encode_pair(1U, 2U, 1U, 1U, 0x03U, 0x0cU);
     const auto multiplied = execute_shader_alu_add_mul_pair(multiply_pair, registers);
     check(multiplied &&

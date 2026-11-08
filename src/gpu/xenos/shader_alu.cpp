@@ -328,7 +328,7 @@ execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
     if (instruction.vector_clamp || instruction.scalar_clamp) {
         return {{}, 0.0F, "Clamped Xenos ALU results are not implemented"};
     }
-    if (!is_supported_vector_opcode(instruction.vector_opcode) || instruction.scalar_opcode > 13U) {
+    if (!is_supported_vector_opcode(instruction.vector_opcode) || instruction.scalar_opcode > 18U) {
         return {{}, 0.0F, "Unsupported Xenos vector/scalar ALU opcode pair"};
     }
 
@@ -412,6 +412,30 @@ execute_shader_alu_add_mul_pair(const ShaderAluInstruction& instruction,
     case 13U: // FLOORS: round toward negative infinity
         scalar_result = std::floor(scalar_source.value[3]);
         break;
+    case 17U: { // RCPC: reciprocal, clamp infinities to maximum finite values
+        const auto reciprocal =
+            scalar_source.value[3] == 1.0F ? 1.0F : 1.0F / scalar_source.value[3];
+        if (reciprocal == -std::numeric_limits<float>::infinity()) {
+            scalar_result = -std::numeric_limits<float>::max();
+        } else if (reciprocal == std::numeric_limits<float>::infinity()) {
+            scalar_result = std::numeric_limits<float>::max();
+        } else {
+            scalar_result = reciprocal;
+        }
+        break;
+    }
+    case 18U: { // RCPF: reciprocal, clamp infinities to signed zero
+        const auto reciprocal =
+            scalar_source.value[3] == 1.0F ? 1.0F : 1.0F / scalar_source.value[3];
+        if (reciprocal == -std::numeric_limits<float>::infinity()) {
+            scalar_result = -0.0F;
+        } else if (reciprocal == std::numeric_limits<float>::infinity()) {
+            scalar_result = 0.0F;
+        } else {
+            scalar_result = reciprocal;
+        }
+        break;
+    }
     default:
         return {{}, 0.0F, "Unsupported Xenos scalar ALU opcode"};
     }
