@@ -487,6 +487,30 @@ int main() {
                   cleared_copy_word == 0U && guest_cpu.gpr[6] == 9U &&
                   guest_cpu.pc == 0x8307cU,
               "XEX RtlZeroMemory thunk clears bytes and returns through the caller LR");
+
+        project360::cpu::CpuState bounded_cpu{};
+        bounded_cpu.pc = loaded.image->entry_point;
+        const auto zero_budget_run = executor.run(bounded_cpu, guest_memory, 0U);
+        check(zero_budget_run.instructions_executed == 0U &&
+                  zero_budget_run.stop.status ==
+                      project360::cpu::StepStatus::instruction_limit_reached &&
+                  bounded_cpu.pc == loaded.image->entry_point,
+              "zero XEX instruction budget stops without changing guest state");
+        const auto bounded_run = executor.run(bounded_cpu, guest_memory, 39U);
+        check(bounded_run.instructions_executed == 39U &&
+                  bounded_run.stop.status ==
+                      project360::cpu::StepStatus::instruction_limit_reached &&
+                  bounded_cpu.pc == 0x8307cU && bounded_cpu.gpr[7] == 0x00040006U &&
+                  bounded_cpu.gpr[8] == 0x5060U,
+              "bounded XEX execution calls all eight imports and stops exactly at its instruction budget");
+
+        project360::cpu::CpuState faulting_cpu{};
+        faulting_cpu.pc = 0x8307cU;
+        const auto faulting_run = executor.run(faulting_cpu, guest_memory, 2U);
+        check(faulting_run.instructions_executed == 1U &&
+                  faulting_run.stop.status == project360::cpu::StepStatus::fault &&
+                  faulting_cpu.pc == 0x700U,
+              "bounded XEX execution continues after a modeled exception and reports the subsequent vector-fetch fault");
     } else {
         check(false, "loaded XEX image is available for kernel execution integration");
     }

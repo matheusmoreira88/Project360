@@ -122,4 +122,22 @@ cpu::StepResult GuestExecutor::step(cpu::CpuState& state,
             std::nullopt, std::nullopt};
 }
 
+GuestRunResult GuestExecutor::run(cpu::CpuState& state,
+                                  memory::GuestMemory& memory,
+                                  std::uint64_t instruction_limit) const {
+    GuestRunResult result{};
+    while (result.instructions_executed < instruction_limit) {
+        auto step_result = step(state, memory);
+        if (step_result.status != cpu::StepStatus::executed &&
+            step_result.status != cpu::StepStatus::exception_taken) {
+            result.stop = std::move(step_result);
+            return result;
+        }
+        ++result.instructions_executed;
+    }
+    result.stop = {cpu::StepStatus::instruction_limit_reached,
+                   "guest instruction budget exhausted", std::nullopt, std::nullopt};
+    return result;
+}
+
 } // namespace project360::kernel

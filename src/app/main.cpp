@@ -1,5 +1,6 @@
 #include "cpu/interpreter.hpp"
 #include "common/log.hpp"
+#include "kernel/guest_executor.hpp"
 #include "loader/xex_parser.hpp"
 #include "memory/guest_memory.hpp"
 
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <new>
 #include <string_view>
 
 int inspect_xex(const std::filesystem::path& path) {
@@ -79,10 +81,58 @@ int run_smoke_program() {
     return 0;
 }
 
-int run_command_line(int argc, bool inspect, const std::filesystem::path& path) {
+int run_xex(const std::filesystem::path& path) {
+    constexpr std::size_t guest_memory_size = 512U * 1024U * 1024U;
+    constexpr std::uint64_t instruction_limit = 1'000'000U;
+    const auto metadata = project360::loader::parse_xex2_file(path);
+    if (!metadata) {
+        project360::common::log(project360::common::LogLevel::error, "loader",
+                                metadata.error);
+        return 1;
+    }
+    if (!metadata.metadata->encryption_type ||
+        *metadata.metadata->encryption_type != 0U ||
+        !metadata.metadata->compression_type ||
+        *metadata.metadata->compression_type != 0U) {
+        project360::common::log(
+            project360::common::LogLevel::error, "loader",
+            "XEX execution supports only unencrypted, uncompressed images");
+        return 1;
+    }
+
+    try {
+        project360::memory::GuestMemory memory(guest_memory_size);
+        const auto loaded = project360::loader::load_xex2_file(path, memory, 0U);
+        if (!loaded) {
+            project360::common::log(project360::common::LogLevel::error, "loader",
+                                    loaded.error);
+            return 1;
+        }
+
+        project360::cpu::CpuState state{};
+        state.pc = loaded.image->entry_point;
+        const project360::kernel::GuestExecutor executor(*loaded.image);
+        const auto result = executor.run(state, memory, instruction_limit);
+        std::cout << "XEX execution stopped after " << result.instructions_executed
+                  << " guest instructions at PC 0x" << std::hex << std::uppercase
+                  << state.pc << std::dec << ".\n" << result.stop.message << '\n';
+        if (result.stop.status == project360::cpu::StepStatus::instruction_limit_reached) {
+            std::cout << "The instruction budget is a diagnostic limit; this does not mean the title is running.\n";
+            return 3;
+        }
+        return result.stop.status == project360::cpu::StepStatus::fault ? 1 : 0;
+    } catch (const std::bad_alloc&) {
+        project360::common::log(project360::common::LogLevel::error, "memory",
+                                "unable to reserve 512 MiB for guest memory");
+        return 1;
+    }
+}
+
+int run_command_line(int argc, bool inspect, bool run, const std::filesystem::path& path) {
     if (inspect) return inspect_xex(path);
+    if (run) return run_xex(path);
     if (argc != 1) {
-        std::cerr << "Usage: project360 [--inspect-xex <path>]\n";
+        std::cerr << "Usage: project360 [--inspect-xex <path> | --run-xex <path>]\n";
         return 2;
     }
     return run_smoke_program();
@@ -91,13 +141,17 @@ int run_command_line(int argc, bool inspect, const std::filesystem::path& path) 
 #if defined(_WIN32)
 int wmain(int argc, wchar_t** argv) {
     const bool inspect = argc == 3 && std::wstring_view(argv[1]) == L"--inspect-xex";
-    const auto path = inspect ? std::filesystem::path(argv[2]) : std::filesystem::path{};
-    return run_command_line(argc, inspect, path);
+    const bool run = argc == 3 && std::wstring_view(argv[1]) == L"--run-xex";
+    const auto path = (inspect || run) ? std::filesystem::path(argv[2])
+                                       : std::filesystem::path{};
+    return run_command_line(argc, inspect, run, path);
 }
 #else
 int main(int argc, char** argv) {
     const bool inspect = argc == 3 && std::string_view(argv[1]) == "--inspect-xex";
-    const auto path = inspect ? std::filesystem::path(argv[2]) : std::filesystem::path{};
-    return run_command_line(argc, inspect, path);
+    const bool run = argc == 3 && std::string_view(argv[1]) == "--run-xex";
+    const auto path = (inspect || run) ? std::filesystem::path(argv[2])
+                                       : std::filesystem::path{};
+    return run_command_line(argc, inspect, run, path);
 }
 #endif

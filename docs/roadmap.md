@@ -12,7 +12,7 @@ The roadmap tracks evidence rather than estimated completion percentages.
 | 5 — GPU | Not started | Xenos command tests and Vulkan rendering evidence. |
 | 6 — Audio, input and storage | Not started | Device integration tests. |
 | 7 — IR/JIT | Not started | Differential correctness and measured speedup. |
-| 8 — Integration | Not started | Stable multi-subsystem program tests. |
+| 8 — Integration | Bounded synthetic XEX execution started; incomplete | `GuestExecutor::run` executes a loaded image through CPU instructions and implemented kernel-import thunks up to a finite instruction budget, continuing through modeled exceptions and returning explicit fault/budget stops. A synthetic XEX test verifies all eight imports and exact budget termination. The CLI `--run-xex` path allocates guest memory, loads supported unencrypted/uncompressed XEX2 and executes up to one million instructions. No external homebrew or commercial title has been run; startup services, process/thread initialization, GPU, audio and input integration remain incomplete. |
 | 9 — GTA V / other games | Not started | No game loading or execution is currently supported. |
 | 10 — Performance | Not started | Reproducible benchmarks and profiling. |
 | 11 — Expansion | Not started | Depends on prior compatibility evidence. |
@@ -23,4 +23,4 @@ The optional Qt 6 Widgets source now defines a dark Project360 shell, model-back
 
 ## Next engineering step
 
-Integrate the unencrypted XEX2 loader with the frontend and build a controlled test executable with a minimal kernel call path. Encrypted/compressed commercial XEX files remain unsupported, and real title execution also requires broader CPU semantics, imports and kernel services.
+Integrate the bounded XEX execution path with the frontend and run an authorized controlled test executable with a minimal kernel call path. The current CLI can load only unencrypted/uncompressed XEX2 and will stop after one million instructions or on a reported execution fault. Encrypted/compressed commercial XEX files remain unsupported, and real title execution also requires broader CPU semantics, imports and kernel services.

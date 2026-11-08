@@ -11,6 +11,11 @@
 
 namespace project360::kernel {
 
+struct GuestRunResult {
+    std::uint64_t instructions_executed{};
+    cpu::StepResult stop;
+};
+
 // Executes a loaded XEX and intercepts function-import thunks at their guest
 // addresses. This keeps import calls inside normal PPC control flow while the
 // kernel export runs as a host shim.
@@ -20,6 +25,9 @@ public:
 
     [[nodiscard]] cpu::StepResult step(cpu::CpuState& state,
                                        memory::GuestMemory& memory) const;
+    [[nodiscard]] GuestRunResult run(cpu::CpuState& state,
+                                     memory::GuestMemory& memory,
+                                     std::uint64_t instruction_limit) const;
 
 private:
     struct ImportAddress {
