@@ -597,6 +597,7 @@ XexLoadResult load_xex2(std::span<const std::byte> file, memory::GuestMemory& me
     constexpr std::uint32_t kSectionExecutable = 0x20000000U;
     constexpr std::uint32_t kSectionReadable = 0x40000000U;
     constexpr std::uint32_t kSectionWritable = 0x80000000U;
+constexpr std::uint32_t kXexImagePageSize4KiB = 0x10000000U;
 
     const auto xex_result = parse_xex2(file);
     if (!xex_result) return {{}, xex_result.error};
@@ -656,6 +657,27 @@ XexLoadResult load_xex2(std::span<const std::byte> file, memory::GuestMemory& me
     if (image_base != pe.image_base) {
         return {{}, "XEX image base differs from PE preferred base; relocations are unsupported"};
     }
+    constexpr std::uint64_t kXexPageSize4KiB = 4U * 1024U;
+    constexpr std::uint64_t kXexPageSize64KiB = 64U * 1024U;
+    const auto xex_page_size = (xex.image_flags & kXexImagePageSize4KiB) != 0U
+                                   ? kXexPageSize4KiB
+                                   : kXexPageSize64KiB;
+    std::uint64_t descriptor_image_size = 0;
+    for (const auto& descriptor : xex.page_descriptors) {
+        if (descriptor.page_count == 0U || descriptor.section_type < 1U ||
+            descriptor.section_type > 3U) {
+            return {{}, "XEX page descriptor has an unsupported section type or empty range"};
+        }
+        descriptor_image_size +=
+            static_cast<std::uint64_t>(descriptor.page_count) * xex_page_size;
+        if (descriptor_image_size > kMaximumImageSize) {
+            return {{}, "XEX page descriptors exceed the loader's 512 MiB image limit"};
+        }
+    }
+    if (!xex.page_descriptors.empty() &&
+        (descriptor_image_size < pe.image_size || image_base % xex_page_size != 0U)) {
+        return {{}, "XEX page descriptors do not cover the PE image or image base alignment"};
+    }
     XexMetadata loaded_xex{};
     try {
         loaded_xex = xex;
@@ -677,8 +699,10 @@ XexLoadResult load_xex2(std::span<const std::byte> file, memory::GuestMemory& me
         return {{}, "Xbox PE image base or mapped size is outside the supported range"};
     }
 
+    const auto image_allocation_size =
+        std::max<std::uint64_t>(pe.image_size, descriptor_image_size);
     const auto mapped_size =
-        (static_cast<std::uint64_t>(pe.image_size) + kPageSize - 1U) &
+        (image_allocation_size + kPageSize - 1U) &
         ~(static_cast<std::uint64_t>(kPageSize) - 1U);
     if (image_base + mapped_size > 0x100000000ULL) {
         return {{}, "rounded Xbox PE page range exceeds the 32-bit guest address space"};
@@ -692,8 +716,28 @@ XexLoadResult load_xex2(std::span<const std::byte> file, memory::GuestMemory& me
     }
     const auto page_count = static_cast<std::size_t>(mapped_size / kPageSize);
     std::vector<memory::GuestPageAccess> page_access;
+    std::vector<memory::GuestPageAccess> descriptor_access;
     try {
         page_access.assign(page_count, memory::GuestPageAccess::none);
+        if (!xex.page_descriptors.empty()) {
+            descriptor_access.assign(page_count, memory::GuestPageAccess::none);
+            std::size_t first_guest_page = 0;
+            const auto guest_pages_per_xex_page =
+                static_cast<std::size_t>(xex_page_size / kPageSize);
+            for (const auto& descriptor : xex.page_descriptors) {
+                const auto descriptor_page_count =
+                    static_cast<std::size_t>(descriptor.page_count) * guest_pages_per_xex_page;
+                auto access = memory::GuestPageAccess::read;
+                if (descriptor.section_type == 1U) {
+                    access = access | memory::GuestPageAccess::execute;
+                } else if (descriptor.section_type == 2U) {
+                    access = access | memory::GuestPageAccess::write;
+                }
+                std::fill_n(descriptor_access.begin() + first_guest_page,
+                            descriptor_page_count, access);
+                first_guest_page += descriptor_page_count;
+            }
+        }
     } catch (const std::bad_alloc&) {
         return {{}, "not enough host memory for XEX page permissions"};
     }
@@ -724,6 +768,14 @@ XexLoadResult load_xex2(std::span<const std::byte> file, memory::GuestMemory& me
         }
     }
 
+    if (!descriptor_access.empty()) {
+        for (std::size_t page = 0; page < page_access.size(); ++page) {
+            const auto pe_access = static_cast<std::uint8_t>(page_access[page]);
+            const auto xex_access = static_cast<std::uint8_t>(descriptor_access[page]);
+            page_access[page] = static_cast<memory::GuestPageAccess>(pe_access & xex_access);
+        }
+    }
+
     const auto entry_point = xex.entry_point.value_or(
         static_cast<std::uint32_t>(image_base + pe.entry_point_rva));
     if (entry_point < image_base || entry_point >= image_base + pe.image_size) {
@@ -739,6 +791,11 @@ XexLoadResult load_xex2(std::span<const std::byte> file, memory::GuestMemory& me
     });
     if (entry_section == pe.sections.end()) {
         return {{}, "XEX entry point is not inside an executable PE section"};
+    }
+    const auto entry_page = static_cast<std::size_t>(entry_rva / kPageSize);
+    if ((static_cast<std::uint8_t>(page_access[entry_page]) &
+         static_cast<std::uint8_t>(memory::GuestPageAccess::execute)) == 0U) {
+        return {{}, "XEX page descriptors do not mark the entry-point page executable"};
     }
 
     std::vector<memory::GuestPageMapping> mappings;

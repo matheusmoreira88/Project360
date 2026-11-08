@@ -146,6 +146,17 @@ std::vector<std::byte> make_basic_compressed_xex(std::span<const std::byte> xex)
     return compressed;
 }
 
+std::vector<std::byte> make_page_descriptor_xex(std::span<const std::byte> xex,
+                                                std::uint32_t section_type) {
+    std::vector<std::byte> described(xex.begin(), xex.end());
+    write_be32(described, 0x100U, 0x19cU);
+    write_be32(described, 0x104U, 0x2000U);
+    write_be32(described, 0x20cU, 0x10000000U);
+    write_be32(described, 0x280U, 1U);
+    write_be32(described, 0x284U, (2U << 4U) | section_type);
+    return described;
+}
+
 } // namespace
 
 int main() {
@@ -750,6 +761,39 @@ int main() {
     check(compressed_result &&
               compressed_result.image->xex.import_libraries[0].import_ordinals.back() == 270U,
           "basic-compressed XEX import thunks are decoded from guest image addresses");
+
+    const auto code_pages_xex = make_page_descriptor_xex(loadable_xex, 1U);
+    project360::memory::GuestMemory code_pages_memory(0x4000U);
+    const auto code_pages_result = project360::loader::load_xex2(
+        code_pages_xex, code_pages_memory, 0U);
+    std::uint32_t descriptor_entry_instruction = 0;
+    check(code_pages_result && code_pages_result.image->mapped_size == 0x2000U &&
+              code_pages_memory.fetch_u32_be(0x83000U, descriptor_entry_instruction) &&
+              descriptor_entry_instruction == ((14U << 26U) | (3U << 21U) | 0x5000U) &&
+              !code_pages_memory.write_u8(0x83000U, 0U),
+          "XEX code page descriptors preserve executable read-only guest page access");
+
+    const auto readonly_pages_xex = make_page_descriptor_xex(loadable_xex, 3U);
+    project360::memory::GuestMemory readonly_pages_memory(0x4000U);
+    const auto readonly_pages_result = project360::loader::load_xex2(
+        readonly_pages_xex, readonly_pages_memory, 0U);
+    check(!readonly_pages_result && !readonly_pages_memory.page_mapping_enabled(),
+          "XEX loader rejects an entry point in a page descriptor marked read-only");
+
+    const auto invalid_type_pages_xex = make_page_descriptor_xex(loadable_xex, 4U);
+    project360::memory::GuestMemory invalid_type_pages_memory(0x4000U);
+    const auto invalid_type_pages_result = project360::loader::load_xex2(
+        invalid_type_pages_xex, invalid_type_pages_memory, 0U);
+    check(!invalid_type_pages_result && !invalid_type_pages_memory.page_mapping_enabled(),
+          "XEX loader rejects unknown page descriptor types before mapping");
+
+    auto unaligned_pages_xex = make_page_descriptor_xex(loadable_xex, 1U);
+    write_be32(unaligned_pages_xex, 0x20cU, 0U);
+    project360::memory::GuestMemory unaligned_pages_memory(0x4000U);
+    const auto unaligned_pages_result = project360::loader::load_xex2(
+        unaligned_pages_xex, unaligned_pages_memory, 0U);
+    check(!unaligned_pages_result && !unaligned_pages_memory.page_mapping_enabled(),
+          "64 KiB XEX page mode rejects a misaligned image base before mapping");
 
     auto invalid_compressed_xex = compressed_xex;
     write_be32(invalid_compressed_xex, 0x388U, 0xffffffffU);
