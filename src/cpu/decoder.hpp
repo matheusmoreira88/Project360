@@ -102,6 +102,7 @@ enum class Opcode {
     lwz,
     stfs,
     stfd,
+    stfiwx,
     std,
     stw,
     lmw,

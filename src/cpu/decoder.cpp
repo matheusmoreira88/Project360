@@ -315,7 +315,7 @@ DecodeResult decode(std::uint32_t word) {
             xo10 == 535U || xo10 == 567U || xo10 == 599U || xo10 == 631U ||
             xo10 == 663U || xo10 == 695U || xo10 == 727U || xo10 == 759U ||
             xo10 == 407U || xo10 == 439U || xo10 == 534U || xo10 == 662U ||
-            xo10 == 790U || xo10 == 918U) {
+            xo10 == 790U || xo10 == 918U || xo10 == 983U) {
             if ((word & 1U) != 0U) return {{}, "indexed load/store record bit is reserved"};
             switch (xo10) {
             case 21: case 53: ins.opcode = Opcode::ld; break;
@@ -335,6 +335,7 @@ DecodeResult decode(std::uint32_t word) {
             case 599: case 631: ins.opcode = Opcode::lfd; break;
             case 663: case 695: ins.opcode = Opcode::stfs; break;
             case 727: case 759: ins.opcode = Opcode::stfd; break;
+            case 983: ins.opcode = Opcode::stfiwx; break;
             default: break;
             }
             ins.indexed = true;

@@ -1168,6 +1168,7 @@ void test_floating_point_load_store_transfers() {
     put_word(indexed_mem, 12, indexed_memory(2, 1, 5, 727)); // stfdx f2,r1,r5
     put_word(indexed_mem, 16, indexed_memory(6, 1, 2, 567)); // lfsux f6,r1,r2
     put_word(indexed_mem, 20, indexed_memory(6, 1, 6, 695)); // stfsux f6,r1,r6
+    put_word(indexed_mem, 24, indexed_memory(7, 0, 8, 983)); // stfiwx f7,0,r8
     cpu::CpuState indexed_state{};
     indexed_state.gpr[1] = 0x100U;
     indexed_state.gpr[2] = 0x20U;
@@ -1175,8 +1176,13 @@ void test_floating_point_load_store_transfers() {
     indexed_state.gpr[4] = 0x28U;
     indexed_state.gpr[5] = 0x30U;
     indexed_state.gpr[6] = 4U;
-    const auto indexed_result = cpu::Interpreter{}.run(indexed_state, indexed_mem, 6);
+    indexed_state.gpr[8] = 0x138U;
+    indexed_state.fpr[7] = 0x7ff81234deadbeefULL;
+    indexed_state.cr = 0x12345678U;
+    indexed_state.fpscr = 0x87654321U;
+    const auto indexed_result = cpu::Interpreter{}.run(indexed_state, indexed_mem, 7);
     std::uint32_t indexed_single = 0;
+    std::uint32_t indexed_integer = 0;
     std::uint64_t indexed_double = 0;
     check(indexed_result.status == cpu::StepStatus::instruction_limit_reached &&
               indexed_state.fpr[1] == std::bit_cast<std::uint64_t>(2.5) &&
@@ -1188,6 +1194,11 @@ void test_floating_point_load_store_transfers() {
               indexed_mem.read_u64_be(0x130U, indexed_double) &&
               indexed_double == std::bit_cast<std::uint64_t>(6.5),
           "indexed single/double stores preserve converted values and big-endian layout");
+    check(indexed_mem.read_u32_be(0x138U, indexed_integer) &&
+              indexed_integer == 0xdeadbeefU &&
+              indexed_state.fpr[7] == 0x7ff81234deadbeefULL &&
+              indexed_state.cr == 0x12345678U && indexed_state.fpscr == 0x87654321U,
+          "stfiwx stores raw low FPR bits without conversion or CR/FPSCR changes");
 
     memory::GuestMemory indexed_double_update_mem(512);
     (void)indexed_double_update_mem.write_u64_be(0x128U,
@@ -1211,6 +1222,23 @@ void test_floating_point_load_store_transfers() {
               cpu::decode(indexed_memory(1, 1, 2, 567)) &&
               !cpu::decode(indexed_memory(1, 1, 2, 567, true)),
           "indexed floating update validates RA and the reserved record bit");
+    check(cpu::decode(indexed_memory(1, 1, 2, 983)) &&
+              !cpu::decode(indexed_memory(1, 1, 2, 983, true)),
+          "stfiwx decodes its indexed form and rejects the reserved record bit");
+
+    memory::GuestMemory stfiwx_fault_memory(32);
+    put_word(stfiwx_fault_memory, 0, indexed_memory(1, 1, 2, 983));
+    cpu::CpuState stfiwx_fault_state{};
+    stfiwx_fault_state.gpr[1] = 4U;
+    stfiwx_fault_state.gpr[2] = 1U;
+    stfiwx_fault_state.fpr[1] = 0x0123456789abcdefULL;
+    const auto stfiwx_fault =
+        cpu::Interpreter{}.step(stfiwx_fault_state, stfiwx_fault_memory);
+    check(stfiwx_fault.status == cpu::StepStatus::fault && stfiwx_fault.fault_info &&
+              stfiwx_fault.fault_info->kind == cpu::FaultKind::data_alignment &&
+              stfiwx_fault_state.fpr[1] == 0x0123456789abcdefULL &&
+              stfiwx_fault_state.pc == 0U,
+          "misaligned stfiwx reports a data-alignment fault without changing architectural state");
 }
 
 void test_floating_point_sign_and_move_instructions() {

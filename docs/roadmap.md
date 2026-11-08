@@ -17,6 +17,8 @@ The roadmap tracks evidence rather than estimated completion percentages.
 | 10 — Performance | Not started | Reproducible benchmarks and profiling. |
 | 11 — Expansion | Not started | Depends on prior compatibility evidence. |
 
+The CPU subset also now executes the optional indexed PowerPC `stfiwx` transfer. Tests verify raw low-word storage, state preservation, reserved encoding rejection and alignment faults; support for this optional instruction is an emulator capability, not evidence that a particular Xenon revision implements it.
+
 ## Frontend status
 
 The optional Qt 6 Widgets source now defines a dark Project360 shell, model-backed library, persistent local `.xex` paths, case-insensitive name search, name ordering, path removal, and explicit unavailable states. The independent library store has bounded, versioned parsing and passing unit tests. Windows CI compiled the GUI and passed the Qt model and offscreen window smoke tests in Debug and Release ([run 42451851613](https://github.com/matheusmoreira88/Project360/actions/runs/42451851613)). Manual visual review has not been performed, and core emulator phases remain independent of this optional target.

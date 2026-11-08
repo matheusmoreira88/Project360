@@ -993,6 +993,13 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         if (ins.update) state.gpr[ins.ra] = address;
         break;
     }
+    case Opcode::stfiwx: {
+        const auto address = base + state.gpr[ins.rb];
+        if (!memory.write_u32_be(address, static_cast<std::uint32_t>(state.fpr[ins.rt]))) {
+            return data_fault(address, 4U, "stfiwx alignment or address fault");
+        }
+        break;
+    }
     case Opcode::std: {
         const auto offset = ins.indexed ? state.gpr[ins.rb] : static_cast<std::uint64_t>(ins.immediate);
         const auto address = base + offset;
