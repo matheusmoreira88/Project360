@@ -16,6 +16,7 @@ struct CpuState {
     std::uint64_t srr1{};
     std::uint32_t cr{};
     std::uint32_t xer{};
+    std::uint32_t fpscr{};
 };
 
 } // namespace project360::cpu

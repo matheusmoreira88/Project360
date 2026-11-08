@@ -210,6 +210,22 @@ StepResult Interpreter::step(CpuState& state, memory::GuestMemory& memory) const
         return fault(FaultKind::interpreter_internal, old_pc, std::move(message), word);
     };
     switch (ins.opcode) {
+    case Opcode::floating_move_register:
+    case Opcode::floating_negate:
+    case Opcode::floating_absolute:
+    case Opcode::floating_negative_absolute: {
+        constexpr std::uint64_t kSignBit = 0x8000000000000000ULL;
+        const auto source = state.fpr[ins.rb];
+        switch (ins.opcode) {
+        case Opcode::floating_move_register: state.fpr[ins.rt] = source; break;
+        case Opcode::floating_negate: state.fpr[ins.rt] = source ^ kSignBit; break;
+        case Opcode::floating_absolute: state.fpr[ins.rt] = source & ~kSignBit; break;
+        case Opcode::floating_negative_absolute: state.fpr[ins.rt] = source | kSignBit; break;
+        default: return internal_fault("invalid floating-point unary opcode");
+        }
+        if (ins.record) set_cr_field(state, 1U, (state.fpscr >> 28U) & 0xfU);
+        break;
+    }
     case Opcode::addi:
         state.gpr[ins.rt] = base + static_cast<std::uint64_t>(ins.immediate);
         break;

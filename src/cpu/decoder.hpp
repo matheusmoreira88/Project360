@@ -101,7 +101,11 @@ enum class Opcode {
     branch_conditional,
     branch_lr,
     branch_ctr,
-    return_from_interrupt_doubleword
+    return_from_interrupt_doubleword,
+    floating_move_register,
+    floating_negate,
+    floating_absolute,
+    floating_negative_absolute
 };
 
 struct DecodedInstruction {

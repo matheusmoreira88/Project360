@@ -44,6 +44,14 @@ std::uint32_t add(std::uint8_t rd, std::uint8_t ra, std::uint8_t rb, bool record
            (266U << 1U) | (record ? 1U : 0U);
 }
 
+std::uint32_t fpr_unary(std::uint8_t fd, std::uint8_t fb, std::uint16_t xo,
+                        bool record = false, std::uint8_t reserved_fra = 0) {
+    return (63U << 26U) | (static_cast<std::uint32_t>(fd) << 21U) |
+           (static_cast<std::uint32_t>(reserved_fra) << 16U) |
+           (static_cast<std::uint32_t>(fb) << 11U) |
+           (static_cast<std::uint32_t>(xo) << 1U) | (record ? 1U : 0U);
+}
+
 std::uint32_t add_xo(std::uint8_t rd, std::uint8_t ra, std::uint8_t rb, std::uint16_t xo,
                      bool overflow_enable = false, bool record = false) {
     return (31U << 26U) | (static_cast<std::uint32_t>(rd) << 21U) |
@@ -980,6 +988,36 @@ void test_floating_point_load_store_transfers() {
           "indexed floating update validates RA and the reserved record bit");
 }
 
+void test_floating_point_sign_and_move_instructions() {
+    using namespace project360;
+    memory::GuestMemory mem(32);
+    put_word(mem, 0, fpr_unary(2, 1, 72, true)); // fmr. f2,f1
+    put_word(mem, 4, fpr_unary(3, 1, 40)); // fneg f3,f1
+    put_word(mem, 8, fpr_unary(4, 1, 264)); // fabs f4,f1
+    put_word(mem, 12, fpr_unary(5, 3, 136)); // fnabs f5,f3
+
+    cpu::CpuState state{};
+    constexpr std::uint64_t kNegativeNanPayload = 0xfff0000012345678ULL;
+    constexpr std::uint64_t kPositiveNanPayload = 0x7ff0000012345678ULL;
+    state.fpr[1] = kNegativeNanPayload;
+    state.fpscr = 0xa0000000U;
+    state.cr = 0x12345678U;
+
+    const auto result = cpu::Interpreter{}.run(state, mem, 4);
+    const auto expected_cr1 = (0x12345678U & ~0x0f000000U) | 0x0a000000U;
+    check(result.status == cpu::StepStatus::instruction_limit_reached &&
+              state.fpr[2] == kNegativeNanPayload && state.fpr[3] == kPositiveNanPayload &&
+              state.fpr[4] == kPositiveNanPayload && state.fpr[5] == kNegativeNanPayload,
+          "fmr/fneg/fabs/fnabs preserve NaN payload bits and apply exact sign-bit semantics");
+    check(state.cr == expected_cr1 && state.fpscr == 0xa0000000U,
+          "record-form floating move copies FPSCR summary bits to CR1 without changing FPSCR");
+
+    const auto reserved = cpu::decode(fpr_unary(2, 1, 72, false, 1));
+    const auto unsupported = cpu::decode(fpr_unary(2, 1, 21));
+    check(!reserved && !unsupported,
+          "reserved unary FPR fields and unsupported arithmetic opcodes are diagnosed");
+}
+
 void test_indexed_memory_instructions() {
     using namespace project360;
     memory::GuestMemory mem(512);
@@ -1906,6 +1944,7 @@ int main() {
     test_load_store_update_instructions();
     test_doubleword_memory_instructions();
     test_floating_point_load_store_transfers();
+    test_floating_point_sign_and_move_instructions();
     test_indexed_memory_instructions();
     test_indexed_update_memory_instructions();
     test_byte_reversed_indexed_memory_instructions();

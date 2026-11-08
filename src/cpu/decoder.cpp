@@ -159,6 +159,23 @@ DecodeResult decode(std::uint32_t word) {
         ins.immediate = std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(ds << 2U));
         return {ins, {}};
     }
+    case 63: {
+        const auto xo10 = static_cast<std::uint16_t>((word >> 1U) & 0x3ffU);
+        switch (xo10) {
+        case 72: ins.opcode = Opcode::floating_move_register; break;
+        case 40: ins.opcode = Opcode::floating_negate; break;
+        case 264: ins.opcode = Opcode::floating_absolute; break;
+        case 136: ins.opcode = Opcode::floating_negative_absolute; break;
+        default:
+            return {{}, "unsupported floating-point extended opcode " +
+                             std::to_string(xo10)};
+        }
+        if (ins.ra != 0U) {
+            return {{}, "floating-point unary instruction reserved FRA field is nonzero"};
+        }
+        ins.record = (word & 1U) != 0U;
+        return {ins, {}};
+    }
     case 46:
     case 47:
         ins.opcode = primary == 46U ? Opcode::lmw : Opcode::stmw;
