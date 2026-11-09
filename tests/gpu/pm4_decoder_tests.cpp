@@ -2385,7 +2385,7 @@ void test_tiled_texture_block_addressing_and_reads() {
                 auto descriptor = clamp_fetch.constant;
                 descriptor.clamp_modes[0] = clamp_mode;
                 descriptor.clamp_modes[1] = 2U;
-                return sample_xenos_tiled_2d_texture_normalized_point(
+                return sample_xenos_tiled_2d_texture_normalized(
                     descriptor, u, 0.5F, TextureSampleFilter::point, memory);
             };
             const auto repeat_negative = sample_u(-0.25F, 0U);
@@ -2403,16 +2403,40 @@ void test_tiled_texture_block_addressing_and_reads() {
                       mirror_clamp_negative.value.r == 0x11U / 255.0F,
                   "normalized nearest lookup resolves repeat mirror edge and mirror-once modes");
             check(!sample_u(-0.25F, 4U) &&
-                      !sample_xenos_tiled_2d_texture_normalized_point(
-                          clamp_fetch.constant, 0.25F, 0.5F, TextureSampleFilter::linear,
-                          memory) &&
-                      !sample_xenos_tiled_2d_texture_normalized_point(
+                      !sample_xenos_tiled_2d_texture_normalized(
                           clamp_fetch.constant, std::numeric_limits<float>::quiet_NaN(), 0.5F,
                           TextureSampleFilter::point, memory),
-                  "normalized sampling rejects unsupported borders, linear filtering and NaN");
+                  "normalized point sampling rejects unsupported borders and NaN");
+            const auto sample_linear_u = [&](float u, std::uint8_t clamp_mode) {
+                auto descriptor = clamp_fetch.constant;
+                descriptor.clamp_modes[0] = clamp_mode;
+                descriptor.clamp_modes[1] = 2U;
+                return sample_xenos_tiled_2d_texture_normalized(
+                    descriptor, u, 0.5F, TextureSampleFilter::linear, memory);
+            };
+            const auto linear_midpoint = sample_linear_u(0.5F, 2U);
+            const auto linear_texel_center = sample_linear_u(0.375F, 2U);
+            const auto linear_repeat_seam = sample_linear_u(0.0F, 0U);
+            const auto linear_clamp_edge = sample_linear_u(0.0F, 2U);
+            const auto linear_mirror_edge = sample_linear_u(1.0F, 1U);
+            const auto linear_border_edge = sample_linear_u(0.0F, 6U);
+            auto integer_filter_fetch = clamp_fetch.constant;
+            integer_filter_fetch.number_format = 1U;
+            const auto linear_integer = sample_xenos_tiled_2d_texture_normalized(
+                integer_filter_fetch, 0.5F, 0.5F, TextureSampleFilter::linear, memory);
+            check(linear_midpoint &&
+                      std::abs(linear_midpoint.value.r - 17.5F / 255.0F) < 0.000001F &&
+                      linear_texel_center &&
+                      linear_texel_center.value.r == 17.0F / 255.0F &&
+                      linear_repeat_seam &&
+                      std::abs(linear_repeat_seam.value.r - 17.5F / 255.0F) < 0.000001F &&
+                      linear_clamp_edge && linear_clamp_edge.value.r == 16.0F / 255.0F &&
+                      linear_mirror_edge && linear_mirror_edge.value.r == 19.0F / 255.0F &&
+                      !linear_border_edge && !linear_integer,
+                  "bilinear sampling blends four taps and resolves repeat, mirror and clamp edges");
             auto other_clamp_policy = clamp_fetch.constant;
             other_clamp_policy.nearest_clamp_policy = true;
-            check(!sample_xenos_tiled_2d_texture_normalized_point(
+            check(!sample_xenos_tiled_2d_texture_normalized(
                       other_clamp_policy, 0.25F, 0.5F, TextureSampleFilter::point, memory),
                   "normalized sampling rejects the unverified D3D/OpenGL nearest clamp policy");
         }
