@@ -2364,6 +2364,58 @@ void test_tiled_texture_block_addressing_and_reads() {
               "point sample composes tiled read endian decode numeric modes and swizzle");
         check(!sample_xenos_tiled_2d_texture_point(point_fetch, 64U, 0U, memory),
               "point sample propagates descriptor coordinate bounds errors");
+
+        const auto clamp_fetch = make_fetch(6U, 0x3000U, 4U, 1U, 1U);
+        check(static_cast<bool>(clamp_fetch),
+              "normalized clamp fixture has a valid tiled texture descriptor");
+        if (clamp_fetch) {
+            bool texels_loaded = true;
+            for (std::uint32_t x = 0U; x < 4U; ++x) {
+                const auto offset = xenos_tiled_2d_block_offset(
+                    x, 0U, 4U, 1U, 32U, 4U);
+                const std::array<std::byte, 4> texel{
+                    std::byte{0U}, std::byte{0U},
+                    static_cast<std::byte>(0x10U + x), std::byte{0xffU}};
+                texels_loaded = texels_loaded && offset &&
+                                memory.load(0x3000U + offset.byte_offset, texel);
+            }
+            check(texels_loaded, "normalized clamp fixture writes four uniquely colored texels");
+
+            const auto sample_u = [&](float u, std::uint8_t clamp_mode) {
+                auto descriptor = clamp_fetch.constant;
+                descriptor.clamp_modes[0] = clamp_mode;
+                descriptor.clamp_modes[1] = 2U;
+                return sample_xenos_tiled_2d_texture_normalized_point(
+                    descriptor, u, 0.5F, TextureSampleFilter::point, memory);
+            };
+            const auto repeat_negative = sample_u(-0.25F, 0U);
+            const auto repeat_positive = sample_u(1.25F, 0U);
+            const auto mirror_positive = sample_u(1.25F, 1U);
+            const auto clamp_negative = sample_u(-0.25F, 2U);
+            const auto clamp_positive = sample_u(1.25F, 2U);
+            const auto mirror_clamp_negative = sample_u(-0.25F, 3U);
+            check(repeat_negative && repeat_negative.value.r == 0x13U / 255.0F &&
+                      repeat_positive && repeat_positive.value.r == 0x11U / 255.0F &&
+                      mirror_positive && mirror_positive.value.r == 0x13U / 255.0F &&
+                      clamp_negative && clamp_negative.value.r == 0x10U / 255.0F &&
+                      clamp_positive && clamp_positive.value.r == 0x13U / 255.0F &&
+                      mirror_clamp_negative &&
+                      mirror_clamp_negative.value.r == 0x11U / 255.0F,
+                  "normalized nearest lookup resolves repeat mirror edge and mirror-once modes");
+            check(!sample_u(-0.25F, 4U) &&
+                      !sample_xenos_tiled_2d_texture_normalized_point(
+                          clamp_fetch.constant, 0.25F, 0.5F, TextureSampleFilter::linear,
+                          memory) &&
+                      !sample_xenos_tiled_2d_texture_normalized_point(
+                          clamp_fetch.constant, std::numeric_limits<float>::quiet_NaN(), 0.5F,
+                          TextureSampleFilter::point, memory),
+                  "normalized sampling rejects unsupported borders, linear filtering and NaN");
+            auto other_clamp_policy = clamp_fetch.constant;
+            other_clamp_policy.nearest_clamp_policy = true;
+            check(!sample_xenos_tiled_2d_texture_normalized_point(
+                      other_clamp_policy, 0.25F, 0.5F, TextureSampleFilter::point, memory),
+                  "normalized sampling rejects the unverified D3D/OpenGL nearest clamp policy");
+        }
         check(!read_xenos_tiled_2d_texture_block(rgba_fetch.constant, 64U, 0U, memory),
               "descriptor-backed texture read rejects coordinates outside visible dimensions");
     }
