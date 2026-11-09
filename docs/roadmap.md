@@ -20,6 +20,8 @@ Latest GPU increment: PM4 `IM_LOAD` and `IM_LOAD_IMMEDIATE` capture bounded vert
 | 11 — Expansion | Not started | Depends on prior compatibility evidence. |
 
 ## Current GPU milestone
+The shader-side three-dword `tfetch` instruction decoder now exposes coordinate mode, texture slot, swizzles, filter fields, LOD/gradient flags, signed bias and offsets, dimension, and predicate state while retaining raw words. The decoder is covered by literal-field tests; it does not execute texture fetches. Filter precedence, shader register integration, LOD/mip selection and GPU sampling remain open.
+
 
 The bounded raster-state path decodes Xenos screen/window scissor registers, applies the signed window offset when enabled, intersects with the screen scissor and clips to the selected target. The Vulkan smoke test drives those values through a synthetic PM4 draw and verifies partial coverage on the RTX 5050. Debug and Release builds and all configured tests passed with and without the optional Vulkan backend. The tested subset includes clipped X/Y mapping, D3D and symmetric -W-to-W depth clipping, and bounded Z scale/offset mapping. Clipping-disabled draws and user clip planes remain unsupported. Guest shader translation, presentation and game compatibility are still absent. The compatibility ladder remains at synthetic tests; no homebrew or game has run.
 

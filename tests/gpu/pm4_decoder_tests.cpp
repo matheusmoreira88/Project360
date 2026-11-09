@@ -2073,6 +2073,60 @@ void test_texture_fetch_constant_metadata() {
           "unsupported Xenos texture storage formats fail explicitly");
 }
 
+void test_texture_fetch_instruction_decode() {
+    using namespace project360::gpu::xenos;
+    constexpr std::array<std::uint32_t, 3> all_fields_set{
+        0xffffffffU,
+        0xffffffffU,
+        0xffffffffU,
+    };
+    const auto decoded = decode_texture_fetch_instruction(all_fields_set);
+    check(static_cast<bool>(decoded), "Xenos texture-fetch instruction decodes three dwords");
+    check(decoded.instruction.raw_words == all_fields_set &&
+              decoded.instruction.opcode == 0x1fU &&
+              decoded.instruction.source_register == 0x3fU &&
+              decoded.instruction.source_register_relative &&
+              decoded.instruction.destination_register == 0x3fU &&
+              decoded.instruction.destination_register_relative &&
+              decoded.instruction.fetch_valid_only &&
+              decoded.instruction.texture_slot == 0x1fU &&
+              decoded.instruction.unnormalized_coordinates &&
+              decoded.instruction.source_swizzle == 0x3fU,
+          "texture-fetch word zero preserves opcode, registers, slot and coordinate fields");
+    check(decoded.instruction.destination_swizzle ==
+                  std::array<std::uint8_t, 4>{7U, 7U, 7U, 7U} &&
+              decoded.instruction.magnification_filter == 3U &&
+              decoded.instruction.minification_filter == 3U &&
+              decoded.instruction.mip_filter == 3U &&
+              decoded.instruction.anisotropic_filter == 7U &&
+              decoded.instruction.arbitrary_filter == 7U &&
+              decoded.instruction.volume_magnification_filter == 3U &&
+              decoded.instruction.volume_minification_filter == 3U &&
+              decoded.instruction.use_computed_lod &&
+              decoded.instruction.use_register_lod && decoded.instruction.predicated,
+          "texture-fetch word one exposes swizzles, filter fields and LOD flags");
+    check(decoded.instruction.register_gradients && decoded.instruction.sample_location &&
+              decoded.instruction.lod_bias_sixteenths == -1 &&
+              decoded.instruction.reserved_word2_bits == 0x1fU &&
+              decoded.instruction.dimension == 3U &&
+              decoded.instruction.offset_x_half_texels == -1 &&
+              decoded.instruction.offset_y_half_texels == -1 &&
+              decoded.instruction.offset_z_half_texels == -1 &&
+              decoded.instruction.predicate_condition,
+          "texture-fetch word two sign-extends bias and offsets and retains reserved bits");
+
+    constexpr std::array<std::uint32_t, 3> zero_fields{};
+    const auto zero_decoded = decode_texture_fetch_instruction(zero_fields);
+    check(static_cast<bool>(zero_decoded) && zero_decoded.instruction.opcode == 0U &&
+              zero_decoded.instruction.dimension == 0U &&
+              zero_decoded.instruction.lod_bias_sixteenths == 0 &&
+              zero_decoded.instruction.offset_x_half_texels == 0 &&
+              zero_decoded.instruction.offset_y_half_texels == 0 &&
+              zero_decoded.instruction.offset_z_half_texels == 0 &&
+              !zero_decoded.instruction.predicated,
+          "texture-fetch decoder handles zero fields without inventing execution support");
+}
+
 void test_texture_block_rgba_decoding() {
     using namespace project360::gpu::xenos;
 
@@ -2888,6 +2942,7 @@ int main() {
     test_vertex_shader_index_transform();
     test_vertex_fetch_descriptors_and_memory();
     test_texture_fetch_constant_metadata();
+    test_texture_fetch_instruction_decode();
     test_texture_block_rgba_decoding();
     test_tiled_texture_block_addressing_and_reads();
     test_vfetch_instruction_and_attribute_range();

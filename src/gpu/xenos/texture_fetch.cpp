@@ -99,6 +99,57 @@ TextureFetchDecodeResult decode_texture_fetch_constant(
     return {constant, {}};
 }
 
+TextureFetchInstructionDecodeResult decode_texture_fetch_instruction(
+    const std::array<std::uint32_t, 3>& dwords) noexcept {
+    const auto word0 = dwords[0];
+    const auto word1 = dwords[1];
+    const auto word2 = dwords[2];
+
+    TextureFetchInstruction instruction{};
+    instruction.raw_words = dwords;
+    instruction.opcode = static_cast<std::uint8_t>(word0 & 0x1fU);
+    instruction.source_register = static_cast<std::uint8_t>((word0 >> 5U) & 0x3fU);
+    instruction.source_register_relative = ((word0 >> 11U) & 1U) != 0U;
+    instruction.destination_register = static_cast<std::uint8_t>((word0 >> 12U) & 0x3fU);
+    instruction.destination_register_relative = ((word0 >> 18U) & 1U) != 0U;
+    instruction.fetch_valid_only = ((word0 >> 19U) & 1U) != 0U;
+    instruction.texture_slot = static_cast<std::uint8_t>((word0 >> 20U) & 0x1fU);
+    instruction.unnormalized_coordinates = ((word0 >> 25U) & 1U) != 0U;
+    instruction.source_swizzle = static_cast<std::uint8_t>((word0 >> 26U) & 0x3fU);
+
+    for (std::size_t lane = 0U; lane < instruction.destination_swizzle.size(); ++lane) {
+        instruction.destination_swizzle[lane] =
+            static_cast<std::uint8_t>((word1 >> (lane * 3U)) & 0x7U);
+    }
+    instruction.magnification_filter = static_cast<std::uint8_t>((word1 >> 12U) & 0x3U);
+    instruction.minification_filter = static_cast<std::uint8_t>((word1 >> 14U) & 0x3U);
+    instruction.mip_filter = static_cast<std::uint8_t>((word1 >> 16U) & 0x3U);
+    instruction.anisotropic_filter = static_cast<std::uint8_t>((word1 >> 18U) & 0x7U);
+    instruction.arbitrary_filter = static_cast<std::uint8_t>((word1 >> 21U) & 0x7U);
+    instruction.volume_magnification_filter =
+        static_cast<std::uint8_t>((word1 >> 24U) & 0x3U);
+    instruction.volume_minification_filter =
+        static_cast<std::uint8_t>((word1 >> 26U) & 0x3U);
+    instruction.use_computed_lod = ((word1 >> 28U) & 1U) != 0U;
+    instruction.use_register_lod = ((word1 >> 29U) & 1U) != 0U;
+    instruction.predicated = ((word1 >> 31U) & 1U) != 0U;
+
+    instruction.register_gradients = (word2 & 1U) != 0U;
+    instruction.sample_location = ((word2 >> 1U) & 1U) != 0U;
+    instruction.lod_bias_sixteenths =
+        static_cast<std::int8_t>(sign_extend((word2 >> 2U) & 0x7fU, 7U));
+    instruction.reserved_word2_bits = static_cast<std::uint8_t>((word2 >> 9U) & 0x1fU);
+    instruction.dimension = static_cast<std::uint8_t>((word2 >> 14U) & 0x3U);
+    instruction.offset_x_half_texels =
+        static_cast<std::int8_t>(sign_extend((word2 >> 16U) & 0x1fU, 5U));
+    instruction.offset_y_half_texels =
+        static_cast<std::int8_t>(sign_extend((word2 >> 21U) & 0x1fU, 5U));
+    instruction.offset_z_half_texels =
+        static_cast<std::int8_t>(sign_extend((word2 >> 26U) & 0x1fU, 5U));
+    instruction.predicate_condition = ((word2 >> 31U) & 1U) != 0U;
+    return {instruction, {}};
+}
+
 TextureFetchConstantBankResult decode_texture_fetch_constant_bank(
     std::span<const std::uint32_t> register_file,
     std::span<const std::uint8_t> required_slots) {

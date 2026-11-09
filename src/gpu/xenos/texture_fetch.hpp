@@ -66,6 +66,49 @@ struct TextureFetchDecodeResult {
     [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
 };
 
+// Decoded fields from one three-dword Xenos texture-fetch instruction. Raw
+// enum values and words are preserved because several execution modes are not
+// yet implemented or validated.
+struct TextureFetchInstruction {
+    std::array<std::uint32_t, 3> raw_words{};
+    std::array<std::uint8_t, 4> destination_swizzle{};
+    std::uint8_t opcode{};
+    std::uint8_t source_register{};
+    std::uint8_t destination_register{};
+    std::uint8_t texture_slot{};
+    std::uint8_t source_swizzle{};
+    std::uint8_t magnification_filter{};
+    std::uint8_t minification_filter{};
+    std::uint8_t mip_filter{};
+    std::uint8_t anisotropic_filter{};
+    std::uint8_t arbitrary_filter{};
+    std::uint8_t volume_magnification_filter{};
+    std::uint8_t volume_minification_filter{};
+    std::uint8_t dimension{};
+    std::int8_t lod_bias_sixteenths{};
+    std::int8_t offset_x_half_texels{};
+    std::int8_t offset_y_half_texels{};
+    std::int8_t offset_z_half_texels{};
+    std::uint8_t reserved_word2_bits{};
+    bool source_register_relative{};
+    bool destination_register_relative{};
+    bool fetch_valid_only{};
+    bool unnormalized_coordinates{};
+    bool use_computed_lod{};
+    bool use_register_lod{};
+    bool predicated{};
+    bool register_gradients{};
+    bool sample_location{};
+    bool predicate_condition{};
+};
+
+struct TextureFetchInstructionDecodeResult {
+    TextureFetchInstruction instruction{};
+    std::string error;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return error.empty(); }
+};
+
 struct TextureFetchConstantBankResult {
     std::array<TextureFetchConstant, 32> constants{};
     std::string error;
@@ -92,6 +135,11 @@ struct TextureStorageLayoutResult {
 // encoding. Texture memory layout and sampling are not performed here.
 [[nodiscard]] TextureFetchDecodeResult decode_texture_fetch_constant(
     const std::array<std::uint32_t, 6>& dwords);
+
+// Decodes one three-dword shader texture-fetch instruction. This is a field
+// decoder only; it does not imply that its opcode or sampling modes execute.
+[[nodiscard]] TextureFetchInstructionDecodeResult decode_texture_fetch_instruction(
+    const std::array<std::uint32_t, 3>& dwords) noexcept;
 
 // Resolves only requested texture slots from the shared FETCH_CONSTANT_0
 // register bank. Texture slots contain six dwords; vertex slots use a separate
