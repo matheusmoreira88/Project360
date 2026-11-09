@@ -1,5 +1,6 @@
 #include "gpu/xenos/shader_execution.hpp"
 
+#include "gpu/xenos/texture_sampling.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
 #include "memory/guest_memory.hpp"
 
@@ -10,6 +11,133 @@
 #include <utility>
 
 namespace project360::gpu::xenos {
+namespace {
+
+bool resolve_texture_filter(std::uint8_t instruction_filter,
+                            std::uint8_t descriptor_filter,
+                            TextureSampleFilter& filter) {
+    const auto resolved = instruction_filter == 3U ? descriptor_filter : instruction_filter;
+    if (resolved == 0U) {
+        filter = TextureSampleFilter::point;
+        return true;
+    }
+    if (resolved == 1U) {
+        filter = TextureSampleFilter::linear;
+        return true;
+    }
+    return false;
+}
+
+bool execute_texture_fetch_instruction(
+    const TextureFetchInstruction& instruction,
+    std::span<const TextureFetchConstant> texture_constants,
+    const memory::GuestMemory& memory, ShaderAluTemporaryRegisterBank& registers,
+    std::string& error) {
+    if (instruction.opcode != 1U) {
+        error = "Unsupported Xenos texture-fetch opcode " +
+                std::to_string(instruction.opcode);
+        return false;
+    }
+    if (instruction.source_register_relative || instruction.destination_register_relative) {
+        error = "Relative Xenos texture-fetch registers are not implemented";
+        return false;
+    }
+    if (instruction.source_register >= registers.size() ||
+        instruction.destination_register >= registers.size()) {
+        error = "Xenos texture-fetch register index exceeds the temporary bank";
+        return false;
+    }
+    if (instruction.texture_slot >= texture_constants.size()) {
+        error = "Xenos texture fetch references a missing texture constant";
+        return false;
+    }
+    if (instruction.predicated) {
+        error = "Predicated Xenos texture fetch requires predicate state";
+        return false;
+    }
+    if (instruction.unnormalized_coordinates || instruction.dimension != 1U) {
+        error = "Only normalized 2D Xenos texture coordinates are supported";
+        return false;
+    }
+    if (instruction.use_register_lod || instruction.register_gradients ||
+        instruction.offset_x_half_texels != 0 || instruction.offset_y_half_texels != 0 ||
+        instruction.offset_z_half_texels != 0 || instruction.sample_location) {
+        error = "Xenos texture LOD, gradients, offsets or sample-location mode are unsupported";
+        return false;
+    }
+
+    const auto& fetch = texture_constants[instruction.texture_slot];
+    if (fetch.dimension != TextureDataDimension::two_d_or_stacked || fetch.stacked) {
+        error = "Xenos tfetch requires a non-stacked 2D texture descriptor";
+        return false;
+    }
+    if (fetch.mip_min_level != 0U || fetch.mip_max_level != 0U) {
+        error = "Xenos tfetch currently supports base-level-only texture descriptors";
+        return false;
+    }
+    TextureSampleFilter magnification_filter{};
+    TextureSampleFilter minification_filter{};
+    if (!resolve_texture_filter(instruction.magnification_filter,
+                                fetch.magnification_filter, magnification_filter) ||
+        !resolve_texture_filter(instruction.minification_filter,
+                                fetch.minification_filter, minification_filter)) {
+        error = "Xenos tfetch filter mode is unsupported";
+        return false;
+    }
+    if (magnification_filter != minification_filter) {
+        error = "Different Xenos minification and magnification filters require LOD selection";
+        return false;
+    }
+    const auto anisotropic_filter =
+        instruction.anisotropic_filter == 7U ? fetch.anisotropic_filter
+                                             : instruction.anisotropic_filter;
+    if (anisotropic_filter != 0U || instruction.arbitrary_filter != 0U) {
+        error = "Anisotropic or arbitrary Xenos texture filtering is unsupported";
+        return false;
+    }
+    if (instruction.volume_magnification_filter != 0U &&
+        instruction.volume_magnification_filter != 3U) {
+        error = "Volume magnification filtering is invalid for this 2D tfetch";
+        return false;
+    }
+    if (instruction.volume_minification_filter != 0U &&
+        instruction.volume_minification_filter != 3U) {
+        error = "Volume minification filtering is invalid for this 2D tfetch";
+        return false;
+    }
+
+    const auto& coordinate_register = registers[instruction.source_register];
+    const auto u_component = static_cast<std::size_t>(instruction.source_swizzle & 0x3U);
+    const auto v_component = static_cast<std::size_t>((instruction.source_swizzle >> 2U) & 0x3U);
+    const auto sample = sample_xenos_tiled_2d_texture_normalized(
+        fetch, coordinate_register[u_component], coordinate_register[v_component],
+        magnification_filter, memory);
+    if (!sample) {
+        error = sample.error;
+        return false;
+    }
+
+    const std::array<float, 4> sampled_components{
+        sample.value.r, sample.value.g, sample.value.b, sample.value.a};
+    auto destination = registers[instruction.destination_register];
+    for (std::size_t lane = 0U; lane < instruction.destination_swizzle.size(); ++lane) {
+        const auto selector = instruction.destination_swizzle[lane];
+        if (selector <= 3U) {
+            destination[lane] = sampled_components[selector];
+        } else if (selector == 4U) {
+            destination[lane] = 0.0F;
+        } else if (selector == 5U) {
+            destination[lane] = 1.0F;
+        } else if (selector != 7U) {
+            error = "Xenos tfetch destination swizzle uses a reserved selector";
+            return false;
+        }
+    }
+    registers[instruction.destination_register] = destination;
+    return true;
+}
+
+} // namespace
 
 ShaderExecInstruction decode_shader_exec_instruction(
     const std::array<std::uint32_t, 2>& words) noexcept {
@@ -100,7 +228,8 @@ ShaderExecResult execute_shader_exec_block(
     std::span<const std::array<float, 4>> float_constants,
     float initial_previous_scalar,
     std::span<const bool> boolean_constants,
-    ShaderVertexOutputs initial_vertex_outputs) {
+    ShaderVertexOutputs initial_vertex_outputs,
+    std::span<const TextureFetchConstant> texture_constants) {
     const bool unconditional = exec.opcode == 1U || exec.opcode == 2U;
     const bool conditional = exec.opcode == 3U || exec.opcode == 4U;
     if (!unconditional && !conditional) {
@@ -149,19 +278,31 @@ ShaderExecResult execute_shader_exec_block(
             continue;
         }
 
-        const auto decoded = decode_vertex_fetch_instruction(words);
-        if (!decoded) {
-            return {{}, 0U, false,
-                    "Xenos EXEC fetch slot " + std::to_string(slot) + ": " + decoded.error};
+        const auto opcode = static_cast<std::uint8_t>(words[0] & 0x1fU);
+        if (opcode == 0U) {
+            const auto decoded = decode_vertex_fetch_instruction(words);
+            if (!decoded) {
+                return {{}, 0U, false,
+                        "Xenos EXEC fetch slot " + std::to_string(slot) + ": " + decoded.error};
+            }
+            const std::array<VertexFetchInstruction, 1> instruction{decoded.instruction};
+            const auto fetched = execute_vertex_fetch_instructions(
+                instruction, fetch_constants, memory, registers, missing_component_values);
+            if (!fetched) {
+                return {{}, 0U, false,
+                        "Xenos EXEC fetch slot " + std::to_string(slot) + ": " + fetched.error};
+            }
+            registers = fetched.registers;
+            continue;
         }
-        const std::array<VertexFetchInstruction, 1> instruction{decoded.instruction};
-        const auto fetched = execute_vertex_fetch_instructions(
-            instruction, fetch_constants, memory, registers, missing_component_values);
-        if (!fetched) {
+
+        const auto decoded = decode_texture_fetch_instruction(words);
+        std::string texture_error;
+        if (!execute_texture_fetch_instruction(decoded.instruction, texture_constants,
+                                               memory, registers, texture_error)) {
             return {{}, 0U, false,
-                    "Xenos EXEC fetch slot " + std::to_string(slot) + ": " + fetched.error};
+                    "Xenos EXEC fetch slot " + std::to_string(slot) + ": " + texture_error};
         }
-        registers = fetched.registers;
     }
 
     return {registers, exec.instruction_count, exec.opcode == 2U || exec.opcode == 4U, {},
@@ -178,7 +319,8 @@ ShaderExecSequenceResult execute_shader_exec_sequence(
     std::span<const std::array<float, 4>> float_constants,
     float initial_previous_scalar,
     std::span<const bool> boolean_constants,
-    ShaderVertexOutputs initial_vertex_outputs) {
+    ShaderVertexOutputs initial_vertex_outputs,
+    std::span<const TextureFetchConstant> texture_constants) {
     constexpr std::size_t maximum_block_count = 4096U;
     if (blocks.empty()) {
         return {{}, 0U, 0U, false, "Xenos shader EXEC sequence is empty"};
@@ -196,7 +338,7 @@ ShaderExecSequenceResult execute_shader_exec_sequence(
         const auto block = execute_shader_exec_block(
             blocks[block_index], ucode, fetch_constants, memory, registers,
             missing_component_values, float_constants, previous_scalar,
-            boolean_constants, vertex_outputs);
+            boolean_constants, vertex_outputs, texture_constants);
         if (!block) {
             return {{}, 0U, 0U, false,
                     "Xenos shader EXEC block " + std::to_string(block_index) + ": " + block.error};
@@ -224,11 +366,12 @@ ShaderVertexBatchResult execute_shader_exec_vertex_batch(
     const ShaderAluTemporaryRegisterBank& initial_registers,
     const std::array<float, 4>& missing_component_values,
     std::span<const std::array<float, 4>> float_constants,
-    std::span<const bool> boolean_constants) {
+    std::span<const bool> boolean_constants,
+    std::span<const TextureFetchConstant> texture_constants) {
     return execute_shader_exec_vertex_batch(
         std::span<const ShaderExecInstruction>(&exec, 1U), ucode, fetch_constants,
         memory, draw_vertex_indices, initial_registers, missing_component_values,
-        float_constants, boolean_constants);
+        float_constants, boolean_constants, texture_constants);
 }
 
 ShaderVertexBatchResult execute_shader_exec_vertex_batch(
@@ -240,7 +383,8 @@ ShaderVertexBatchResult execute_shader_exec_vertex_batch(
     const ShaderAluTemporaryRegisterBank& initial_registers,
     const std::array<float, 4>& missing_component_values,
     std::span<const std::array<float, 4>> float_constants,
-    std::span<const bool> boolean_constants) {
+    std::span<const bool> boolean_constants,
+    std::span<const TextureFetchConstant> texture_constants) {
     constexpr std::size_t maximum_vertex_count = 65'536U;
     constexpr std::uint32_t maximum_xenos_vertex_index = 0x00ffffffU;
     if (draw_vertex_indices.empty()) {
@@ -264,7 +408,8 @@ ShaderVertexBatchResult execute_shader_exec_vertex_batch(
             vertex_registers[0U][0U] = static_cast<float>(vertex_index);
             const auto vertex = execute_shader_exec_sequence(
                 blocks, ucode, fetch_constants, memory, vertex_registers,
-                missing_component_values, float_constants, 0.0F, boolean_constants);
+                missing_component_values, float_constants, 0.0F, boolean_constants, {},
+                texture_constants);
             if (!vertex) {
                 return {{}, "Xenos vertex batch item " + std::to_string(vertex_number) +
                                 " (index " + std::to_string(vertex_index) + "): " + vertex.error};
@@ -297,6 +442,7 @@ ShaderVertexBatchResult execute_pm4_draw_vertex_batch(
     }
 
     std::array<bool, 96> required_fetch_slots{};
+    std::array<bool, 32> required_texture_slots{};
     std::array<bool, 256> required_alu_constants{};
     bool reached_shader_end = false;
     for (const auto& block : blocks) {
@@ -327,12 +473,24 @@ ShaderVertexBatchResult execute_pm4_draw_vertex_batch(
             const auto& words = ucode[start + slot];
             const auto operation_kind = (block.sequence >> (slot * 2U)) & 1U;
             if (operation_kind != 0U) {
-                const auto decoded = decode_vertex_fetch_instruction(words);
-                if (!decoded) {
-                    return {{}, "Xenos EXEC fetch slot " + std::to_string(slot) + ": " +
-                                    decoded.error};
+                const auto fetch_opcode = static_cast<std::uint8_t>(words[0] & 0x1fU);
+                if (fetch_opcode == 0U) {
+                    const auto decoded = decode_vertex_fetch_instruction(words);
+                    if (!decoded) {
+                        return {{}, "Xenos EXEC fetch slot " + std::to_string(slot) + ": " +
+                                        decoded.error};
+                    }
+                    required_fetch_slots[decoded.instruction.fetch_constant_index] = true;
+                } else if (fetch_opcode == 1U) {
+                    const auto decoded = decode_texture_fetch_instruction(words);
+                    if (decoded.instruction.texture_slot >= required_texture_slots.size()) {
+                        return {{}, "Xenos EXEC texture slot exceeds the 32-entry bank"};
+                    }
+                    required_texture_slots[decoded.instruction.texture_slot] = true;
+                } else {
+                    return {{}, "PM4 draw shader references an unsupported Xenos fetch opcode " +
+                                    std::to_string(fetch_opcode)};
                 }
-                required_fetch_slots[decoded.instruction.fetch_constant_index] = true;
                 continue;
             }
 
@@ -365,6 +523,18 @@ ShaderVertexBatchResult execute_pm4_draw_vertex_batch(
         std::span<const std::uint8_t>(fetch_slots.data(), fetch_slot_count));
     if (!fetch_bank) return {{}, "PM4 draw VFETCH resources: " + fetch_bank.error};
 
+    std::array<std::uint8_t, 32> texture_slots{};
+    std::size_t texture_slot_count = 0U;
+    for (std::size_t slot = 0U; slot < required_texture_slots.size(); ++slot) {
+        if (required_texture_slots[slot]) {
+            texture_slots[texture_slot_count++] = static_cast<std::uint8_t>(slot);
+        }
+    }
+    const auto texture_bank = decode_texture_fetch_constant_bank(
+        draw.register_snapshot,
+        std::span<const std::uint8_t>(texture_slots.data(), texture_slot_count));
+    if (!texture_bank) return {{}, "PM4 draw texture resources: " + texture_bank.error};
+
     std::array<std::uint8_t, 256> alu_constants{};
     std::size_t alu_constant_count = 0U;
     for (std::size_t constant = 0U; constant < required_alu_constants.size(); ++constant) {
@@ -379,7 +549,8 @@ ShaderVertexBatchResult execute_pm4_draw_vertex_batch(
 
     return execute_shader_exec_vertex_batch(
         blocks, ucode, fetch_bank.descriptors, memory, draw.geometry.indices,
-        initial_registers, missing_component_values, alu_bank.constants, boolean_constants);
+        initial_registers, missing_component_values, alu_bank.constants, boolean_constants,
+        texture_bank.constants);
 }
 
 } // namespace project360::gpu::xenos

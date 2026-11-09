@@ -2,6 +2,7 @@
 
 #include "gpu/xenos/shader_alu.hpp"
 #include "gpu/xenos/pm4_draw.hpp"
+#include "gpu/xenos/texture_fetch.hpp"
 #include "gpu/xenos/vertex_fetch.hpp"
 
 #include <array>
@@ -95,9 +96,10 @@ struct ShaderExecSequenceResult {
 
 // Executes one EXEC/EXEC_END or bool-constant COND_EXEC/COND_EXEC_END block in
 // declared sequence order. Conditional blocks require absolute addressing and
-// a supplied bool-constant bank. Only ALU pairs and full VFETCH instructions
-// are supported. The block commits atomically: errors expose no partially
-// updated register bank.
+// a supplied bool-constant bank. Supported operations are ALU pairs, full
+// VFETCH instructions and the explicitly bounded base-level 2D tfetch subset.
+// The block commits atomically: errors expose no partially updated register
+// bank.
 [[nodiscard]] ShaderExecResult execute_shader_exec_block(
     const ShaderExecInstruction& exec,
     std::span<const std::array<std::uint32_t, 3>> ucode,
@@ -108,7 +110,8 @@ struct ShaderExecSequenceResult {
     std::span<const std::array<float, 4>> float_constants = {},
     float initial_previous_scalar = 0.0F,
     std::span<const bool> boolean_constants = {},
-    ShaderVertexOutputs initial_vertex_outputs = {});
+    ShaderVertexOutputs initial_vertex_outputs = {},
+    std::span<const TextureFetchConstant> texture_constants = {});
 
 // Runs a bounded, linear list of EXEC blocks while preserving registers,
 // scalar previous-state and vertex exports between blocks. Conditional blocks
@@ -125,7 +128,8 @@ struct ShaderExecSequenceResult {
     std::span<const std::array<float, 4>> float_constants = {},
     float initial_previous_scalar = 0.0F,
     std::span<const bool> boolean_constants = {},
-    ShaderVertexOutputs initial_vertex_outputs = {});
+    ShaderVertexOutputs initial_vertex_outputs = {},
+    std::span<const TextureFetchConstant> texture_constants = {});
 
 // Executes one shader-ending EXEC_END / matching COND_EXEC_END block for each
 // draw-remapped vertex index. Xenos vertex startup seeds r0.x with that index;
@@ -140,7 +144,8 @@ struct ShaderExecSequenceResult {
     const ShaderAluTemporaryRegisterBank& initial_registers,
     const std::array<float, 4>& missing_component_values,
     std::span<const std::array<float, 4>> float_constants = {},
-    std::span<const bool> boolean_constants = {});
+    std::span<const bool> boolean_constants = {},
+    std::span<const TextureFetchConstant> texture_constants = {});
 
 // Multi-block counterpart. Each vertex starts with a fresh register bank and
 // r0.x set to its draw-remapped index, then executes the same bounded block
@@ -154,11 +159,12 @@ struct ShaderExecSequenceResult {
     const ShaderAluTemporaryRegisterBank& initial_registers,
     const std::array<float, 4>& missing_component_values,
     std::span<const std::array<float, 4>> float_constants = {},
-    std::span<const bool> boolean_constants = {});
+    std::span<const bool> boolean_constants = {},
+    std::span<const TextureFetchConstant> texture_constants = {});
 
 // Uses the retained PM4 register snapshot for one prepared draw to resolve
-// only the VFETCH descriptors and ALU float constants referenced by this
-// bounded linear shader, then executes it for that draw's prepared indexes.
+// only the VFETCH/texture descriptors and ALU float constants referenced by
+// this bounded linear shader, then executes it for that draw's prepared indexes.
 [[nodiscard]] ShaderVertexBatchResult execute_pm4_draw_vertex_batch(
     const PreparedDrawCommand& draw, std::span<const ShaderExecInstruction> blocks,
     std::span<const std::array<std::uint32_t, 3>> ucode, const memory::GuestMemory& memory,

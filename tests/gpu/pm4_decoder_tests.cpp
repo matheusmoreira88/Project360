@@ -2589,6 +2589,116 @@ void test_tiled_texture_block_addressing_and_reads() {
           "descriptor-backed reader propagates unsupported format diagnostics");
 }
 
+void test_shader_texture_fetch_execution() {
+    using namespace project360::gpu::xenos;
+    project360::memory::GuestMemory memory(0x5000U);
+    TextureFetchConstant texture{};
+    texture.dimension = TextureDataDimension::two_d_or_stacked;
+    texture.width = 4U;
+    texture.height = 1U;
+    texture.depth_or_layers = 1U;
+    texture.base_address_bytes = 0x1000U;
+    texture.pitch = 1U;
+    texture.format = 6U;
+    texture.tiled = true;
+    texture.magnification_filter = 0U;
+    texture.minification_filter = 0U;
+    texture.mip_min_level = 0U;
+    texture.mip_max_level = 0U;
+    texture.component_swizzle = static_cast<std::uint16_t>(
+        0U | (1U << 3U) | (2U << 6U) | (3U << 9U));
+    texture.clamp_modes[0] = 2U;
+    texture.clamp_modes[1] = 2U;
+
+    bool texels_loaded = true;
+    for (std::uint32_t x = 0U; x < texture.width; ++x) {
+        const auto offset = xenos_tiled_2d_block_offset(x, 0U, texture.width,
+                                                        texture.height, 32U, 4U);
+        const std::array<std::byte, 4> texel{
+            std::byte{0U}, std::byte{0U}, static_cast<std::byte>(0x10U + x),
+            std::byte{0xffU}};
+        texels_loaded = texels_loaded && offset &&
+                        memory.load(texture.base_address_bytes + offset.byte_offset, texel);
+    }
+    check(texels_loaded, "tfetch fixture loads four texels into tiled guest memory");
+
+    std::array<TextureFetchConstant, 32> texture_constants{};
+    texture_constants[2U] = texture;
+    constexpr std::uint32_t texture_coordinates_swizzle = 1U << 28U;
+    const std::uint32_t fetch_word0 = 1U | (3U << 5U) | (4U << 12U) |
+                                      (1U << 19U) | (2U << 20U) |
+                                      texture_coordinates_swizzle;
+    const std::uint32_t fetch_word1 = 0x688U | (3U << 12U) | (3U << 14U) |
+                                      (3U << 16U) | (7U << 18U) |
+                                      (3U << 24U) | (3U << 26U);
+    const std::array<std::array<std::uint32_t, 3>, 1> microcode{{
+        {fetch_word0, fetch_word1, 1U << 14U}}};
+    const auto exec = decode_shader_exec_instruction(
+        {(1U << 12U) | (1U << 16U), 2U << 12U});
+    ShaderAluTemporaryRegisterBank initial_registers{};
+    initial_registers[3U] = {0.375F, 0.5F, 0.0F, 1.0F};
+    const auto executed = execute_shader_exec_block(
+        exec, microcode, {}, memory, initial_registers, {}, {}, 0.0F, {}, {},
+        texture_constants);
+    check(executed && executed.ended_shader && executed.instructions_executed == 1U &&
+              executed.registers[4U] ==
+                  std::array<float, 4>{17.0F / 255.0F, 0.0F, 0.0F, 1.0F},
+          "Xenos EXEC resolves tfetch coordinates and texture slot into the destination register");
+
+    auto linear_constants = texture_constants;
+    linear_constants[2U].magnification_filter = 1U;
+    linear_constants[2U].minification_filter = 1U;
+    auto linear_registers = initial_registers;
+    linear_registers[3U][0U] = 0.5F;
+    const auto linear = execute_shader_exec_block(
+        exec, microcode, {}, memory, linear_registers, {}, {}, 0.0F, {}, {},
+        linear_constants);
+    check(linear &&
+              std::abs(linear.registers[4U][0U] - 17.5F / 255.0F) < 0.000001F,
+          "Xenos EXEC tfetch applies descriptor-selected bilinear sampling on a base-level texture");
+
+    auto unsupported_microcode = microcode;
+    unsupported_microcode[0U][1U] |= 1U << 31U;
+    const auto predicated = execute_shader_exec_block(
+        exec, unsupported_microcode, {}, memory, initial_registers, {}, {}, 0.0F, {}, {},
+        texture_constants);
+    check(!predicated && predicated.error.find("Predicated Xenos texture fetch") !=
+                              std::string::npos,
+          "Xenos EXEC rejects unsupported predication instead of sampling unconditionally");
+
+    const std::array<ShaderExecInstruction, 1> blocks{exec};
+    const auto sequence = execute_shader_exec_sequence(
+        blocks, microcode, {}, memory, initial_registers, {}, {}, 0.0F, {}, {},
+        texture_constants);
+    check(sequence && sequence.ended_shader &&
+              sequence.registers[4U] == executed.registers[4U],
+          "Xenos EXEC sequence preserves texture sample results across its block runner");
+
+    PreparedDrawCommand draw{};
+    draw.register_snapshot.resize(0x4800U + (2U * 6U) + 6U);
+    const auto descriptor_base = 0x4800U + (2U * 6U);
+    draw.register_snapshot[descriptor_base] = 2U | (1U << 22U) | 0x80000000U;
+    draw.register_snapshot[descriptor_base + 1U] = 6U | (1U << 12U);
+    draw.register_snapshot[descriptor_base + 2U] = 3U;
+    draw.register_snapshot[descriptor_base + 3U] = 0x688U << 1U;
+    draw.register_snapshot[descriptor_base + 5U] = 1U << 9U;
+    draw.geometry.indices = {0U};
+    const std::array<std::array<std::uint32_t, 3>, 2> pm4_ucode{
+        microcode[0U],
+        std::array<std::uint32_t, 3>{62U | (1U << 15U) | (0x0fU << 16U), 0U,
+                                     0xe0000000U | (4U << 16U) | (4U << 8U) | 4U}};
+    const std::array<ShaderExecInstruction, 1> pm4_blocks{
+        decode_shader_exec_instruction({(2U << 12U) | (1U << 16U), 2U << 12U})};
+    auto pm4_registers = initial_registers;
+    pm4_registers[3U] = initial_registers[3U];
+    const auto pm4_batch = execute_pm4_draw_vertex_batch(
+        draw, pm4_blocks, pm4_ucode, memory, pm4_registers, {});
+    check(pm4_batch && pm4_batch.vertices.size() == 1U &&
+              pm4_batch.vertices[0U].position ==
+                  std::array<float, 4>{34.0F / 255.0F, 0.0F, 0.0F, 2.0F},
+          "PM4 draw snapshot resolves texture descriptors and carries tfetch output into vertex export");
+}
+
 void test_vfetch_instruction_and_attribute_range() {
     using namespace project360::gpu::xenos;
     project360::memory::GuestMemory memory(0x1000U);
@@ -2943,6 +3053,7 @@ int main() {
     test_vertex_fetch_descriptors_and_memory();
     test_texture_fetch_constant_metadata();
     test_texture_fetch_instruction_decode();
+    test_shader_texture_fetch_execution();
     test_texture_block_rgba_decoding();
     test_tiled_texture_block_addressing_and_reads();
     test_vfetch_instruction_and_attribute_range();
