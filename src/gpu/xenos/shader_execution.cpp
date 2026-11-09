@@ -109,7 +109,7 @@ bool execute_texture_fetch_instruction(
     const auto& coordinate_register = registers[instruction.source_register];
     const auto u_component = static_cast<std::size_t>(instruction.source_swizzle & 0x3U);
     const auto v_component = static_cast<std::size_t>((instruction.source_swizzle >> 2U) & 0x3U);
-    const auto sample = sample_xenos_tiled_2d_texture_normalized(
+    const auto sample = sample_xenos_2d_texture_normalized(
         fetch, coordinate_register[u_component], coordinate_register[v_component],
         magnification_filter, memory);
     if (!sample) {

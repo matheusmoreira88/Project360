@@ -15,6 +15,7 @@ constexpr std::uint32_t kMacroTileSize = 1U << kMacroTileLog2;
 constexpr std::uint32_t kMaximumDimensionInBlocks = 1U << 24U;
 constexpr std::uint8_t kMaximumBytesPerBlock = 16U;
 constexpr std::size_t kMaximumEndianReadBytes = kMaximumBytesPerBlock + 4U;
+constexpr std::uint32_t kLinearRowAlignmentBytes = 256U;
 
 std::uint32_t ceil_divide(std::uint32_t value, std::uint32_t divisor) {
     return value / divisor + static_cast<std::uint32_t>(value % divisor != 0U);
@@ -64,6 +65,46 @@ bool apply_texture_endian(TextureBlockReadResult& block, std::uint8_t endian,
 bool supported_block_size(std::uint8_t bytes_per_block) {
     return bytes_per_block != 0U && bytes_per_block <= kMaximumBytesPerBlock &&
            (bytes_per_block & static_cast<std::uint8_t>(bytes_per_block - 1U)) == 0U;
+}
+
+TextureBlockReadResult read_xenos_linear_2d_block(
+    std::uint64_t base_address_bytes, std::uint32_t x_block, std::uint32_t y_block,
+    std::uint32_t width_blocks, std::uint32_t height_blocks,
+    std::uint32_t pitch_blocks, std::uint8_t bytes_per_block,
+    const memory::GuestMemory& memory) {
+    if (width_blocks == 0U || height_blocks == 0U || pitch_blocks < width_blocks) {
+        return {{}, {}, 0U, "Linear texture dimensions require a pitch covering the visible row"};
+    }
+    if (x_block >= width_blocks || y_block >= height_blocks) {
+        return {{}, {}, 0U, "Texture block coordinate is outside the visible subresource"};
+    }
+    if (!supported_block_size(bytes_per_block)) {
+        return {{}, {}, 0U, "Linear texture block size must be a power of two from 1 to 16 bytes"};
+    }
+
+    const auto row_bytes = static_cast<std::uint64_t>(pitch_blocks) * bytes_per_block;
+    if (row_bytes % kLinearRowAlignmentBytes != 0U) {
+        return {{}, {}, 0U, "Linear texture row pitch is not 256-byte aligned"};
+    }
+    const auto block_offset = static_cast<std::uint64_t>(x_block) * bytes_per_block;
+    if (static_cast<std::uint64_t>(y_block) >
+        (std::numeric_limits<std::uint64_t>::max() - block_offset) / row_bytes) {
+        return {{}, {}, 0U, "Linear texture block offset overflows 64-bit addressing"};
+    }
+    const auto byte_offset = static_cast<std::uint64_t>(y_block) * row_bytes + block_offset;
+    if (base_address_bytes > std::numeric_limits<std::uint64_t>::max() - byte_offset) {
+        return {{}, {}, 0U, "Linear texture physical address overflows 64-bit addressing"};
+    }
+
+    TextureBlockReadResult result{};
+    result.physical_address = base_address_bytes + byte_offset;
+    result.byte_count = bytes_per_block;
+    if (!memory.read_physical(
+            result.physical_address,
+            std::span<std::byte>(result.bytes).first(result.byte_count))) {
+        return {{}, {}, 0U, "Linear texture block lies outside physical guest memory"};
+    }
+    return result;
 }
 
 std::uint64_t tiled_combine(std::uint64_t outer_inner_bytes, std::uint32_t bank,
@@ -139,14 +180,11 @@ TextureBlockReadResult read_xenos_tiled_2d_block(
     return result;
 }
 
-TextureBlockReadResult read_xenos_tiled_2d_texture_block(
+TextureBlockReadResult read_xenos_2d_texture_block(
     const TextureFetchConstant& fetch, std::uint32_t texel_x,
     std::uint32_t texel_y, const memory::GuestMemory& memory) {
     if (fetch.dimension != TextureDataDimension::two_d_or_stacked || fetch.stacked) {
         return {{}, {}, 0U, "Descriptor is not a non-stacked 2D texture"};
-    }
-    if (!fetch.tiled) {
-        return {{}, {}, 0U, "Linear texture addressing is not implemented"};
     }
     if (fetch.pitch == 0U) {
         return {{}, {}, 0U, "Texture descriptor has a zero base pitch"};
@@ -163,16 +201,21 @@ TextureBlockReadResult read_xenos_tiled_2d_texture_block(
     const auto width_blocks = ceil_divide(fetch.width, layout.block_width_pixels);
     const auto height_blocks = ceil_divide(fetch.height, layout.block_height_pixels);
     const auto pitch_pixels = static_cast<std::uint32_t>(fetch.pitch) * 32U;
-    const auto pitch_blocks = round_up_to_tile(
-        ceil_divide(pitch_pixels, layout.block_width_pixels));
+    const auto pitch_blocks = ceil_divide(pitch_pixels, layout.block_width_pixels);
     if (pitch_blocks < width_blocks) {
         return {{}, {}, 0U, "Texture pitch is smaller than its visible block width"};
     }
 
-    auto block = read_xenos_tiled_2d_block(
-        fetch.base_address_bytes, texel_x / layout.block_width_pixels,
-        texel_y / layout.block_height_pixels, width_blocks, height_blocks,
-        pitch_blocks, layout.bytes_per_block, memory);
+    const auto x_block = texel_x / layout.block_width_pixels;
+    const auto y_block = texel_y / layout.block_height_pixels;
+    auto block = fetch.tiled
+                     ? read_xenos_tiled_2d_block(
+                           fetch.base_address_bytes, x_block, y_block, width_blocks,
+                           height_blocks, round_up_to_tile(pitch_blocks),
+                           layout.bytes_per_block, memory)
+                     : read_xenos_linear_2d_block(
+                           fetch.base_address_bytes, x_block, y_block, width_blocks,
+                           height_blocks, pitch_blocks, layout.bytes_per_block, memory);
     if (!block) return block;
 
     std::string endian_error;

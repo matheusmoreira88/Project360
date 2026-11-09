@@ -141,13 +141,13 @@ TextureFloat4 lerp(TextureFloat4 first, TextureFloat4 second, float weight) {
 
 } // namespace
 
-TextureSampleResult sample_xenos_tiled_2d_texture_point(
+TextureSampleResult sample_xenos_2d_texture_point(
     const TextureFetchConstant& fetch, std::uint32_t texel_x, std::uint32_t texel_y,
     const memory::GuestMemory& memory) {
     const auto storage = decode_texture_storage_layout(fetch.format);
     if (!storage) return {{}, storage.error};
 
-    const auto block = read_xenos_tiled_2d_texture_block(fetch, texel_x, texel_y, memory);
+    const auto block = read_xenos_2d_texture_block(fetch, texel_x, texel_y, memory);
     if (!block) return {{}, block.error};
 
     const auto decoded = decode_xenos_texture_block_rgba8(
@@ -169,7 +169,7 @@ TextureSampleResult sample_xenos_tiled_2d_texture_point(
     return {interpreted.texels[local_index], {}};
 }
 
-TextureSampleResult sample_xenos_tiled_2d_texture_normalized(
+TextureSampleResult sample_xenos_2d_texture_normalized(
     const TextureFetchConstant& fetch, float u, float v, TextureSampleFilter filter,
     const memory::GuestMemory& memory) {
     if (filter == TextureSampleFilter::point && fetch.nearest_clamp_policy) {
@@ -184,7 +184,7 @@ TextureSampleResult sample_xenos_tiled_2d_texture_normalized(
         if (!x.error.empty()) return {{}, x.error};
         const auto y = resolve_nearest_axis(v, fetch.height, fetch.clamp_modes[1]);
         if (!y.error.empty()) return {{}, y.error};
-        return sample_xenos_tiled_2d_texture_point(fetch, x.index, y.index, memory);
+        return sample_xenos_2d_texture_point(fetch, x.index, y.index, memory);
     }
     if (filter != TextureSampleFilter::linear) {
         return {{}, "Texture sample filter is unsupported"};
@@ -199,16 +199,16 @@ TextureSampleResult sample_xenos_tiled_2d_texture_normalized(
     if (!y.error.empty()) return {{}, y.error};
 
     const auto top_left =
-        sample_xenos_tiled_2d_texture_point(fetch, x.first, y.first, memory);
+        sample_xenos_2d_texture_point(fetch, x.first, y.first, memory);
     if (!top_left) return top_left;
     const auto top_right =
-        sample_xenos_tiled_2d_texture_point(fetch, x.second, y.first, memory);
+        sample_xenos_2d_texture_point(fetch, x.second, y.first, memory);
     if (!top_right) return top_right;
     const auto bottom_left =
-        sample_xenos_tiled_2d_texture_point(fetch, x.first, y.second, memory);
+        sample_xenos_2d_texture_point(fetch, x.first, y.second, memory);
     if (!bottom_left) return bottom_left;
     const auto bottom_right =
-        sample_xenos_tiled_2d_texture_point(fetch, x.second, y.second, memory);
+        sample_xenos_2d_texture_point(fetch, x.second, y.second, memory);
     if (!bottom_right) return bottom_right;
 
     const auto top = lerp(top_left.value, top_right.value, x.weight);

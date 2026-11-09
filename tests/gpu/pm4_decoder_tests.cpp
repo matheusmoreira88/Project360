@@ -2388,7 +2388,7 @@ void test_tiled_texture_block_addressing_and_reads() {
     check(rgba_fetch && memory.load(0x2000U, descriptor_rgba_bytes),
           "decoded RGBA texture fixture is valid and loads a known base-level block");
     if (rgba_fetch) {
-        const auto descriptor_block = read_xenos_tiled_2d_texture_block(
+        const auto descriptor_block = read_xenos_2d_texture_block(
             rgba_fetch.constant, 32U, 0U, memory);
         check(descriptor_block && descriptor_block.physical_address == 0x2000U &&
                   descriptor_block.byte_count == descriptor_rgba_bytes.size() &&
@@ -2408,7 +2408,7 @@ void test_tiled_texture_block_addressing_and_reads() {
         auto point_fetch = rgba_fetch.constant;
         point_fetch.component_swizzle = static_cast<std::uint16_t>(
             0U | (1U << 3U) | (2U << 6U) | (3U << 9U));
-        const auto point_sample = sample_xenos_tiled_2d_texture_point(
+        const auto point_sample = sample_xenos_2d_texture_point(
             point_fetch, 32U, 0U, memory);
         check(point_sample &&
                   std::abs(point_sample.value.r - 0xcc / 255.0F) < 0.00001F &&
@@ -2416,7 +2416,7 @@ void test_tiled_texture_block_addressing_and_reads() {
                   std::abs(point_sample.value.b - 0xaa / 255.0F) < 0.00001F &&
                   std::abs(point_sample.value.a - 0xdd / 255.0F) < 0.00001F,
               "point sample composes tiled read endian decode numeric modes and swizzle");
-        check(!sample_xenos_tiled_2d_texture_point(point_fetch, 64U, 0U, memory),
+        check(!sample_xenos_2d_texture_point(point_fetch, 64U, 0U, memory),
               "point sample propagates descriptor coordinate bounds errors");
 
         const auto clamp_fetch = make_fetch(6U, 0x3000U, 4U, 1U, 1U);
@@ -2439,7 +2439,7 @@ void test_tiled_texture_block_addressing_and_reads() {
                 auto descriptor = clamp_fetch.constant;
                 descriptor.clamp_modes[0] = clamp_mode;
                 descriptor.clamp_modes[1] = 2U;
-                return sample_xenos_tiled_2d_texture_normalized(
+                return sample_xenos_2d_texture_normalized(
                     descriptor, u, 0.5F, TextureSampleFilter::point, memory);
             };
             const auto repeat_negative = sample_u(-0.25F, 0U);
@@ -2457,7 +2457,7 @@ void test_tiled_texture_block_addressing_and_reads() {
                       mirror_clamp_negative.value.r == 0x11U / 255.0F,
                   "normalized nearest lookup resolves repeat mirror edge and mirror-once modes");
             check(!sample_u(-0.25F, 4U) &&
-                      !sample_xenos_tiled_2d_texture_normalized(
+                      !sample_xenos_2d_texture_normalized(
                           clamp_fetch.constant, std::numeric_limits<float>::quiet_NaN(), 0.5F,
                           TextureSampleFilter::point, memory),
                   "normalized point sampling rejects unsupported borders and NaN");
@@ -2465,7 +2465,7 @@ void test_tiled_texture_block_addressing_and_reads() {
                 auto descriptor = clamp_fetch.constant;
                 descriptor.clamp_modes[0] = clamp_mode;
                 descriptor.clamp_modes[1] = 2U;
-                return sample_xenos_tiled_2d_texture_normalized(
+                return sample_xenos_2d_texture_normalized(
                     descriptor, u, 0.5F, TextureSampleFilter::linear, memory);
             };
             const auto linear_midpoint = sample_linear_u(0.5F, 2U);
@@ -2476,7 +2476,7 @@ void test_tiled_texture_block_addressing_and_reads() {
             const auto linear_border_edge = sample_linear_u(0.0F, 6U);
             auto integer_filter_fetch = clamp_fetch.constant;
             integer_filter_fetch.number_format = 1U;
-            const auto linear_integer = sample_xenos_tiled_2d_texture_normalized(
+            const auto linear_integer = sample_xenos_2d_texture_normalized(
                 integer_filter_fetch, 0.5F, 0.5F, TextureSampleFilter::linear, memory);
             check(linear_midpoint &&
                       std::abs(linear_midpoint.value.r - 17.5F / 255.0F) < 0.000001F &&
@@ -2490,11 +2490,11 @@ void test_tiled_texture_block_addressing_and_reads() {
                   "bilinear sampling blends four taps and resolves repeat, mirror and clamp edges");
             auto other_clamp_policy = clamp_fetch.constant;
             other_clamp_policy.nearest_clamp_policy = true;
-            check(!sample_xenos_tiled_2d_texture_normalized(
+            check(!sample_xenos_2d_texture_normalized(
                       other_clamp_policy, 0.25F, 0.5F, TextureSampleFilter::point, memory),
                   "normalized sampling rejects the unverified D3D/OpenGL nearest clamp policy");
         }
-        check(!read_xenos_tiled_2d_texture_block(rgba_fetch.constant, 64U, 0U, memory),
+        check(!read_xenos_2d_texture_block(rgba_fetch.constant, 64U, 0U, memory),
               "descriptor-backed texture read rejects coordinates outside visible dimensions");
     }
 
@@ -2515,7 +2515,7 @@ void test_tiled_texture_block_addressing_and_reads() {
             check(false, "endian fixture descriptor decodes");
             continue;
         }
-        const auto endian_block = read_xenos_tiled_2d_texture_block(
+        const auto endian_block = read_xenos_2d_texture_block(
             endian_fetch.constant, 0U, 0U, memory);
         check(endian_block &&
                   std::equal(endian_expected[endian].begin(), endian_expected[endian].end(),
@@ -2529,7 +2529,7 @@ void test_tiled_texture_block_addressing_and_reads() {
     check(memory.load(0x4000U, byte_texels) && byte_endian_fetch,
           "single-byte format endian fixture is initialized");
     if (byte_endian_fetch) {
-        const auto byte_endian_block = read_xenos_tiled_2d_texture_block(
+        const auto byte_endian_block = read_xenos_2d_texture_block(
             byte_endian_fetch.constant, 1U, 0U, memory);
         check(byte_endian_block && byte_endian_block.bytes[0] == std::byte{0xc3},
               "byte texel endian conversion reads the aligned dword lane group");
@@ -2542,7 +2542,7 @@ void test_tiled_texture_block_addressing_and_reads() {
     check(dxt_fetch && memory.load(0x3050U, descriptor_dxt_bytes),
           "decoded DXT1 fixture is valid and loads its compressed storage block");
     if (dxt_fetch) {
-        const auto descriptor_block = read_xenos_tiled_2d_texture_block(
+        const auto descriptor_block = read_xenos_2d_texture_block(
             dxt_fetch.constant, 32U, 4U, memory);
         check(descriptor_block && descriptor_block.physical_address == 0x3050U &&
                   descriptor_block.byte_count == descriptor_dxt_bytes.size() &&
@@ -2552,7 +2552,7 @@ void test_tiled_texture_block_addressing_and_reads() {
         auto dxt_point_fetch = dxt_fetch.constant;
         dxt_point_fetch.component_swizzle = static_cast<std::uint16_t>(
             0U | (1U << 3U) | (2U << 6U) | (3U << 9U));
-        const auto dxt_point_sample = sample_xenos_tiled_2d_texture_point(
+        const auto dxt_point_sample = sample_xenos_2d_texture_point(
             dxt_point_fetch, 32U, 4U, memory);
         const auto decoded_dxt = decode_xenos_texture_block_rgba8(
             dxt_fetch.constant.format, descriptor_dxt_bytes);
@@ -2564,7 +2564,7 @@ void test_tiled_texture_block_addressing_and_reads() {
               "point sampler decodes and normalizes the selected DXT1 block texel");
         auto signed_dxt_fetch = dxt_point_fetch;
         signed_dxt_fetch.sign_modes[0] = 1U;
-        const auto signed_dxt_sample = sample_xenos_tiled_2d_texture_point(
+        const auto signed_dxt_sample = sample_xenos_2d_texture_point(
             signed_dxt_fetch, 32U, 4U, memory);
         check(!signed_dxt_sample &&
                   signed_dxt_sample.error.find("compressed DXT") != std::string::npos,
@@ -2575,16 +2575,58 @@ void test_tiled_texture_block_addressing_and_reads() {
     const auto linear_fetch = make_fetch(6U, 0x1000U, 64U, 64U, 2U, false);
     const auto narrow_pitch_fetch = make_fetch(6U, 0x1000U, 64U, 64U, 1U);
     const auto unsupported_fetch = make_fetch(0U, 0x1000U, 64U, 64U, 2U);
-    check(!stacked_fetch || !read_xenos_tiled_2d_texture_block(
+    check(!stacked_fetch || !read_xenos_2d_texture_block(
                                 stacked_fetch.constant, 0U, 0U, memory),
           "descriptor-backed reader reports stacked textures as unsupported");
-    check(!linear_fetch || !read_xenos_tiled_2d_texture_block(
-                               linear_fetch.constant, 0U, 0U, memory),
-          "descriptor-backed reader reports linear texture layouts as unsupported");
-    check(!narrow_pitch_fetch || !read_xenos_tiled_2d_texture_block(
+    constexpr std::uint64_t linear_texel_address = 0x120cU;
+    constexpr std::array<std::byte, 4> linear_texel_bytes{
+        std::byte{0x12}, std::byte{0x34}, std::byte{0x56}, std::byte{0x78}};
+    check(linear_fetch && memory.load(linear_texel_address, linear_texel_bytes),
+          "linear texture fixture writes texel data into its padded row");
+    if (linear_fetch) {
+        const auto linear_block = read_xenos_2d_texture_block(
+            linear_fetch.constant, 3U, 2U, memory);
+        auto linear_sample_fetch = linear_fetch.constant;
+        linear_sample_fetch.component_swizzle = static_cast<std::uint16_t>(
+            0U | (1U << 3U) | (2U << 6U) | (3U << 9U));
+        const auto linear_sample = sample_xenos_2d_texture_point(
+            linear_sample_fetch, 3U, 2U, memory);
+        check(linear_block && linear_block.physical_address == linear_texel_address &&
+                  linear_block.byte_count == linear_texel_bytes.size() &&
+                  std::equal(linear_texel_bytes.begin(), linear_texel_bytes.end(),
+                             linear_block.bytes.begin()) &&
+                  linear_sample &&
+                  std::abs(linear_sample.value.r - 0x56 / 255.0F) < 0.00001F &&
+                  std::abs(linear_sample.value.g - 0x34 / 255.0F) < 0.00001F,
+              "linear descriptor read applies row pitch, endian mode, decode and point sampling");
+    }
+
+    const auto linear_dxt_fetch = make_fetch(18U, 0x2000U, 64U, 64U, 4U, false);
+    constexpr std::uint64_t linear_dxt_address = 0x2218U;
+    constexpr std::array<std::byte, 8> linear_dxt_bytes{
+        std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
+        std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8}};
+    check(linear_dxt_fetch && memory.load(linear_dxt_address, linear_dxt_bytes),
+          "linear DXT fixture writes one compressed block after two padded rows");
+    if (linear_dxt_fetch) {
+        const auto linear_dxt_block = read_xenos_2d_texture_block(
+            linear_dxt_fetch.constant, 12U, 8U, memory);
+        check(linear_dxt_block &&
+                  linear_dxt_block.physical_address == linear_dxt_address &&
+                  linear_dxt_block.byte_count == linear_dxt_bytes.size() &&
+                  std::equal(linear_dxt_bytes.begin(), linear_dxt_bytes.end(),
+                             linear_dxt_block.bytes.begin()),
+              "linear compressed addressing converts texel pitch into block-row pitch");
+    }
+
+    const auto unaligned_linear_fetch = make_fetch(6U, 0x1000U, 16U, 16U, 1U, false);
+    check(!unaligned_linear_fetch || !read_xenos_2d_texture_block(
+                                         unaligned_linear_fetch.constant, 0U, 0U, memory),
+          "descriptor-backed reader rejects linear rows that violate 256-byte alignment");
+    check(!narrow_pitch_fetch || !read_xenos_2d_texture_block(
                                      narrow_pitch_fetch.constant, 0U, 0U, memory),
           "descriptor-backed reader rejects a pitch narrower than visible texture width");
-    check(!unsupported_fetch || !read_xenos_tiled_2d_texture_block(
+    check(!unsupported_fetch || !read_xenos_2d_texture_block(
                                     unsupported_fetch.constant, 0U, 0U, memory),
           "descriptor-backed reader propagates unsupported format diagnostics");
 }
@@ -2656,6 +2698,28 @@ void test_shader_texture_fetch_execution() {
     check(linear &&
               std::abs(linear.registers[4U][0U] - 17.5F / 255.0F) < 0.000001F,
           "Xenos EXEC tfetch applies descriptor-selected bilinear sampling on a base-level texture");
+
+    auto linear_layout_constants = texture_constants;
+    linear_layout_constants[2U].tiled = false;
+    linear_layout_constants[2U].pitch = 2U;
+    linear_layout_constants[2U].base_address_bytes = 0x1800U;
+    bool linear_texels_loaded = true;
+    for (std::uint32_t x = 0U; x < texture.width; ++x) {
+        const std::array<std::byte, 4> texel{
+            std::byte{0U}, std::byte{0U}, static_cast<std::byte>(0x10U + x),
+            std::byte{0xffU}};
+        linear_texels_loaded = linear_texels_loaded &&
+                               memory.load(0x1800U + static_cast<std::uint64_t>(x) * 4U,
+                                           texel);
+    }
+    linear_layout_constants[2U].magnification_filter = 1U;
+    linear_layout_constants[2U].minification_filter = 1U;
+    const auto linear_layout = execute_shader_exec_block(
+        exec, microcode, {}, memory, linear_registers, {}, {}, 0.0F, {}, {},
+        linear_layout_constants);
+    check(linear_texels_loaded && linear_layout &&
+              std::abs(linear_layout.registers[4U][0U] - 17.5F / 255.0F) < 0.000001F,
+          "Xenos tfetch reads aligned linear rows through the shader reference path");
 
     auto unsupported_microcode = microcode;
     unsupported_microcode[0U][1U] |= 1U << 31U;
